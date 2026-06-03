@@ -6,6 +6,7 @@ import { usePatientStore } from '@/store/usePatientStore';
 import { useVisitStore } from '@/store/useVisitStore';
 import { useQueueStore } from '@/store/useQueueStore';
 import { useClinicalStore } from '@/store/useClinicalStore';
+import { apiClient } from '@/lib/api/client';
 import Icon from '@/components/icons';
 import { SectionHeader, Chip, StatusChip, Avatar, EmptyState, SelectPill, Segmented } from '@/components/ui';
 import { TODAY } from '@/lib/data/patients';
@@ -28,6 +29,7 @@ function Eyebrow({ children, action }) {
 function HomeScreen() {
   const router = useRouter();
   const openSheet = useAppStore((s) => s.openSheet);
+  const started = useAppStore((s) => s.started);
   const clinic = useAppStore((s) => s.clinic);
   const setPatientsFocus = useAppStore((s) => s.setPatientsFocus);
   const patients = usePatientStore((s) => s.patients);
@@ -35,11 +37,21 @@ function HomeScreen() {
   const queue = useQueueStore((s) => s.queue);
   const procedures = useClinicalStore((s) => s.procedures);
   const bills = useClinicalStore((s) => s.bills);
+  const [analytics, setAnalytics] = React.useState(null);
 
-  const today = TODAY;
+  React.useEffect(() => {
+    if (!started) return;
+    apiClient.get('/api/analytics/dashboard')
+      .then(r => setAnalytics(r.data))
+      .catch(() => {});
+  }, [started]);
+
+  const todayStr = new Date().toISOString().slice(0, 10);
   const pById = id => patients.find(p => p.id === id);
   const procById = id => procedures.find(p => p.id === id);
-  const todays = visits.filter(v => v.date === today).sort((a, b) => a.startTime.localeCompare(b.startTime));
+  const todays = visits
+    .filter(v => (v.date || v.appointment_date) === todayStr)
+    .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
   const ongoing = procedures.filter(p => p.status === 'in_progress');
   const waiting = queue.filter(e => e.status === 'waiting').length;
   const inChair = queue.some(e => e.status === 'in_consultation');
@@ -156,7 +168,7 @@ function HomeScreen() {
 
       {/* today */}
       <div style={{ padding: '26px 22px 0' }}>
-        <Eyebrow action={<button onClick={() => router.push('/schedule')} style={{ fontSize: 13, fontWeight: 600, color: 'var(--blue)' }}>Schedule</button>}>Today · {todays.length}</Eyebrow>
+        <Eyebrow action={<button onClick={() => router.push('/schedule')} style={{ fontSize: 13, fontWeight: 600, color: 'var(--blue)' }}>Schedule</button>}>Today · {analytics?.totalAppointmentsToday ?? todays.length}</Eyebrow>
         {todays.length === 0 ? (
           <div style={{ padding: '20px 0', color: 'var(--text-tertiary)', fontSize: 15 }}>No appointments scheduled.</div>
         ) : (

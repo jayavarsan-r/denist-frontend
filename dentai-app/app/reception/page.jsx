@@ -11,6 +11,7 @@ import { SectionHeader, Chip, StatusChip, Avatar, EmptyState, SelectPill, Segmen
 import { TODAY } from '@/lib/data/patients';
 import { STAFF, CLINIC, minutesAgo, waitLabel } from '@/lib/data/queue';
 import { formatCurrency, formatTime, parseDate, hasComplications, MONTHS, DAYS_FULL } from '@/lib/data/utils';
+import { useQueueRealtime } from '@/lib/hooks/useQueueRealtime';
 
 function QueueStatChip({ icon, value, label, color }) {
   return (
@@ -35,8 +36,10 @@ function TokenBadge({ n, tone }) {
 }
 
 function ReceptionScreen() {
+  useQueueRealtime(); // load + subscribe on mount
   const router = useRouter();
   const openSheet = useAppStore((s) => s.openSheet);
+  const clinicName = useAppStore((s) => s.clinic?.clinicName || 'Clinic');
   const patients = usePatientStore((s) => s.patients);
   const queue = useQueueStore((s) => s.queue);
   const checkoutsToday = useQueueStore((s) => s.checkoutsToday);

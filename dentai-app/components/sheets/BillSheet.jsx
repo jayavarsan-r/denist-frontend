@@ -7,6 +7,7 @@ import Icon from '@/components/icons';
 import { SheetHeader, SectionHeader, StatusChip, PrimaryButton, SelectPill } from '@/components/ui';
 import { TODAY } from '@/lib/data/patients';
 import { formatCurrency } from '@/lib/data/utils';
+import { recordPayment } from '@/lib/services/payment.service';
 
 export default function BillSheet({ params, onClose }) {
   const showToast = useAppStore((s) => s.showToast);
@@ -36,8 +37,22 @@ export default function BillSheet({ params, onClose }) {
     const procs = procedures.filter(x => x.patientId === params.patientId);
     setItems([...items, ...procs.map(pr => ({ description: `${pr.type}${pr.tooth ? ' · Tooth ' + pr.tooth : ''}`, quantity: 1, unitPrice: pr.estimatedCost, total: pr.estimatedCost }))]);
   };
-  const save = () => {
+  const save = async () => {
     const status = outstanding === 0 ? 'paid' : paid > 0 ? 'partial' : 'unpaid';
+    // Record payment via API if anything was paid
+    if (paid > 0) {
+      try {
+        await recordPayment({
+          patientId: params.patientId,
+          amount: paid,
+          paymentMethod: method.toLowerCase(),
+          notes: items.map(it => it.description).join(', '),
+        });
+      } catch(e) {
+        showToast(e?.response?.data?.message || 'Could not record payment');
+        return;
+      }
+    }
     saveBill({ id: existing ? existing.id : 'bill' + Date.now(), patientId: params.patientId, patientName: p.name, items, subtotal, discount, total, paid, outstanding, createdAt: existing ? existing.createdAt : TODAY, status });
     showToast(existing ? 'Bill updated' : 'Bill saved');
     onClose();

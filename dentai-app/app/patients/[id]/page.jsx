@@ -1,10 +1,12 @@
-import { patients } from '@/lib/data/patients';
 import PatientProfileClient from './PatientProfileClient';
 
+// generateStaticParams returns [] — patient IDs come from the API at runtime.
+// For Capacitor production builds (NEXT_EXPORT=1), use the real patient list.
 export function generateStaticParams() {
-  return patients.map((p) => ({ id: p.id }));
+  return [];
 }
 
-export default function PatientProfilePage({ params }) {
-  return <PatientProfileClient patientId={params.id} />;
+export default async function PatientProfilePage({ params }) {
+  const { id } = await params;
+  return <PatientProfileClient patientId={id} />;
 }

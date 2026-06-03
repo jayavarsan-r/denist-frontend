@@ -8,6 +8,8 @@ import Icon from '@/components/icons';
 import { Avatar, Chip, StatusChip, SectionHeader, NavBar, PrimaryButton, ToothChip } from '@/components/ui';
 import { formatCurrency, clinicianFlags, hasComplications, formatTime, parseDate, MONTHS, DAYS } from '@/lib/data/utils';
 import { CONSULT_OUTCOMES } from '@/lib/data/queue';
+import { recordPayment } from '@/lib/services/payment.service';
+import { getPrescriptionPdfUrl } from '@/lib/services/prescription.service';
 
 function MealTiming({ slots }) {
   const cells = [['B', slots.breakfast], ['L', slots.lunch], ['D', slots.dinner]];
@@ -44,10 +46,30 @@ function CheckoutScreen({ entryId }) {
   const status = paid === 0 ? 'unpaid' : balance === 0 ? 'paid' : 'partial';
   const statusColor = status === 'paid' ? '#1E8E3E' : status === 'partial' ? 'var(--orange)' : 'var(--red)';
 
-  const complete = () => {
-    checkout(entry.id, { patientName: p.name, procedure: `${c.procedure}${c.tooth ? ' · Tooth ' + c.tooth : ''}`, amount: paid });
+  const complete = async () => {
+    try {
+      await recordPayment({
+        patientId: entry.patientId,
+        amount: paid,
+        paymentMethod: method.toLowerCase(),
+        notes: '',
+      });
+    } catch(e) {
+      showToast(e?.response?.data?.message || 'Payment record failed');
+      return;
+    }
+    const summary = { patientName: p.name, procedure: `${c.procedure}${c.tooth ? ' · Tooth ' + c.tooth : ''}`, amount: paid };
+    checkout(entry.id, summary);
     showToast('Checked out · ' + formatCurrency(paid) + ' collected');
     router.push('/reception');
+  };
+
+  const openPrescriptionPdf = (rxId) => {
+    if (rxId) {
+      window.open(getPrescriptionPdfUrl(rxId), '_blank');
+    } else {
+      showToast('Generating PDF…');
+    }
   };
 
   const Row = ({ k, v, color, bold }) => (
@@ -149,7 +171,7 @@ function CheckoutScreen({ entryId }) {
         {/* prescription */}
         {c.medicines && c.medicines.length > 0 && (
           <>
-            <SectionHeader right={<div style={{ display: 'flex', gap: 14 }}><button onClick={() => showToast('Generating PDF…')} style={{ color: 'var(--blue)', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}><Icon name="printer" size={14} color="var(--blue)" />PDF</button><button onClick={() => showToast('Shared via WhatsApp')} style={{ color: 'var(--blue)', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}><Icon name="share" size={14} color="var(--blue)" />Share</button></div>}>Prescription</SectionHeader>
+            <SectionHeader right={<div style={{ display: 'flex', gap: 14 }}><button onClick={() => openPrescriptionPdf(c.prescriptionId || c.prescription_id || null)} style={{ color: 'var(--blue)', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}><Icon name="printer" size={14} color="var(--blue)" />PDF</button><button onClick={() => showToast('Shared via WhatsApp')} style={{ color: 'var(--blue)', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}><Icon name="share" size={14} color="var(--blue)" />Share</button></div>}>Prescription</SectionHeader>
             <div className="card" style={{ overflow: 'hidden', marginBottom: 16 }}>
               {/* column header */}
               <div style={{ display: 'flex', alignItems: 'center', padding: '8px 14px', background: 'rgba(60,60,67,0.03)', borderBottom: '1px solid var(--border-light)' }}>

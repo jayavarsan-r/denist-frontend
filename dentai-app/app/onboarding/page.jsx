@@ -148,10 +148,8 @@ function Onboarding({ onDone }) {
 
 export default function OnboardingPage() {
   const router = useRouter();
-  const setStarted = useAppStore((s) => s.setStarted);
   const handleDone = () => {
-    setStarted(true);
-    router.push('/roles');
+    router.push('/login');
   };
   return <Onboarding onDone={handleDone} />;
 }

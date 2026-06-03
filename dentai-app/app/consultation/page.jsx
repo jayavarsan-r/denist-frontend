@@ -10,8 +10,10 @@ import Icon from '@/components/icons';
 import { Chip, StageDots, StatusChip } from '@/components/ui';
 import { formatDate, clinicianFlags } from '@/lib/data/utils';
 import { minutesAgo, waitLabel } from '@/lib/data/queue';
+import { useQueueRealtime } from '@/lib/hooks/useQueueRealtime';
 
 function ConsultModeScreen() {
+  useQueueRealtime(); // load + subscribe on mount
   const router = useRouter();
   const openSheet = useAppStore(s => s.openSheet);
   const showToast = useAppStore(s => s.showToast);

@@ -34,6 +34,7 @@ function PatientsScreen() {
   const procedures = useClinicalStore(s => s.procedures);
   const bills = useClinicalStore(s => s.bills);
 
+  const loadPatients = usePatientStore(s => s.loadPatients);
   const [query, setQuery] = React.useState('');
   const [filter, setFilter] = React.useState('All');
   const [sort, setSort] = React.useState('Recent');
@@ -42,6 +43,12 @@ function PatientsScreen() {
   React.useEffect(() => {
     if (patientsFocus && inputRef.current) { inputRef.current.focus(); clearPatientsFocus(); }
   }, []);
+
+  // Re-fetch when search query changes (debounced)
+  React.useEffect(() => {
+    const t = setTimeout(() => { loadPatients(query || undefined).catch(() => {}); }, 300);
+    return () => clearTimeout(t);
+  }, [query]);
 
   const lastVisit = (pid) => visits.filter(v => v.patientId === pid && v.status === 'done').sort((a, b) => b.date.localeCompare(a.date))[0];
   const lastProc = (pid) => {

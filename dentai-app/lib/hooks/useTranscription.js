@@ -1,0 +1,38 @@
+'use client';
+import { useState, useCallback } from 'react';
+import { transcribeAudio } from '@/lib/services/ai.service';
+
+/**
+ * useTranscription
+ * Returns:
+ *   transcribe(blob) → Promise<{ text: string, warning?: string }>
+ *   loading  boolean
+ *   error    string | null
+ */
+export function useTranscription() {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const transcribe = useCallback(async (blob) => {
+    setLoading(true);
+    setError(null);
+    try {
+      if (!blob || blob.size < 500) {
+        setLoading(false);
+        return { text: '', warning: 'Recording too short — please try again' };
+      }
+      // Backend handles webm→ogg rename for Sarvam
+      const ext = blob.type.includes('ogg') ? 'ogg' : blob.type.includes('mp4') ? 'mp4' : 'webm';
+      const data = await transcribeAudio(blob, `recording.${ext}`);
+      setLoading(false);
+      return { text: data.transcript || '', warning: data.warning || null };
+    } catch (e) {
+      const msg = e?.response?.data?.error || e?.response?.data?.message || 'Transcription failed';
+      setError(msg);
+      setLoading(false);
+      return { text: '', warning: msg };
+    }
+  }, []);
+
+  return { transcribe, loading, error };
+}

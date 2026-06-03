@@ -1,7 +1,6 @@
 'use client';
 
 import './globals.css';
-import { Plus_Jakarta_Sans } from 'next/font/google';
 import { useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAppStore } from '@/store/useAppStore';
@@ -9,15 +8,10 @@ import FlowGuard from '@/components/FlowGuard';
 import SheetHost from '@/components/SheetHost';
 import BottomNav from '@/components/ui/BottomNav';
 import Toast from '@/components/ui/Toast';
-
-const font = Plus_Jakarta_Sans({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
-  display: 'swap',
-  variable: '--font-jakarta',
-});
+import { useBootstrap } from '@/lib/hooks/useBootstrap';
 
 const HIDE_NAV_PATHS = [
+  '/login',
   '/onboarding',
   '/roles',
   '/doctor/setup',
@@ -57,18 +51,21 @@ const ROUTE_TO_TAB = {
 };
 
 function AppShell({ children }) {
+  useBootstrap(); // load patients, queue, appointments after auth
   const pathname = usePathname();
   const router = useRouter();
   const role = useAppStore((s) => s.role);
   const toast = useAppStore((s) => s.toast);
 
-  const isDetailPage =
-    (pathname.startsWith('/patients/') && pathname !== '/patients') ||
-    pathname.startsWith('/appointments/') ||
-    pathname.startsWith('/checkout/') ||
-    pathname === '/finance/lab';
+  const normPath = pathname !== '/' ? pathname.replace(/\/$/, '') : '/';
 
-  const showNav = !HIDE_NAV_PATHS.includes(pathname) && !isDetailPage;
+  const isDetailPage =
+    (normPath.startsWith('/patients/') && normPath !== '/patients') ||
+    normPath.startsWith('/appointments/') ||
+    normPath.startsWith('/checkout/') ||
+    normPath === '/finance/lab';
+
+  const showNav = !HIDE_NAV_PATHS.includes(normPath) && !isDetailPage;
 
   const navItems = role === 'receptionist' ? RECEPTION_NAV : DOCTOR_NAV;
   const activeTab = ROUTE_TO_TAB[pathname] || 'home';
@@ -126,7 +123,7 @@ function AppShell({ children }) {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en" className={font.variable}>
+    <html lang="en">
       <head>
         <meta
           name="viewport"

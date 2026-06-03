@@ -43,6 +43,14 @@ function StatusStepper({ status }) {
   );
 }
 
+// Maps frontend display status values to backend DB enum values
+const STATUS_API_MAP = {
+  confirmed: 'scheduled',
+  arrived:   'arrived',
+  done:      'completed',
+  no_show:   'cancelled',
+};
+
 function AppointmentScreen({ visitId }) {
   const router = useRouter();
   const openSheet = useAppStore(s => s.openSheet);
@@ -52,16 +60,26 @@ function AppointmentScreen({ visitId }) {
   const patients = usePatientStore(s => s.patients);
   const procedures = useClinicalStore(s => s.procedures);
 
-  const v = visits.find(x => x.id === visitId);
+  // Support both numeric local IDs and UUID strings from the API
+  const v = visits.find(x => String(x.id) === String(visitId));
   const p = v && patients.find(x => x.id === v.patientId);
   const proc = v && procedures.find(x => x.id === v.procedureId);
   const [notes, setNotes] = React.useState(v ? v.proceduresDone : '');
   const [next, setNext] = React.useState(v ? v.nextSteps : '');
   if (!v || !p) return null;
 
+  const setStatus = (frontendStatus) => {
+    const apiStatus = STATUS_API_MAP[frontendStatus] || frontendStatus;
+    updateVisit(v.id, { status: apiStatus });
+  };
+
   const advance = () => {
-    if (v.status === 'confirmed') { updateVisit(v.id, { status: 'arrived' }); showToast('Marked arrived'); }
-    else if (v.status === 'arrived') { openSheet('endVisit', { id: v.id }); }
+    if (v.status === 'confirmed' || v.status === 'scheduled') {
+      setStatus('arrived');
+      showToast('Marked arrived');
+    } else if (v.status === 'arrived') {
+      openSheet('endVisit', { id: v.id });
+    }
   };
 
   const Row = ({ k, val }) => (
@@ -127,7 +145,7 @@ function AppointmentScreen({ visitId }) {
           <button onClick={() => showToast('Reminder sent via WhatsApp')} className="rowtap" style={{ width: '100%', minHeight: 48, display: 'flex', alignItems: 'center', gap: 12, padding: '0 16px', textAlign: 'left' }}>
             <Icon name="whatsapp" size={20} color="#1E8E3E" /><span style={{ fontSize: 15 }}>Send appointment reminder</span>
           </button>
-          <button onClick={() => { updateVisit(v.id, { status: 'no_show' }); showToast('Marked as no-show'); }} className="rowtap" style={{ width: '100%', minHeight: 48, display: 'flex', alignItems: 'center', gap: 12, padding: '0 16px', borderTop: '1px solid var(--border-light)', textAlign: 'left' }}>
+          <button onClick={() => { setStatus('no_show'); showToast('Marked as no-show'); }} className="rowtap" style={{ width: '100%', minHeight: 48, display: 'flex', alignItems: 'center', gap: 12, padding: '0 16px', borderTop: '1px solid var(--border-light)', textAlign: 'left' }}>
             <Icon name="x" size={20} color="var(--text-secondary)" /><span style={{ fontSize: 15, color: 'var(--text-secondary)' }}>Mark as no-show</span>
           </button>
         </div>

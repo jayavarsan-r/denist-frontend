@@ -1,10 +1,12 @@
 'use client';
-import React from 'react';
+import React, { useState as useStateImport } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAppStore } from '@/store/useAppStore';
 import Icon from '@/components/icons';
 import { PrimaryButton } from '@/components/ui';
 import { formatTime } from '@/lib/data/utils';
+import { createClinic } from '@/lib/services/auth.service';
+import { getMe as getAuthMe } from '@/lib/services/auth.service';
 
 const DOW = [
   { key: 1, label: 'Mon' }, { key: 2, label: 'Tue' }, { key: 3, label: 'Wed' },
@@ -21,7 +23,7 @@ function SetupField({ label, value, onChange, placeholder, type = 'text', autoFo
   );
 }
 
-function DoctorSetup({ clinic, onDone }) {
+function DoctorSetup({ clinic, onDone, saving = false }) {
   const [step, setStep] = React.useState(0);
   const [form, setForm] = React.useState({
     doctorName: clinic.doctorName || '', specialty: 'General Dentistry',
@@ -115,7 +117,7 @@ function DoctorSetup({ clinic, onDone }) {
 
       <div style={{ flexShrink: 0, padding: '14px 28px 40px', display: 'flex', gap: 12, alignItems: 'center' }}>
         {step > 0 && step < 3 && <button onClick={() => setStep(step - 1)} style={{ width: 56, height: 54, borderRadius: 16, background: 'transparent', color: 'var(--text-secondary)' }}><Icon name="chevLeft" size={24} color="var(--text-secondary)" /></button>}
-        <PrimaryButton onClick={() => valid && next()} style={{ opacity: valid ? 1 : 0.4 }}>{step === 3 ? 'Start using DentAI' : 'Continue'}</PrimaryButton>
+        <PrimaryButton onClick={() => valid && !saving && next()} style={{ opacity: (valid && !saving) ? 1 : 0.4 }}>{step === 3 ? (saving ? 'Setting up…' : 'Start using DentAI') : 'Continue'}</PrimaryButton>
       </div>
     </div>
   );
@@ -124,10 +126,25 @@ function DoctorSetup({ clinic, onDone }) {
 export default function DoctorSetupPage() {
   const router = useRouter();
   const clinic = useAppStore((s) => s.clinic);
+  const hydrateAuth = useAppStore((s) => s.hydrateAuth);
   const saveClinic = useAppStore((s) => s.saveClinic);
-  const handleDone = (c) => {
-    saveClinic(c);
-    router.push('/');
+  const showToast = useAppStore((s) => s.showToast);
+  const [saving, setSaving] = useStateImport(false);
+
+  const handleDone = async (c) => {
+    setSaving(true);
+    try {
+      await createClinic(c.clinicName, c.city, c.doctorName);
+      const me = await getAuthMe();
+      hydrateAuth({ staff: me.staff, clinic: me.clinic });
+      saveClinic(c);
+      router.replace('/');
+    } catch (e) {
+      showToast(e?.response?.data?.message || 'Could not create clinic. Try again.');
+    } finally {
+      setSaving(false);
+    }
   };
-  return <DoctorSetup clinic={clinic} onDone={handleDone} />;
+
+  return <DoctorSetup clinic={clinic} onDone={handleDone} saving={saving} />;
 }
