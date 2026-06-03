@@ -150,7 +150,7 @@ function CasesTab({ p, procedures, labOrders, openSheet, patientTreatmentPlans }
   );
 }
 
-function ToothMapTab({ p, bills, openSheet }) {
+function ToothMapTab({ p, bills, openSheet, toothHistory, toothLoading }) {
   const treated = Object.entries(p.teeth).filter(([, st]) => st !== 'healthy');
   const treatedCount = treated.filter(([, st]) => ['rct','crown','filling','implant'].includes(st)).length;
   const scheduledCount = treated.filter(([, st]) => st === 'scheduled' || st === 'infection').length;
@@ -165,7 +165,13 @@ function ToothMapTab({ p, bills, openSheet }) {
         <Chip label={`${formatCurrencyK(billed)} billed`} tone="green" size="lg" />
       </div>
       <div className="card" style={{ padding: '8px 6px', marginBottom: 22 }}>
-        <Odontogram teeth={p.teeth} onTooth={(n) => openSheet('tooth', { tooth: n, state: p.teeth[n] || 'healthy', patientId: p.id })} />
+        <Odontogram
+          teeth={p.teeth}
+          onTooth={(n) => {
+            const toothData = toothHistory?.toothMap?.find(t => t.toothNumber === String(n));
+            openSheet('tooth', { tooth: n, state: p.teeth[n] || 'healthy', patientId: p.id, toothData });
+          }}
+        />
       </div>
       <SectionHeader>Treated teeth</SectionHeader>
       {treated.length === 0 ? <div className="card"><EmptyState icon="tooth" title="No teeth charted" hint="Tap any tooth above to record work" /></div> : (
@@ -179,7 +185,14 @@ function ToothMapTab({ p, bills, openSheet }) {
                 </div>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 16, fontWeight: 600 }}>Tooth {num}</div>
-                  <div className="t-meta">{STATE_LABEL[st] || st}</div>
+                  <div className="t-meta">
+                    {(() => {
+                      const td = toothHistory?.toothMap?.find(t => t.toothNumber === String(num));
+                      const lastProc = td?.completedProcedures?.[0];
+                      if (lastProc) return lastProc.procedure + (lastProc.cost ? ` · ₹${Math.round(lastProc.cost).toLocaleString('en-IN')}` : '');
+                      return STATE_LABEL[st] || st;
+                    })()}
+                  </div>
                 </div>
                 <Icon name="chevRight" size={16} color="var(--text-tertiary)" />
               </button>
