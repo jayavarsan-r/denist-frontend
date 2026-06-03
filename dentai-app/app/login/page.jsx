@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useAppStore } from '@/store/useAppStore';
 import Icon from '@/components/icons';
 import { PrimaryButton } from '@/components/ui';
-import { sendOtp, verifyOtp, getMe } from '@/lib/services/auth.service';
+import { sendOtp, verifyOtp, getMe, lookupClinic, joinClinic } from '@/lib/services/auth.service';
 import { getToken } from '@/lib/api/client';
 
 function BrandMark({ size = 72 }) {
@@ -79,6 +79,12 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [sending, setSending] = useState(false);
   const [verifying, setVerifying] = useState(false);
+  const [selectedRole, setSelectedRole] = useState('doctor');
+  const [joinCode, setJoinCode] = useState('');
+  const [joinName, setJoinName] = useState('');
+  const [clinicPreview, setClinicPreview] = useState(null);
+  const [joinLoading, setJoinLoading] = useState(false);
+  const [joinError, setJoinError] = useState('');
   const phoneRef = React.useRef(null);
 
   // If already logged in, redirect to home
@@ -124,7 +130,7 @@ export default function LoginPage() {
       });
       // Navigate based on whether clinic is set up
       if (!clinicData.id) {
-        router.replace('/doctor/setup');
+        setPhase('role_select');
       } else if (meData.role === 'receptionist') {
         router.replace('/reception');
       } else {
@@ -141,6 +147,45 @@ export default function LoginPage() {
   const handlePhoneKey = (e) => {
     if (e.key === 'Enter') handleSendOtp();
   };
+  const handleLookupClinic = async () => {
+    if (joinCode.trim().length < 3) { setJoinError('Enter the clinic join code'); return; }
+    setJoinLoading(true);
+    setJoinError('');
+    try {
+      const res = await lookupClinic(joinCode.trim().toUpperCase());
+      setClinicPreview(res.clinic || res);
+    } catch (e) {
+      setJoinError(e?.response?.data?.message || 'Clinic not found — check the code');
+    } finally {
+      setJoinLoading(false);
+    }
+  };
+
+  const handleJoinClinic = async () => {
+    if (!clinicPreview) { setJoinError('Look up the clinic first'); return; }
+    if (!joinName.trim()) { setJoinError('Enter your name'); return; }
+    setJoinLoading(true);
+    setJoinError('');
+    try {
+      const res = await joinClinic(joinCode.trim().toUpperCase(), selectedRole, joinName.trim());
+      setAuth({
+        token: res.token,
+        staffId: res.staff?.id,
+        role: res.staff?.role || selectedRole,
+        clinicId: res.clinic?.id || null,
+        name: res.staff?.name || joinName,
+        clinicName: res.clinic?.name || '',
+        clinicCity: res.clinic?.city || '',
+        joinCode: res.clinic?.join_code || '',
+      });
+      router.replace(selectedRole === 'receptionist' ? '/reception' : '/');
+    } catch (e) {
+      setJoinError(e?.response?.data?.message || 'Failed to join. Try again.');
+    } finally {
+      setJoinLoading(false);
+    }
+  };
+
   const handleOtpChange = (val) => {
     setOtp(val);
     setError('');
@@ -234,6 +279,86 @@ export default function LoginPage() {
           >
             {sending ? 'Resending…' : 'Resend code'}
           </button>
+        </div>
+      )}
+
+      {phase === 'role_select' && (
+        <div style={{ padding: '0 28px' }}>
+          <div style={{ textAlign: 'center', marginBottom: 32 }}>
+            <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em' }}>What's your role?</div>
+            <div style={{ fontSize: 15, color: 'var(--text-secondary)', marginTop: 6 }}>This sets up your workspace</div>
+          </div>
+          {[
+            { role: 'doctor', label: 'Doctor', sub: "I'm a dentist or specialist" },
+            { role: 'receptionist', label: 'Receptionist', sub: 'I manage the front desk' },
+          ].map(opt => (
+            <button key={opt.role} onClick={() => {
+              setSelectedRole(opt.role);
+              setPhase(opt.role === 'doctor' ? 'clinic_choice' : 'join_new');
+            }} className="card tap" style={{ width: '100%', display: 'flex', alignItems: 'center', padding: '18px 16px', marginBottom: 12, textAlign: 'left', gap: 14 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 17, fontWeight: 700 }}>{opt.label}</div>
+                <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginTop: 2 }}>{opt.sub}</div>
+              </div>
+              <span style={{ fontSize: 18, color: 'var(--text-tertiary)' }}>›</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {phase === 'clinic_choice' && (
+        <div style={{ padding: '0 28px' }}>
+          <div style={{ textAlign: 'center', marginBottom: 32 }}>
+            <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em' }}>Your clinic</div>
+            <div style={{ fontSize: 15, color: 'var(--text-secondary)', marginTop: 6 }}>Set up or join a clinic</div>
+          </div>
+          {[
+            { label: 'Create a new clinic', sub: "I'll be the clinic admin", fn: () => router.replace('/doctor/setup') },
+            { label: 'Join an existing clinic', sub: 'I have a join code', fn: () => setPhase('join_new') },
+          ].map((opt, i) => (
+            <button key={i} onClick={opt.fn} className="card tap" style={{ width: '100%', display: 'flex', alignItems: 'center', padding: '18px 16px', marginBottom: 12, textAlign: 'left', gap: 14 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 17, fontWeight: 700 }}>{opt.label}</div>
+                <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginTop: 2 }}>{opt.sub}</div>
+              </div>
+              <span style={{ fontSize: 18, color: 'var(--text-tertiary)' }}>›</span>
+            </button>
+          ))}
+          <button onClick={() => setPhase('role_select')} style={{ width: '100%', textAlign: 'center', marginTop: 8, fontSize: 15, color: 'var(--blue)', fontWeight: 500 }}>← Back</button>
+        </div>
+      )}
+
+      {phase === 'join_new' && (
+        <div style={{ padding: '0 28px' }}>
+          <div style={{ textAlign: 'center', marginBottom: 28 }}>
+            <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em' }}>Join a clinic</div>
+            <div style={{ fontSize: 15, color: 'var(--text-secondary)', marginTop: 6 }}>Ask your clinic admin for the join code</div>
+          </div>
+          <label style={{ display: 'block', marginBottom: 20 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8 }}>Your name</div>
+            <input value={joinName} onChange={e => setJoinName(e.target.value)} placeholder="Dr. / Your full name" style={{ width: '100%', border: 'none', borderBottom: '1.5px solid var(--border)', outline: 'none', background: 'transparent', fontSize: 20, fontWeight: 600, padding: '4px 0 8px', color: 'var(--text-primary)', fontFamily: 'inherit' }} />
+          </label>
+          <label style={{ display: 'block', marginBottom: 20 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8 }}>Clinic join code</div>
+            <input value={joinCode} onChange={e => { setJoinCode(e.target.value.toUpperCase()); setClinicPreview(null); setJoinError(''); }} placeholder="e.g. DENT-MUM-423" style={{ width: '100%', border: 'none', borderBottom: '1.5px solid var(--border)', outline: 'none', background: 'transparent', fontSize: 20, fontWeight: 700, padding: '4px 0 8px', color: 'var(--text-primary)', fontFamily: 'inherit', letterSpacing: '0.04em' }} />
+          </label>
+          {clinicPreview && (
+            <div style={{ background: 'var(--bg)', borderRadius: 12, padding: '14px 16px', marginBottom: 16, border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>{clinicPreview.name}</div>
+              {clinicPreview.city && <div style={{ fontSize: 14, color: 'var(--text-secondary)' }}>{clinicPreview.city}</div>}
+            </div>
+          )}
+          {joinError && <div style={{ color: 'var(--red)', fontSize: 14, marginBottom: 12 }}>{joinError}</div>}
+          {!clinicPreview ? (
+            <PrimaryButton onClick={handleLookupClinic} style={{ opacity: joinLoading ? 0.5 : 1 }}>
+              {joinLoading ? 'Looking up…' : 'Find clinic'}
+            </PrimaryButton>
+          ) : (
+            <PrimaryButton onClick={handleJoinClinic} style={{ opacity: joinLoading ? 0.5 : 1 }}>
+              {joinLoading ? 'Joining…' : `Join as ${selectedRole === 'doctor' ? 'Doctor' : 'Receptionist'}`}
+            </PrimaryButton>
+          )}
+          <button onClick={() => { setPhase('role_select'); setClinicPreview(null); setJoinError(''); }} style={{ width: '100%', textAlign: 'center', marginTop: 12, fontSize: 15, color: 'var(--blue)', fontWeight: 500 }}>← Back</button>
         </div>
       )}
 
