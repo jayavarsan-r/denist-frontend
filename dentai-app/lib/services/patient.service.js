@@ -86,3 +86,8 @@ export async function extractPatientFromTranscript(transcript) {
   const { data } = await apiClient.post('/api/ai/extract-patient', { transcript });
   return data.patient || {};
 }
+
+export async function getToothHistory(id) {
+  const { data } = await apiClient.get(`/api/patients/${id}/tooth-history`);
+  return data; // { patientId, toothMap: [...], generalVisits: [...], totalBilled: number }
+}
