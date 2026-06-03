@@ -196,6 +196,33 @@ function HomeScreen() {
         )}
       </div>
 
+      {/* recent appointments — from analytics API */}
+      {analytics?.recentAppointments?.length > 0 && (
+        <div style={{ padding: '26px 22px 0' }}>
+          <Eyebrow action={<button onClick={() => router.push('/schedule')} style={{ fontSize: 13, fontWeight: 600, color: 'var(--blue)' }}>See all</button>}>Recent appointments</Eyebrow>
+          <div>
+            {analytics.recentAppointments.slice(0, 5).map((appt, i) => {
+              const patientName = appt.patients?.name || 'Patient';
+              const patientId = appt.patients?.id || appt.patient_id;
+              const dot = { scheduled: 'var(--blue)', completed: 'var(--green)', cancelled: 'var(--text-tertiary)', arrived: 'var(--orange)' }[appt.status] || 'var(--text-tertiary)';
+              return (
+                <button key={appt.id} onClick={() => router.push('/patients/' + patientId)} className="rowtap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '12px 0', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 16.5, fontWeight: 600 }}>{patientName}</div>
+                    <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginTop: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span>{appt.appointment_date}</span>
+                      {appt.purpose && <><span>·</span><span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 140 }}>{appt.purpose}</span></>}
+                      {appt.tooth_number && <><span>·</span><span style={{ color: 'var(--blue)', fontWeight: 600 }}>T{appt.tooth_number}</span></>}
+                    </div>
+                  </div>
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: dot, flexShrink: 0 }} />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* tail spacing */}
       <div style={{ height: 24 }} />
     </div>
