@@ -253,7 +253,7 @@ function LabTab({ p, labOrders, openSheet, markLabReceived }) {
   );
 }
 
-function BillingTab({ p, bills, prescriptions, labOrders, visits, procedures, openSheet }) {
+function BillingTab({ p, bills, prescriptions, labOrders, visits, procedures, openSheet, toothHistory }) {
   const pbills = bills.filter(b => b.patientId === p.id);
   const rxs = prescriptions.filter(r => r.patientId === p.id);
   const totalBilled = pbills.reduce((s, b) => s + b.total, 0);
@@ -312,6 +312,29 @@ function BillingTab({ p, bills, prescriptions, labOrders, visits, procedures, op
             <span style={{ color: 'var(--blue)', fontSize: 14, fontWeight: 500 }}>View</span>
           </button>
         ))}</div>}
+
+      {/* Real visit costs from API */}
+      {toothHistory && (toothHistory.totalBilled > 0 || toothHistory.generalVisits?.length > 0) && (
+        <>
+          <div style={{ height: 20 }} />
+          <SectionHeader>Recorded visit costs</SectionHeader>
+          <div className="card" style={{ padding: '8px 16px', marginBottom: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0' }}>
+              <span style={{ fontSize: 15, color: 'var(--text-secondary)' }}>Total from visits</span>
+              <span className="tnum" style={{ fontSize: 15, fontWeight: 700, color: '#1E8E3E' }}>₹{Math.round(toothHistory.totalBilled).toLocaleString('en-IN')}</span>
+            </div>
+          </div>
+          {toothHistory.toothMap?.filter(t => t.totalCost > 0).map(t => (
+            <div key={t.toothNumber} className="card" style={{ padding: '12px 14px', marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <span style={{ fontSize: 15, fontWeight: 600 }}>Tooth {t.toothNumber}</span>
+                <span className="t-meta" style={{ display: 'block' }}>{t.completedProcedures?.[0]?.procedure || ''}</span>
+              </div>
+              <span className="tnum" style={{ fontSize: 15, fontWeight: 700, color: 'var(--blue)' }}>₹{Math.round(t.totalCost).toLocaleString('en-IN')}</span>
+            </div>
+          ))}
+        </>
+      )}
     </div>
   );
 }
@@ -440,7 +463,7 @@ function PatientProfile({ patientId, initialTab }) {
           {tab === 'Cases' && <CasesTab p={p} procedures={procedures} labOrders={labOrders} openSheet={openSheet} patientTreatmentPlans={patientTreatmentPlans} />}
           {tab === 'Tooth Map' && <ToothMapTab p={{ ...p, teeth: mergedTeeth }} bills={bills} openSheet={openSheet} toothHistory={toothHistory} toothLoading={toothLoading} />}
           {tab === 'Lab' && <LabTab p={p} labOrders={labOrders} openSheet={openSheet} markLabReceived={markLabReceived} />}
-          {tab === 'Billing' && <BillingTab p={p} bills={bills} prescriptions={prescriptions} labOrders={labOrders} visits={visits} procedures={procedures} openSheet={openSheet} />}
+          {tab === 'Billing' && <BillingTab p={p} bills={bills} prescriptions={prescriptions} labOrders={labOrders} visits={visits} procedures={procedures} openSheet={openSheet} toothHistory={toothHistory} />}
         </div>
       </div>
       <VoiceToolbar onClick={() => openSheet('voice', { scope: 'patient', patientId: p.id })} />
