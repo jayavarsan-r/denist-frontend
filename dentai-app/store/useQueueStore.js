@@ -61,6 +61,7 @@ export const useQueueStore = create((set, get) => ({
 
   /* ─── Complete consult ─── */
   completeConsult: async (id, consult) => {
+    const entry = get().queue.find(e => e.id === id);
     // Optimistic update
     set((s) => {
       let next = s.queue.map((e) =>
@@ -80,11 +81,17 @@ export const useQueueStore = create((set, get) => ({
     });
     try {
       await apiCompleteConsult(id, {
-        transcript: consult?.transcript || '',
-        structuredNote: consult,
-        medicines: consult?.medicines || [],
-        instructions: consult?.instructions || '',
-        followUp: consult?.followUp || '',
+        patientId:     entry?.patientId || '',
+        procedure:     consult?.procedure || '',
+        diagnosis:     consult?.diagnosis || '',
+        toothNumber:   consult?.tooth ? String(consult.tooth) : null,
+        totalSittings: consult?.totalSittings || 1,
+        estimatedCost: consult?.estimatedCost || 0,
+        transcript:    consult?.transcript || '',
+        notes:         consult?.instructions || '',
+        medicines:     consult?.medicines || [],
+        instructions:  consult?.instructions || '',
+        followUp:      consult?.followUp || '',
       });
     } catch {
       get().loadQueue();
