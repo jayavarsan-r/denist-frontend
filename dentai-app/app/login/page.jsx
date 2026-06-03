@@ -283,7 +283,7 @@ export default function LoginPage() {
       )}
 
       {phase === 'role_select' && (
-        <div style={{ padding: '0 28px' }}>
+        <div>
           <div style={{ textAlign: 'center', marginBottom: 32 }}>
             <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em' }}>What's your role?</div>
             <div style={{ fontSize: 15, color: 'var(--text-secondary)', marginTop: 6 }}>This sets up your workspace</div>
@@ -307,7 +307,7 @@ export default function LoginPage() {
       )}
 
       {phase === 'clinic_choice' && (
-        <div style={{ padding: '0 28px' }}>
+        <div>
           <div style={{ textAlign: 'center', marginBottom: 32 }}>
             <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em' }}>Your clinic</div>
             <div style={{ fontSize: 15, color: 'var(--text-secondary)', marginTop: 6 }}>Set up or join a clinic</div>
@@ -329,7 +329,7 @@ export default function LoginPage() {
       )}
 
       {phase === 'join_new' && (
-        <div style={{ padding: '0 28px' }}>
+        <div>
           <div style={{ textAlign: 'center', marginBottom: 28 }}>
             <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em' }}>Join a clinic</div>
             <div style={{ fontSize: 15, color: 'var(--text-secondary)', marginTop: 6 }}>Ask your clinic admin for the join code</div>
