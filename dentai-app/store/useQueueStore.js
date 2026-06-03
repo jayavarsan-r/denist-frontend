@@ -90,7 +90,6 @@ export const useQueueStore = create((set, get) => ({
         transcript:    consult?.transcript || '',
         notes:         consult?.instructions || '',
         medicines:     consult?.medicines || [],
-        instructions:  consult?.instructions || '',
         followUp:      consult?.followUp || '',
       });
     } catch {
