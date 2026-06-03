@@ -12,6 +12,7 @@ import { treatmentPlans } from '@/lib/data/procedures';
 import { TODAY } from '@/lib/data/patients';
 import { formatCurrency, formatDate, formatTime, clinicianFlags, hasComplications, parseDate, MONTHS, formatCurrencyK } from '@/lib/data/utils';
 import { getProcedureColor, TOOTH_STATE_STYLE } from '@/lib/data/procedures';
+import { getToothHistory } from '@/lib/services/patient.service';
 
 function VoiceToolbar({ onClick, label = 'Add voice entry' }) {
   return (
@@ -304,10 +305,35 @@ function BillingTab({ p, bills, prescriptions, labOrders, visits, procedures, op
 
 const PROFILE_TABS = ['Overview', 'Cases', 'Tooth Map', 'Lab', 'Billing'];
 
+function procedureToState(name) {
+  const n = (name || '').toLowerCase();
+  if (n.includes('root canal') || n.includes('rct') || n.includes('pulpectomy')) return 'rct';
+  if (n.includes('crown') || n.includes('cap')) return 'crown';
+  if (n.includes('extraction') || n.includes('removal')) return 'extraction';
+  if (n.includes('filling') || n.includes('composite') || n.includes('restoration')) return 'filling';
+  if (n.includes('implant')) return 'implant';
+  if (n.includes('infection') || n.includes('abscess') || n.includes('periapical')) return 'infection';
+  return 'rct';
+}
+
+function buildTeethMap(toothHistory) {
+  const map = {};
+  if (!toothHistory?.toothMap) return map;
+  toothHistory.toothMap.forEach(t => {
+    if (t.upcomingAppointments?.length > 0) {
+      map[t.toothNumber] = 'scheduled';
+    } else if (t.completedProcedures?.length > 0) {
+      map[t.toothNumber] = procedureToState(t.completedProcedures[0]?.procedure);
+    }
+  });
+  return map;
+}
+
 function PatientProfile({ patientId, initialTab }) {
   const router = useRouter();
   const openSheet = useAppStore(s => s.openSheet);
   const patients = usePatientStore(s => s.patients);
+  const fetchPatient = usePatientStore(s => s.fetchPatient);
   const updateToothState = usePatientStore(s => s.updateToothState);
   const visits = useVisitStore(s => s.visits);
   const procedures = useClinicalStore(s => s.procedures);
@@ -319,7 +345,33 @@ function PatientProfile({ patientId, initialTab }) {
 
   const p = patients.find(x => x.id === patientId);
   const [tab, setTab] = React.useState(initialTab || 'Overview');
+  const [toothHistory, setToothHistory] = React.useState(null);
+  const [toothLoading, setToothLoading] = React.useState(false);
+
+  // Ensure patient is loaded if navigated directly
+  React.useEffect(() => {
+    if (!patients.find(x => x.id === patientId)) {
+      fetchPatient(patientId);
+    }
+  }, [patientId]);
+
+  // Fetch tooth history from API
+  React.useEffect(() => {
+    if (!patientId) return;
+    setToothLoading(true);
+    getToothHistory(patientId)
+      .then(data => setToothHistory(data))
+      .catch(() => {})
+      .finally(() => setToothLoading(false));
+  }, [patientId]);
+
   if (!p) return null;
+
+  // Merge: API tooth history overrides local p.teeth
+  const apiTeethMap = buildTeethMap(toothHistory);
+  const mergedTeeth = Object.keys(apiTeethMap).length > 0
+    ? { ...p.teeth, ...apiTeethMap }
+    : p.teeth;
   const flags = clinicianFlags(p);
   const outstanding = bills.filter(b => b.patientId === p.id).reduce((s, b) => s + b.outstanding, 0);
   const statusPill = p.status === 'current' ? <Chip label="Current patient" tone="dark" size="lg" /> : p.status === 'new' ? <Chip label="New patient" tone="blueOutline" size="lg" /> : <Chip label="Completed" tone="neutral" size="lg" />;
@@ -373,7 +425,7 @@ function PatientProfile({ patientId, initialTab }) {
         <div style={{ padding: '18px 20px 24px' }}>
           {tab === 'Overview' && <OverviewTab p={p} procedures={procedures} visits={visits} labOrders={labOrders} openSheet={openSheet} router={router} />}
           {tab === 'Cases' && <CasesTab p={p} procedures={procedures} labOrders={labOrders} openSheet={openSheet} patientTreatmentPlans={patientTreatmentPlans} />}
-          {tab === 'Tooth Map' && <ToothMapTab p={p} bills={bills} openSheet={openSheet} />}
+          {tab === 'Tooth Map' && <ToothMapTab p={{ ...p, teeth: mergedTeeth }} bills={bills} openSheet={openSheet} toothHistory={toothHistory} toothLoading={toothLoading} />}
           {tab === 'Lab' && <LabTab p={p} labOrders={labOrders} openSheet={openSheet} markLabReceived={markLabReceived} />}
           {tab === 'Billing' && <BillingTab p={p} bills={bills} prescriptions={prescriptions} labOrders={labOrders} visits={visits} procedures={procedures} openSheet={openSheet} />}
         </div>
