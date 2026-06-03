@@ -228,11 +228,89 @@ The only missing piece: `completeConsult` in `useQueueStore` strips those fields
 
 ---
 
+---
+
+## Section 7 — New User Onboarding Flow Fix
+
+### Problem
+
+When a brand-new phone number verifies OTP, the backend returns `{ token, dentist, isNewUser: true }` with no `staff` or `clinic`. The login page currently checks `if (!clinicData.id)` and routes straight to `/doctor/setup` — skipping role selection and the create-vs-join choice entirely.
+
+### Required Flow (post-OTP for new users)
+
+```
+OTP verified (isNewUser: true)
+  ↓
+Step A — Role selection: "Are you a Doctor or Receptionist?"
+  ├── Doctor →
+  │     Step B — "Create a new clinic" or "Join an existing clinic"
+  │       ├── Create → /doctor/setup  (existing, unchanged)
+  │       └── Join   → enter join code → joinClinic API → home
+  └── Receptionist →
+        Step B — Enter clinic join code → joinClinic API → /reception
+```
+
+### Implementation
+
+**`app/login/page.jsx`** — add two new inline steps after OTP verification:
+
+- New `phase` values: `'role'` and `'clinic_choice'` (for doctors only)
+- Current routing logic (`if (!clinicData.id) router.replace('/doctor/setup')`) becomes: set `phase = 'role'` and store `dentistId` from response
+
+**Step A — Role selection UI** (phase = `'role'`):
+
+Two large tappable cards in the existing app style:
+- "I'm a Doctor" — sets `selectedRole = 'doctor'`, advances to `'clinic_choice'`
+- "I'm a Receptionist" — sets `selectedRole = 'receptionist'`, advances to `'join'`
+
+**Step B — Clinic choice for doctors** (phase = `'clinic_choice'`):
+
+Two tappable cards:
+- "Create a new clinic" → `router.push('/doctor/setup')`
+- "Join an existing clinic" → advances to `phase = 'join'`
+
+**Step B — Join clinic** (phase = `'join'`, used by both roles):
+
+Reuse the join-clinic UI already in `app/roles/page.jsx` — but inline it into the login page so the user doesn't navigate away (simpler than routing). Fields: join code input + lookup + confirm. On success call `joinClinic(code, selectedRole, name)` → `hydrateAuth` → redirect based on role.
+
+**Existing `app/roles/page.jsx`** stays as-is (used for existing users switching clinics). The new inline steps are only triggered when `isNewUser: true`.
+
+---
+
+## Section 8 — Settings: Show Real Data + Clinic Join Code
+
+### Problem
+
+`AccountSettingsSheet.jsx` reads from hardcoded `STAFF` and `CLINIC` mock objects (`lib/data/queue.js`). The clinic `join_code` is already stored in `useAppStore` as `clinic.joinCode` (populated in both `setAuth` and `hydrateAuth`) but never displayed.
+
+### Implementation
+
+**`components/sheets/AccountSettingsSheet.jsx`** — two changes:
+
+1. **Replace mock data with store:**
+   ```js
+   // Remove:
+   import { STAFF, CLINIC } from '@/lib/data/queue';
+   // Add:
+   const name     = useAppStore((s) => s.name);
+   const role     = useAppStore((s) => s.role);
+   const clinic   = useAppStore((s) => s.clinic);
+   ```
+   Use `name` instead of `staff.name`, `clinic.clinicName` + `clinic.city` instead of `CLINIC.name` + `CLINIC.city`.
+
+2. **Add Clinic Code row** in the settings card, after "Clinic name":
+   - Label: "Clinic join code"
+   - Value: `clinic.joinCode` displayed prominently (large monospaced text, e.g. `DENT-ABC-123`)
+   - A copy-to-clipboard tap action using `navigator.clipboard.writeText`
+   - Only render if `clinic.joinCode` is truthy
+   - Style: same row layout as other settings rows, value right-aligned in accent color
+
+---
+
 ## Out of Scope
 
 - No changes to `Odontogram.jsx` rendering
 - No changes to schedule, finance, reception, or queue screens
 - No new npm packages
-- No routing changes
 - No Capacitor build changes
-- No changes to existing sheet layouts beyond `ToothDetailSheet` data wiring
+- No changes to existing sheet layouts beyond `ToothDetailSheet` data wiring and `AccountSettingsSheet` fix above
