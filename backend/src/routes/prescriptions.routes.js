@@ -23,15 +23,17 @@ router.post('/', auth, async (req, res, next) => {
     const { data, error } = await supabase.from('prescriptions').insert({
       patient_id: patientId,
       dentist_id: req.dentistId,
+      clinic_id: req.clinicId || null,
       visit_id: visitId || null,
       visit_note_id: visitNoteId || null,
       raw_voice: rawVoice || null,
       medicines: extractedMedicines || [],
       instructions: extractedInstructions || null,
+      follow_up: extractedFollowUp || null,
     }).select(`*, patients(name, age, gender, phone)`).single();
 
     if (error) throw error;
-    res.status(201).json({ prescription: { ...data, follow_up: extractedFollowUp } });
+    res.status(201).json({ prescription: data });
   } catch (err) { next(err); }
 });
 

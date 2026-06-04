@@ -38,7 +38,7 @@ exports.create = async (req, res, next) => {
     const { name, phone, age, gender, medical_conditions, allergies, clinical_flags } = req.body;
     if (!name || !phone) return res.status(400).json({ error: 'Name and phone required' });
     const { data: patient, error } = await supabase.from('patients')
-      .insert({ dentist_id: req.dentistId, clinic_id: req.clinicId || null, name, phone, age, gender, medical_conditions, allergies })
+      .insert({ dentist_id: req.dentistId, clinic_id: req.clinicId || null, name, phone, age, gender, medical_conditions, allergies, clinical_flags })
       .select().single();
     if (error) throw error;
     res.status(201).json({ patient });
@@ -61,7 +61,14 @@ exports.getById = async (req, res, next) => {
 
 exports.update = async (req, res, next) => {
   try {
-    let uq = supabase.from('patients').update({ ...req.body, updated_at: new Date().toISOString() }).eq('id', req.params.id);
+    // Whitelist editable fields — never spread req.body (prevents overwriting
+    // dentist_id/clinic_id/is_deleted and other protected columns).
+    const allowed = ['name', 'phone', 'age', 'gender', 'medical_conditions', 'allergies', 'clinical_flags'];
+    const updates = { updated_at: new Date().toISOString() };
+    for (const k of allowed) {
+      if (req.body[k] !== undefined) updates[k] = req.body[k];
+    }
+    let uq = supabase.from('patients').update(updates).eq('id', req.params.id);
     if (req.clinicId) uq = uq.eq('clinic_id', req.clinicId);
     else uq = uq.eq('dentist_id', req.dentistId);
     const { data: patient, error } = await uq.select().single();

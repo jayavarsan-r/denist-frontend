@@ -5,15 +5,25 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 
+const { validateEnv } = require('./config/env');
+const requestId = require('./middleware/requestId');
+const { responseEnvelope } = require('./utils/response');
+
+// Fail fast in production if critical env is missing (throws before listen).
+validateEnv();
+
 const app = express();
 
 app.use(helmet());
 // Allow all origins — Capacitor APK makes requests from capacitor://localhost
 // and the Authorization header handles security (not CORS)
 app.use(cors({ origin: true }));
+app.use(requestId);
 app.use(morgan('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+// Standardize every JSON response into { success, data } / { success, error }.
+app.use(responseEnvelope);
 app.use('/api/', rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
 
 app.use('/api/auth', require('./routes/auth.routes'));

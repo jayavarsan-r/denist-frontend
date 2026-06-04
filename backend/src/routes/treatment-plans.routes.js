@@ -2,8 +2,10 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const auth = require('../middleware/auth');
+const validate = require('../middleware/validate');
+const v = require('../validators');
 
-router.post('/', auth, async (req, res, next) => {
+router.post('/', auth, validate(v.createTreatmentPlan), async (req, res, next) => {
   try {
     const { patientId, diagnosis, procedureName, totalSittings, estimatedCost, notes, startDate, expectedEndDate } = req.body;
     if (!patientId || !procedureName) return res.status(400).json({ error: 'patientId and procedureName required' });
@@ -41,7 +43,7 @@ router.get('/:id', auth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.patch('/:id', auth, async (req, res, next) => {
+router.patch('/:id', auth, validate(v.updateTreatmentPlan), async (req, res, next) => {
   try {
     const updates = {};
     if (req.body.completedSittings !== undefined) updates.completed_sittings = req.body.completedSittings;

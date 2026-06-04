@@ -3,8 +3,9 @@ const fs = require('fs');
 const path = require('path');
 
 async function uploadFile(localPath, bucket, storagePath) {
-  const buffer = fs.readFileSync(localPath);
-  const sizeKb = Math.ceil(buffer.length / 1024);
+  // Stream the file instead of buffering the whole thing in memory (avoids OOM
+  // under concurrent large uploads). storage-js auto-sets duplex:'half' for streams.
+  const sizeKb = Math.ceil(fs.statSync(localPath).size / 1024);
   const ext = path.extname(localPath);
   const ext2 = ext || (bucket === 'voice-notes' ? '.m4a' : '.jpg');
   const finalPath = storagePath + ext2;
@@ -13,9 +14,10 @@ async function uploadFile(localPath, bucket, storagePath) {
     ? 'audio/mp4'
     : localPath.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg';
 
+  const fileStream = fs.createReadStream(localPath);
   const { data, error } = await supabase.storage
     .from(bucket)
-    .upload(finalPath, buffer, { contentType, upsert: false });
+    .upload(finalPath, fileStream, { contentType, upsert: false });
 
   if (error) throw new Error(`Upload failed (${bucket}): ${error.message}`);
   return { storagePath: data.path, sizeKb };

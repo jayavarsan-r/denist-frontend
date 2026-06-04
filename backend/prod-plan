@@ -1,0 +1,1752 @@
+# DentAI — Architecture Review & Consolidated Recommendations
+
+**Cross-referencing:** Backend Audit · Architecture Plan · AI Layer Refinement · Product Context  
+**Date:** June 2026
+
+---
+
+## What This Document Is
+
+You have four documents: the audit (what is broken today), the architecture plan (what to build), the AI layer refinement (how to structure the AI stack), and the product context (why the product exists). This review cross-references all four, confirms what the architecture plan gets right, identifies what it misses or should change, and gives you a cleaner action sequence.
+
+---
+
+## Part 1 — Architecture Plan Assessment: What It Gets Right
+
+The architecture plan is solid. Most of the critical audit findings have a corresponding fix already mapped out. Specifically:
+
+The three IDOR vulnerabilities on visits and appointments are addressed in Phase 2. The body spread problem (`...req.body` into DB updates) is addressed with explicit field whitelists in the same phase. The GET side effects — the `clinic_id` backfill on every patient list call and the `join_code` generation in `GET /me` — are correctly removed in Phase 3. Role-based access control is properly introduced in Phase 4 before it's referenced by any route logic. The response envelope is standardized in Phase 5. The Zod validation layer in Phase 6 replaces all the ad-hoc `if (!field)` checks. The `readFileSync` → `createReadStream` fix in Phase 9 eliminates the memory spike. The N+1 fix in Phase 11 is the right approach (batch query replaces per-entry count). The five SQL migrations in Phase 12 cover all the missing columns the audit identified. The integration test structure in Phase 16 targets exactly the right flows.
+
+The implementation order is also correct in philosophy: security first, then API consistency, then architecture, then quality. This sequence ensures the app is safe at every stage.
+
+---
+
+## Part 2 — Gaps: What the Architecture Plan Misses or Should Change
+
+### Gap 1 — AI Folder Structure (Important for Long-Term)
+
+The architecture plan keeps `services/ai.service.js` as a flat file and mentions `controllers/ai.controller.js` as-is. Document 2 proposes a proper provider pattern, and it's the right call for DentAI's long-term plan. The product context is explicit: you intend to collect 50 clinics worth of recordings and fine-tune a Whisper model. If Sarvam is abstracted properly now, that migration is a one-file swap later.
+
+The architecture plan should be updated to replace `services/ai.service.js` with:
+
+```
+services/
+  ai/
+    ai.service.js              — orchestrates providers, used by controllers
+    providers/
+      sarvam.provider.js       — STT: audio → transcript
+      gemini.provider.js       — structuring: transcript → JSON
+      mock.provider.js         — dev/test only, never in production
+    prompts/
+      consultation.prompt.js   — generate-note system prompt
+      prescription.prompt.js   — extract-prescription system prompt
+      receptionist.prompt.js   — extract-complaint / extract-patient prompts
+    parsers/
+      medicine.parser.js       — unified medicine schema normalization
+```
+
+The `ai.controller.js` becomes a thin pass-through: it calls `aiService.transcribeAudio()`, `aiService.generateClinicalNote()`, `aiService.extractPrescription()` — it never touches Sarvam or Gemini directly. This is important because the current codebase has Gemini calls scattered across both `ai.controller.js` AND `ai.service.js`, and the two use different medicine field names (`dosage` vs `dose`). Moving prompts into dedicated files also fixes the invisible AI system prompt issue — right now if a prompt changes, it's buried inside a controller function.
+
+**The `medicine.parser.js` module solves a specific recurring problem.** The audit identified two incompatible medicine schemas. The architecture plan addresses this by unifying to a `strength`/`mealTiming` schema — but without a dedicated parser, the dual-schema problem will recur as soon as someone adds a third AI path. The parser module's job is simple: take any medicine object (however shaped) and return the canonical schema. Every path that reads or writes medicines goes through it.
+
+### Gap 2 — Gemini API Key in URL (Security, Missing from Plan)
+
+The audit flagged this as LOW-006: the Gemini API key is passed as a URL query parameter (`?key={GEMINI_API_KEY}`), which means it appears in server access logs, reverse proxy logs, and any WAF sitting in front of the API. The architecture plan never addresses this fix.
+
+The change is one line per call: replace the `?key=` query param with the `x-goog-api-key` request header. This should be added to the Phase 1 foundation work since it's a security issue and takes 10 minutes to fix across all six Gemini call sites.
+
+### Gap 3 — `clinical_flags` and `follow_up` Are Phase 15, Should Be Phase 1
+
+The plan puts both of these in the cleanup phase (step 30+ in the implementation order). This is wrong for two reasons.
+
+`clinical_flags` missing from patient create (audit CRITICAL from the queue perspective) means that any medical flag a receptionist records during patient registration is silently dropped. This is a data correctness issue that's been happening since the first patient was created. It's also a one-line fix: add `clinical_flags` to the INSERT in `patients.controller.js:41`.
+
+`follow_up` not being saved to prescriptions means every PDF generated has a blank follow-up field, which was explicitly designed in the product. This is also a one-line fix (add `follow_up` to the INSERT) and depends only on migration 001 adding the column.
+
+Both should move to the immediate fixes block, executed right after the schema migration runs.
+
+### Gap 4 — `complete-consult` Not Creating a Visit Record
+
+The audit (Part 9.2) explicitly notes: "No visit record created — today's consultation session is not recorded in `visits`." The architecture plan's Transaction Service description in Phase 7b does include creating a visit (step 2 of `completeConsultation`), which is correct. But the Phase 2 IDOR fixes section — which modifies `complete-consult` — doesn't mention adding the visit creation there. This means if someone implements Phase 2 before Phase 7 (which is the intended order), the visit creation gap persists until Phase 7.
+
+Recommendation: add a note to Phase 2 that `complete-consult` also needs a visit INSERT as a temporary fix, with a TODO marker for the full Transaction Service refactor in Phase 7.
+
+### Gap 5 — `is_deleted` → `deleted_at` Transition Is Incomplete
+
+Migration 003 adds `deleted_at` columns and backfills `is_deleted = true` rows. What it doesn't address is that all existing query code uses `.eq('is_deleted', false)`. When `deleted_at` columns are added, the existing queries still work because they still filter on `is_deleted`. But as soon as a soft-delete happens via the new `BaseClinicRepository.softDelete()` path (which sets `deleted_at` but not `is_deleted`), those old queries will start returning "deleted" records.
+
+The plan needs a transition rule: during the Architecture Pass (Phase 21-24), as each controller is migrated to use repositories, its queries must simultaneously switch from `.eq('is_deleted', false)` to `.is('deleted_at', null)`. Only after all query code is migrated should Migration 006 drop the `is_deleted` column. The current plan mentions dropping it but doesn't make the query migration explicit.
+
+### Gap 6 — Appointments Created by `complete-consult` Are `'scheduled'`, Should Be `'suggested'`
+
+This is a product design issue surfaced by the audit: auto-generated appointments are hardcoded to `10:00` and status `'scheduled'`. The product context (Document 4) describes the checkout flow: the receptionist confirms appointment details at checkout. If appointments are already `'scheduled'`, the receptionist has nothing to confirm — they're already set.
+
+The fix is to add a `'suggested'` status to appointments. `complete-consult` creates stubs with `status: 'suggested'` and no time set. During checkout, the receptionist sets the actual time and changes status to `'scheduled'`. This matches how the product context describes the receptionist's role.
+
+This requires adding `'suggested'` to the appointment status enum and a `PATCH /api/appointments/:id` that allows the status+time update (which already exists). The Zod validator in Phase 6 should include `'suggested'` in the status enum.
+
+### Gap 7 — Receptionist Prompt in the Wrong Place
+
+The audit notes `POST /api/ai/extract-complaint` and `POST /api/ai/extract-patient-info` are two overlapping endpoints with different output schemas doing the same thing. The architecture plan doesn't address this consolidation — it just adds a `queue.validator.js` that validates the `chiefComplaint` field on queue creation.
+
+When the AI folder is restructured (Gap 1), `receptionist.prompt.js` should contain a single unified extraction prompt that returns both the complaint and basic patient flags in one Gemini call. The two endpoints (`extract-complaint` and `extract-patient-info`) should be merged into one: `POST /api/ai/extract-queue-context`. The existing two endpoints remain as deprecated aliases pointing to the same handler until the frontend is updated.
+
+---
+
+## Part 3 — AI Layer: Integrating Document 2
+
+Document 2's most important insight is: **do not merge Sarvam and Gemini into one AI function**. The pipeline must stay explicit. The architecture plan's Phase 8 correctly separates them conceptually (Sarvam = STT, Gemini = structuring) but the flat file structure doesn't enforce this separation.
+
+With the provider pattern, the consultation flow becomes explicit and testable at each stage:
+
+```
+Doctor presses Record
+    → Voice File (.webm)
+    → StorageService.upload() → Supabase Storage
+    → SarvamProvider.transcribe(audioBuffer) → "Root canal tooth 26..."
+    → GeminiProvider.generateClinicalNote(transcript, consultationPrompt) → { diagnosis, medicines, ... }
+    → TransactionService.completeConsultation({ clinicId, patientId, structured, ... })
+    → Database
+```
+
+Each provider has a consistent interface:
+
+```js
+// sarvam.provider.js
+async transcribe(audioBuffer, options = {}) → { transcript: string, confidence?: number }
+
+// gemini.provider.js
+async generate(prompt, userContent, options = {}) → { data: object }
+
+// mock.provider.js
+async transcribe() → { transcript: mockTranscript }
+async generate(prompt) → { data: mockStructuredNote }
+```
+
+The mock provider should only activate when `NODE_ENV === 'development'` AND `GEMINI_API_KEY` is not set. In production, a missing API key should throw at startup, not silently fall back. The architecture plan correctly says "Mock data only in NODE_ENV === development" but doesn't make the production startup check explicit. Add a startup validation in `server.js` that throws if `GEMINI_API_KEY` or `SARVAM_API_KEY` is absent in production.
+
+---
+
+## Part 4 — Revised Implementation Sequence
+
+The architecture plan's 35-step order is correct in structure but some items are misplaced. Here is the corrected sequence with the gaps addressed:
+
+### Truly Immediate (< 2 hours, no migration needed)
+
+These are single-line or small fixes that can be deployed right now without touching anything architectural:
+
+1. Add `GEMINI_API_KEY` to `.env.example`
+2. Add `DEMO_PHONE`, `DEV_OTP_OTHER` to `.env.example`, remove `ANTHROPIC_API_KEY` and `USE_DEV_OTP`
+3. Fix `patients.controller.js:41` — add `clinical_flags` to INSERT
+4. Fix Gemini API key from URL query param to `x-goog-api-key` header (6 call sites)
+5. Fix `visits.controller.js:38` and `:47` — add `eq('dentist_id', req.dentistId)` filters (IDOR)
+6. Fix `appointments.controller.js:68` — add `eq('dentist_id', req.dentistId)` filter (IDOR)
+7. Fix `storage.service.js:6` — `readFileSync` → `createReadStream`
+
+Deploy these seven changes before anything else. The app is materially more secure and correct after this.
+
+### Security Pass (Week 1)
+
+8. Run DB migrations 001 and 002 on Supabase dashboard (missing columns + indexes)
+9. Add `follow_up` to prescriptions INSERT (migration 001 adds the column)
+10. Create `utils/response.js`, `utils/errors.js`, `utils/pagination.js`
+11. Create `middleware/requestId.js`, `utils/logger.js`
+12. Create `middleware/requireClinic.js`, `middleware/requireRole.js`, `middleware/validate.js`
+13. Update `errorHandler.js` to emit the new envelope
+14. Wrap all controllers/routes with `ok()`/`fail()` helpers
+15. Update `dentai-app/lib/api/client.js` interceptors for the new envelope
+16. Add Zod validators to all POST/PUT/PATCH routes (add `'suggested'` to appointment status enum)
+17. Add `requireRole()` to protected routes
+
+Run DB migrations 003, 004, 005 after the security pass is stable.
+
+### Remove GET Side Effects (Week 1, after security pass)
+
+18. Remove backfill block from `patients.controller.js list`
+19. Remove backfill from `patients.controller.js getById`
+20. Create `POST /api/internal/backfill-clinic-id` (dev-only)
+21. Remove `join_code` generation from `GET /me`, move to `POST /api/clinic/regenerate-join-code`
+
+### Architecture Pass (Week 2–3)
+
+22. Create `services/ai/` folder structure with providers, prompts, parsers (Document 2 pattern)
+23. Migrate `ai.controller.js` to call `aiService.*` methods, not Gemini/Sarvam directly
+24. Unify medicine schema via `medicine.parser.js`
+25. Create `repositories/base-clinic.repository.js` + all entity repositories
+26. Create `services/transaction.service.js`
+    - `completeConsultation` must include the visit INSERT (gap 3 from this review)
+27. Migrate controllers to use repositories: patients → visits → appointments → queue
+28. Add query transition: every migrated controller switches from `is_deleted` to `deleted_at` filter
+29. Add audit logging in `transaction.service.js`
+
+### Quality Pass (Week 4)
+
+30. Pagination on all list endpoints
+31. Fix N+1 in `action-queue` (batch prescriptions query)
+32. Add missing endpoints: staff PATCH/DELETE, prescriptions list, `regenerate-join-code`
+33. Reorganize background jobs into three focused files
+34. Add startup validation: throw if required API keys absent in production
+
+### Test Pass (Week 5+)
+
+35. Jest + supertest integration test suite
+36. IDOR prevention tests
+37. Consultation flow tests
+38. Payment atomicity tests
+39. Pagination + audit log tests
+
+---
+
+## Part 5 — Product Context Observations
+
+A few things from Document 4 that should inform technical decisions:
+
+**Treatment Plans are the central entity, not appointments.** The current `complete-consult` creates appointment stubs as an afterthought with hardcoded times. These should be `'suggested'` status records that the receptionist confirms at checkout. The data model change is minor; the conceptual alignment with how dentists think about multi-sitting treatment is significant.
+
+**The receptionist manages queue state, not the doctor.** The architecture plan correctly leaves `PATCH /api/queue/:id` open to both roles. Don't restrict it.
+
+**Consultation Mode is about focus.** When building the consultation context endpoint (`GET /api/queue/:id/context`), the response should be minimal and fast — chief complaint, last visit summary, active treatment plan, pending balance. The current implementation joins four tables; that's fine, but the field selection should be deliberately narrow.
+
+**AI does not diagnose.** This is stated explicitly in the product context. The Gemini prompts should not be changed to infer diagnoses — they only structure what the doctor already said. This is a constraint on prompt engineering, not on the tech stack.
+
+---
+
+## Part 6 — Things That Are Correct and Should Not Be Changed
+
+To be explicit about what to leave alone while doing all of the above:
+
+`config/supabase.js` — correct as-is. `services/pdf.service.js` — the `deriveSlots` fallback is a good touch; leave it. `middleware/auth.js` core JWT verification — correct. The Gemini system prompts themselves — they are detailed, multilingual, and contextually right for Indian dental practice. `routes/auth.routes.js` structure — the multi-clinic onboarding flow is well designed. Queue reorder logic — the `sort_order` swap is correct.
+
+---
+
+## Summary Table — Gaps vs. Architecture Plan Phases
+
+| Gap | Severity | Where It Should Be Fixed | Plan Has It? |
+|-----|----------|--------------------------|-------------|
+| Gemini key in URL query param | High | Phase 1 / Immediate | No |
+| `clinical_flags` not saved on patient create | High | Immediate | Misplaced (Phase 15) |
+| `follow_up` not saved to prescriptions | High | Phase 1 (after migration 001) | Misplaced (Phase 15) |
+| `complete-consult` not creating visit record | High | Phase 2 note + Phase 7b | Partial |
+| AI folder structure (provider pattern) | Medium | Phase 8 / Architecture Pass | No |
+| `medicine.parser.js` for schema unification | Medium | Phase 8 | No |
+| `is_deleted` → `deleted_at` transition plan | Medium | Phase 21–24 explicit rule | No |
+| Appointment status `'suggested'` | Medium | Phase 6 validator + Phase 7b | No |
+| Two overlapping AI extract endpoints | Low | Phase 8 / AI restructure | No |
+| Production startup key validation | Low | Phase 8 | No |
+
+
+# DentAI Backend Refactor & Frontend Integration Instructions
+
+You are acting as the Lead Staff Software Engineer and Principal Architect for this project.
+
+read the backend prod-pla fopr the current paln and teh backedn audit file for the com[lete backedn review so u can read and read fiel which u fell less confident not to skim throug everthign as clide has done that and gave me that doc so read those two first and read file sif nesscary aloen 
+
+The repository already contains a working backend and a working frontend.
+
+I also have:
+
+1. A complete backend audit report.
+2. A complete new backend architecture specification.
+3. A complete product workflow specification.
+
+These documents represent the new source of truth.
+
+Your responsibility is NOT to build a new backend from scratch.
+
+Your responsibility is to carefully evolve the existing codebase into the new architecture while preserving as much working functionality as possible.
+
+---
+
+# IMPORTANT
+
+Before writing ANY code:
+
+## Step 1
+
+Read and understand the ENTIRE existing codebase.
+
+Review:
+
+* Backend folder structure
+* Database schema
+* Existing migrations
+* Routes
+* Controllers
+* Services
+* Current AI pipeline
+* Queue system
+* Authentication
+* Clinic onboarding
+* Frontend API calls
+* Existing React components
+* Existing state management
+* Existing Supabase integration
+
+Build a complete mental model first.
+
+DO NOT immediately start editing files.
+
+---
+
+## Step 2
+
+Read the attached Backend Audit document completely.
+
+Treat every issue in that audit as valid unless you discover otherwise from the code.
+
+Classify findings into:
+
+Critical
+
+High
+
+Medium
+
+Low
+
+---
+
+## Step 3
+
+Read the attached Backend Architecture Plan completely.
+
+This document supersedes previous architectural decisions.
+
+The target architecture is:
+
+A clean Modular Monolith.
+
+DO NOT introduce:
+
+* Microservices
+* Event buses
+* Kafka
+* RabbitMQ
+* Redis workers
+* CQRS
+* Event sourcing
+* Internal HTTP communication
+
+Keep a single deployable backend.
+
+---
+
+## Step 4
+
+Compare:
+
+Current Codebase
+
+vs
+
+Target Architecture
+
+Produce a gap analysis.
+
+Identify:
+
+* Existing reusable code
+* Code that can remain unchanged
+* Code that must be refactored
+* Dead code
+* Duplicate logic
+* API contract mismatches
+* Frontend dependencies
+
+DO NOT remove working functionality unnecessarily.
+
+---
+
+# IMPLEMENTATION GOALS
+
+The backend should become:
+
+* Secure
+* Maintainable
+* Clinic-scoped
+* Repository-driven
+* Transaction-safe
+* Production ready
+
+Target scale:
+
+100 clinics
+
+1000 staff
+
+100,000 patients
+
+Single deployment.
+
+Single database.
+
+Single Node process.
+
+---
+
+# SECURITY
+
+Fix all audit issues.
+
+Especially:
+
+* Missing clinic ownership checks
+* IDOR vulnerabilities
+* Missing authorization filters
+* Missing role validation
+* Missing environment validation
+
+Authorization must become:
+
+clinic_id
+
+*
+
+role
+
+Never authorize using dentist_id.
+
+dentist_id remains only for backward compatibility.
+
+---
+
+# ARCHITECTURE
+
+Controllers:
+
+Receive request.
+
+Call service.
+
+Return response.
+
+Nothing else.
+
+Controllers must never directly query Supabase.
+
+Repositories own database access.
+
+Transaction services own multi-table workflows.
+
+Validation happens before controllers.
+
+---
+
+# AI ARCHITECTURE
+
+Keep the provider pattern.
+
+Doctor Recording
+
+↓
+
+Sarvam
+
+↓
+
+Transcript
+
+↓
+
+Gemini
+
+↓
+
+Structured JSON
+
+↓
+
+Parser
+
+↓
+
+Schema Validation
+
+↓
+
+Transaction Service
+
+↓
+
+Database
+
+Reception complaint recording:
+
+Sarvam only.
+
+No AI diagnosis.
+
+No structuring.
+
+Only transcript storage.
+
+Future Whisper replacement should require changing only the provider implementation.
+
+---
+
+# DATABASE
+
+Everything belongs to a clinic.
+
+Clinic
+
+├── Staff
+
+├── Patients
+
+├── Queue
+
+├── Visits
+
+├── Treatment Plans
+
+├── Prescriptions
+
+├── Payments
+
+├── XRays
+
+└── Audit Logs
+
+Repository methods should automatically scope by clinic.
+
+---
+
+# FRONTEND INTEGRATION
+
+This is extremely important.
+
+As backend contracts change:
+
+Review every frontend API usage.
+
+Update:
+
+* API clients
+* React hooks
+* Service files
+* Type definitions
+* Validation logic
+* Error handling
+* Response parsing
+
+Do NOT leave frontend expecting old response shapes.
+
+Example:
+
+Old:
+
+response.data
+
+New:
+
+response.success
+
+response.data
+
+Update frontend wherever necessary.
+
+---
+
+# API STANDARDIZATION
+
+Every endpoint should return:
+
+Success:
+
+{
+success: true,
+data: {}
+}
+
+Failure:
+
+{
+success: false,
+error: {
+code:
+message:
+details:
+}
+}
+
+Update frontend handling accordingly.
+
+---
+
+# AI FAILURE HANDLING
+
+Remove silent fake responses.
+
+Frontend should know whether AI actually failed.
+
+Update frontend to gracefully handle:
+
+* Sarvam unavailable
+* Gemini timeout
+* Parsing failure
+
+Show meaningful UI states.
+
+Do not silently continue with fake data.
+
+---
+
+# REPOSITORY LAYER
+
+Introduce repository pattern.
+
+Controllers should no longer contain raw Supabase queries.
+
+Move existing database logic into repositories incrementally.
+
+Do not break working routes.
+
+---
+
+# TRANSACTION SERVICES
+
+Create orchestration services for:
+
+completeConsultation()
+
+completeCheckout()
+
+recordPayment()
+
+createClinic()
+
+joinClinic()
+
+createTreatmentPlan()
+
+Refactor existing workflows to use them.
+
+---
+
+# VALIDATION
+
+Introduce centralized validation.
+
+Remove direct req.body spreading.
+
+Whitelist fields explicitly.
+
+Update frontend forms if validation contracts change.
+
+---
+
+# PERFORMANCE
+
+Fix:
+
+* N+1 queries
+* Missing pagination
+* File streaming
+* Queue token race conditions
+
+Frontend pagination should also be updated where necessary.
+
+---
+
+# AUDIT LOGGING
+
+Implement audit logging.
+
+Audit failures must never break business operations.
+
+No frontend changes required.
+
+---
+
+# IMPLEMENTATION STRATEGY
+
+Do NOT perform a massive rewrite.
+
+Work incrementally.
+
+Reuse existing code wherever possible.
+
+Refactor modules one by one.
+
+Maintain a working application throughout the process.
+
+---
+
+# BEFORE WRITING CODE
+
+Generate:
+
+1. Current architecture summary.
+
+2. Gap analysis.
+
+3. Files to modify.
+
+4. Database migrations required.
+
+5. Frontend files requiring updates.
+
+6. API contract changes.
+
+7. Risk assessment.
+
+8. Implementation order.
+
+Present this plan first.
+
+Only after the plan is complete should implementation begin.
+
+---
+
+# FINAL GOAL
+
+The result should be a clean, production-grade Dental Clinic Operating System backend that matches the real-world clinic workflow and integrates seamlessly with the existing frontend.
+
+Do not optimize for theoretical perfection.
+
+Optimize for:
+
+* Real clinic usage
+* Maintainability
+* Simplicity
+* Reliability
+* Future feature development
+
+Preserve the existing product vision while evolving the architecture into the new standard.
+
+
+Actually, **nothing should happen to the Sarvam routes.** They should remain a first-class service inside the AI layer.
+
+I would actually refine the architecture diagram slightly because right now it hides where Sarvam fits.
+
+---
+
+# Current AI Layer
+
+```text
+Controller
+    │
+    ▼
+
+AI Service
+
+    │
+    ├── Gemini
+    ├── Mock
+    └── Prescription Parser
+```
+
+But I would change it to:
+
+```text id="j9x4vd"
+                    AI Service
+                        │
+      ┌─────────────────┼─────────────────┐
+      │                 │                 │
+      ▼                 ▼                 ▼
+
+Sarvam STT       Gemini Structuring    Future Local Model
+
+Speech → Text    Transcript → JSON     Whisper Fine-tuned
+
+                        │
+                        ▼
+
+               Unified AI Response
+```
+
+---
+
+# Actual Consultation Flow
+
+```text id="ndh61m"
+Doctor Presses Record
+
+        │
+
+        ▼
+
+Voice File (.webm)
+
+        │
+
+        ▼
+
+Storage Service
+
+        │
+
+        ▼
+
+AI Service
+
+        │
+
+        ├────────► Sarvam API
+        │
+        │          Raw Audio
+        │
+        │
+        │◄──────── Transcript
+        │
+
+        ▼
+
+Gemini
+
+Transcript
++
+Clinic Prompt
+
+        │
+
+        ▼
+
+{
+ diagnosis,
+ procedures,
+ sittings,
+ estimatedCost,
+ medicines,
+ followUp,
+ doctorNotes
+}
+
+        │
+
+        ▼
+
+TransactionService.completeConsultation()
+```
+
+---
+
+# Route Structure
+
+I would actually separate them.
+
+```text id="x74p2h"
+routes/
+
+ai.routes.js
+```
+
+Inside:
+
+```text
+POST /ai/transcribe
+
+POST /ai/clinical-note
+
+POST /ai/prescription
+
+POST /ai/test
+```
+
+---
+
+# Controller
+
+```text id="hqh3dl"
+AIController
+
+transcribe()
+
+generateClinicalNote()
+
+extractPrescription()
+```
+
+---
+
+# Service Layer
+
+```text id="bpznf5"
+AIService
+
+transcribeAudio()
+
+generateClinicalNote()
+
+extractPrescription()
+```
+
+---
+
+# Internal AI Service
+
+```text id="hmgffz"
+class AIService {
+
+   async transcribeAudio(file){
+
+      return SarvamProvider.transcribe(file)
+
+   }
+
+   async generateClinicalNote(transcript){
+
+      return GeminiProvider.generate(
+          prompt,
+          transcript
+      )
+
+   }
+
+}
+```
+
+---
+
+# Provider Layer (Very Important)
+
+I would actually introduce one more abstraction.
+
+```text id="1q5i0x"
+services/
+
+ai/
+
+    providers/
+
+        sarvam.provider.js
+
+        gemini.provider.js
+
+        mock.provider.js
+```
+
+Then:
+
+```text
+AIController
+      │
+
+AIService
+      │
+
+SarvamProvider
+
+GeminiProvider
+
+MockProvider
+```
+
+This makes future migration trivial.
+
+---
+
+# Future Whisper Migration
+
+Remember your plan:
+
+> Collect 50 clinics worth of recordings
+>
+> Fine tune Whisper
+
+With this architecture:
+
+Current:
+
+```text id="4jw4xk"
+AIService
+
+↓
+
+SarvamProvider
+```
+
+Later:
+
+```text id="yb9lgs"
+AIService
+
+↓
+
+WhisperProvider
+```
+
+Nothing else changes.
+
+No frontend changes.
+
+No controller changes.
+
+No database changes.
+
+---
+
+# AI Folder Structure
+
+I would probably organize it like this:
+
+```text id="1f7b7y"
+services/
+
+    ai/
+
+        ai.service.js
+
+        providers/
+
+            sarvam.provider.js
+
+            gemini.provider.js
+
+            mock.provider.js
+
+        prompts/
+
+            consultation.prompt.js
+
+            prescription.prompt.js
+
+            receptionist.prompt.js
+
+        parsers/
+
+            medicine.parser.js
+
+            treatment.parser.js
+```
+
+---
+
+# Receptionist Flow
+
+```text id="5j79f2"
+Voice Complaint
+
+      │
+
+      ▼
+
+Sarvam
+
+      │
+
+      ▼
+
+Gemini
+
+      │
+
+      ▼
+
+{
+ chiefComplaint,
+ symptoms,
+ priority
+}
+
+      │
+
+      ▼
+
+Queue Entry
+```
+
+---
+
+# Doctor Flow
+
+```text id="o4eqeo"
+Voice Recording
+
+      │
+
+      ▼
+
+Sarvam
+
+      │
+
+      ▼
+
+Gemini
+
+      │
+
+      ▼
+
+{
+ diagnosis,
+ treatmentPlan,
+ medicines,
+ sittings,
+ estimatedCost
+}
+
+      │
+
+      ▼
+
+Complete Consultation
+```
+
+---
+
+# Future AI Stack
+
+```text id="t7fekd"
+                     AI Service
+                          │
+
+        ┌─────────────────┼─────────────────┐
+
+        ▼                 ▼                 ▼
+
+ SarvamProvider    GeminiProvider    WhisperProvider
+
+     STT            Structuring       Local STT
+
+                          │
+
+                    Unified Output
+```
+
+---
+
+## My recommendation
+
+**Do not merge Sarvam and Gemini into one giant AI function.**
+
+Keep the pipeline explicit:
+
+```text id="m7vsxy"
+Audio
+
+   ↓
+
+Sarvam
+
+   ↓
+
+Transcript
+
+   ↓
+
+Gemini
+
+   ↓
+
+Structured JSON
+
+   ↓
+
+Transaction Service
+
+   ↓
+
+Database
+```
+
+This is cleaner, easier to debug, and later lets you swap:
+
+**Sarvam → Whisper**
+
+without touching the rest of the system. This is exactly how I would architect DentAI based on your long-term plan of collecting labeled dental audio.
+
+
+You've reached the point where you should stop giving Claude multiple partial prompts and instead give it **one authoritative architecture specification**.
+
+Below is the kind of header I would put at the top of that document:
+
+> **This document supersedes all previous architecture discussions.**
+>
+> Read the existing codebase completely before making changes.
+>
+> The objective is to evolve the existing DentAI backend into the architecture described here while preserving existing working functionality wherever practical.
+>
+> This is a Modular Monolith. Do NOT introduce microservices, event buses, CQRS, Kafka, RabbitMQ, Redis workers, or distributed services.
+>
+> Optimize for:
+>
+> * Simplicity
+> * Maintainability
+> * Security
+> * Clinic-level isolation
+> * Production reliability
+>
+> Target scale:
+>
+> * 100+ clinics
+> * 1000+ staff
+> * 100,000+ patients
+
+---
+
+Then I would structure the document roughly like this:
+
+# 1. Product Context
+
+* Voice-first dental clinic operating system.
+* Reception → Doctor → Reception workflow.
+* AI structures information; it does not make clinical decisions.
+* Treatment Plans are the primary business entity.
+* Appointments are children of Treatment Plans.
+* Authorization is clinic-scoped.
+
+---
+
+# 2. High-Level Architecture
+
+```text
+Frontend
+
+↓
+
+Middleware
+
+↓
+
+Validation
+
+↓
+
+Controllers
+
+↓
+
+Transaction Services
+
+↓
+
+AI Service
+
+↓
+
+Repositories
+
+↓
+
+Supabase
+```
+
+Controllers never access Supabase directly.
+
+---
+
+# 3. Folder Structure
+
+```text
+src/
+
+config/
+
+middleware/
+
+controllers/
+
+routes/
+
+validators/
+
+services/
+
+    ai/
+
+        providers/
+
+            sarvam.provider.js
+
+            gemini.provider.js
+
+            mock.provider.js
+
+        prompts/
+
+            consultation.prompt.js
+
+            prescription.prompt.js
+
+            receptionist.prompt.js
+
+        parsers/
+
+            medicine.parser.js
+
+        schemas/
+
+            consultation.schema.js
+
+            prescription.schema.js
+
+            receptionist.schema.js
+
+        ai.service.js
+
+    transaction.service.js
+
+repositories/
+
+    base-clinic.repository.js
+
+    patient.repository.js
+
+    visit.repository.js
+
+    appointment.repository.js
+
+    queue.repository.js
+
+    treatment.repository.js
+
+    prescription.repository.js
+
+    payment.repository.js
+
+    clinic.repository.js
+
+    staff.repository.js
+
+    xray.repository.js
+
+    audit.repository.js
+
+jobs/
+
+utils/
+
+tests/
+```
+
+---
+
+# 4. Database Ownership Model
+
+```text
+Clinic
+
+├── Staff
+
+│     ├── Doctor
+
+│     └── Receptionist
+
+├── Patients
+
+├── Queue Entries
+
+├── Visits
+
+├── Treatment Plans
+
+├── Appointments
+
+├── Prescriptions
+
+├── Payments
+
+├── XRays
+
+└── Audit Logs
+```
+
+Everything belongs to a clinic.
+
+---
+
+# 5. Authorization Rules
+
+Never authorize using:
+
+```text
+dentist_id
+```
+
+Use:
+
+```text
+clinic_id
++
+role
+```
+
+Repository methods automatically scope by clinic.
+
+---
+
+# 6. AI Pipeline
+
+Doctor Flow:
+
+```text
+Audio
+
+↓
+
+SarvamProvider
+
+↓
+
+Transcript
+
+↓
+
+GeminiProvider
+
+↓
+
+consultation.schema
+
+↓
+
+medicine.parser
+
+↓
+
+TransactionService.completeConsultation()
+
+↓
+
+Database
+```
+
+Reception Flow:
+
+```text
+Audio
+
+↓
+
+SarvamProvider
+
+↓
+
+Transcript
+
+↓
+
+Queue Entry
+```
+
+No AI diagnosis.
+
+---
+
+# 7. Transaction Service
+
+Create orchestration methods:
+
+* createClinic()
+* joinClinic()
+* completeConsultation()
+* completeCheckout()
+* recordPayment()
+* createTreatmentPlan()
+
+Multi-table operations must happen here.
+
+---
+
+# 8. Repository Pattern
+
+Controllers:
+
+* validate
+* call service
+* return response
+
+Repositories:
+
+* own all Supabase access
+
+Example:
+
+```text
+findById(id, clinicId)
+
+findAll(clinicId)
+
+create(data)
+
+update(id, clinicId)
+
+softDelete(id, clinicId)
+```
+
+---
+
+# 9. Validation
+
+Use Zod.
+
+No:
+
+```javascript
+...req.body
+```
+
+Explicit field whitelisting only.
+
+---
+
+# 10. API Response Standard
+
+Success:
+
+```json
+{
+  "success": true,
+  "data": {}
+}
+```
+
+Failure:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "",
+    "message": "",
+    "details": {}
+  }
+}
+```
+
+No silent mock responses.
+
+---
+
+# 11. AI Provider Rules
+
+Providers:
+
+* Sarvam
+* Gemini
+* Mock
+
+Mock provider:
+
+Development only.
+
+Production startup should fail if API keys are missing.
+
+Validate:
+
+* GEMINI_API_KEY
+* SARVAM_API_KEY
+* SUPABASE_URL
+* SUPABASE_SERVICE_ROLE_KEY
+* JWT_SECRET
+
+---
+
+# 12. Medicine Schema
+
+Canonical schema:
+
+```json
+{
+  "name": "",
+  "strength": "",
+  "frequency": "",
+  "duration": "",
+  "mealTiming": "",
+  "instructions": ""
+}
+```
+
+All AI outputs pass through:
+
+```text
+medicine.parser.js
+```
+
+---
+
+# 13. Queue Flow
+
+```text
+Waiting
+
+↓
+
+Checked In
+
+↓
+
+In Consultation
+
+↓
+
+Ready For Checkout
+
+↓
+
+Completed
+```
+
+Reception owns queue state.
+
+Doctor never manually changes queue state.
+
+---
+
+# 14. Consultation Flow
+
+```text
+Doctor Save
+
+↓
+
+TransactionService.completeConsultation()
+
+├── Create Visit
+
+├── Create Treatment Plan
+
+├── Create Prescription
+
+├── Create Suggested Appointments
+
+├── Update Queue
+
+└── Audit Log
+```
+
+Appointments are created with:
+
+```text
+status = suggested
+```
+
+Reception confirms them later.
+
+---
+
+# 15. Payment Flow
+
+```text
+Reception
+
+↓
+
+recordPayment()
+
+↓
+
+Payment Transaction
+
+↓
+
+Update Treatment Plan Totals
+
+↓
+
+Audit Log
+```
+
+Use transactions.
+
+---
+
+# 16. Soft Delete
+
+Use:
+
+```text
+deleted_at
+
+deleted_by
+```
+
+Repositories automatically exclude deleted records.
+
+---
+
+# 17. Audit Logs
+
+Track:
+
+* CREATE
+* UPDATE
+* DELETE
+* PAYMENT
+* PRESCRIPTION
+* ROLE CHANGE
+* QUEUE REORDER
+
+Audit failure must never fail the business operation.
+
+---
+
+# 18. Logging
+
+Use:
+
+```text
+requestId
+
+clinicId
+
+staffId
+
+route
+
+duration
+```
+
+No scattered console.log.
+
+---
+
+# 19. Performance
+
+* Pagination everywhere
+* Batch queries
+* No N+1
+* Stream file uploads
+* Add indexes
+* Queue tokens via DB sequence
+
+---
+
+# 20. Testing
+
+Integration tests for:
+
+* Create Clinic
+* Join Clinic
+* Add Patient
+* Queue Patient
+* Complete Consultation
+* Generate Prescription
+* Record Payment
+* Schedule Follow-Up
+
+---
+
+# 21. Immediate Fixes
+
+Before architectural refactor:
+
+* Fix IDOR vulnerabilities
+* Add clinic ownership checks
+* Add missing env variables
+* Fix Gemini API key header
+* Save clinical_flags
+* Save follow_up
+* Replace readFileSync()
+* Add production startup validation
+
+---
+
+# 22. Final Constraint
+
+> Do not rewrite working systems.
+>
+> Do not introduce microservices.
+>
+> Do not over-abstract.
+>
+> Refactor incrementally.
+>
+> Preserve existing frontend compatibility wherever practical.
+>
+> The final result should be a clean, repository-driven, clinic-scoped modular monolith optimized for a real-world dental clinic workflow.
+
+I would actually stop here. I would **not** add more architectural ideas. This is already a strong production blueprint, and the next step should simply be implementation and clinic testing.

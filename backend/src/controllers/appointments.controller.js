@@ -1,5 +1,14 @@
 const supabase = require('../config/supabase');
 
+// Scope appointments to the caller: clinic-wide when clinic context exists,
+// else fall back to owning dentist. OR covers legacy null-clinic rows.
+function scopeQuery(query, req) {
+  if (req.clinicId) {
+    return query.or(`clinic_id.eq.${req.clinicId},dentist_id.eq.${req.dentistId}`);
+  }
+  return query.eq('dentist_id', req.dentistId);
+}
+
 exports.list = async (req, res, next) => {
   try {
     const { date } = req.query;
@@ -55,6 +64,7 @@ exports.create = async (req, res, next) => {
     const { data: appointment, error } = await supabase.from('appointments').insert({
       patient_id: patientId,
       dentist_id: req.dentistId,
+      clinic_id: req.clinicId || null,
       appointment_date: appointmentDate,
       appointment_time: appointmentTime,
       purpose,
@@ -67,10 +77,29 @@ exports.create = async (req, res, next) => {
 
 exports.update = async (req, res, next) => {
   try {
-    const { data: appointment, error } = await supabase.from('appointments')
-      .update({ ...req.body, updated_at: new Date().toISOString() })
-      .eq('id', req.params.id).select().single();
-    if (error) throw error;
+    // Whitelist updatable fields — never spread req.body (prevents overwriting
+    // dentist_id/clinic_id/patient_id and other ownership columns).
+    const fieldMap = {
+      appointmentDate: 'appointment_date',
+      appointmentTime: 'appointment_time',
+      toothNumber: 'tooth_number',
+      sittingNumber: 'sitting_number',
+    };
+    const allowed = new Set([
+      'appointment_date', 'appointment_time', 'purpose', 'tooth_number',
+      'sitting_number', 'status', 'notes',
+    ]);
+    const updates = {};
+    for (const [k, v] of Object.entries(req.body)) {
+      const col = fieldMap[k] || k;
+      if (allowed.has(col)) updates[col] = v;
+    }
+    updates.updated_at = new Date().toISOString();
+
+    let uq = supabase.from('appointments').update(updates).eq('id', req.params.id);
+    uq = scopeQuery(uq, req);
+    const { data: appointment, error } = await uq.select().single();
+    if (error || !appointment) return res.status(404).json({ error: 'Appointment not found' });
     res.json({ appointment });
   } catch (e) { next(e); }
 };

@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const auth = require('../middleware/auth');
+const validate = require('../middleware/validate');
+const v = require('../validators');
 const { extractPrescription } = require('../services/ai.service');
 
 // GET /api/queue — today's queue for the clinic
@@ -84,7 +86,7 @@ router.get('/action-queue', auth, async (req, res, next) => {
 });
 
 // POST /api/queue — add patient to queue
-router.post('/', auth, async (req, res, next) => {
+router.post('/', auth, validate(v.addToQueue), async (req, res, next) => {
   try {
     if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
     const { patientId, chiefComplaint, visitReason, priority, assignedDoctor, treatmentPlanId } = req.body;
@@ -125,7 +127,7 @@ router.post('/', auth, async (req, res, next) => {
 });
 
 // PATCH /api/queue/:id — update status, outcome, assigned doctor, sort_order
-router.patch('/:id', auth, async (req, res, next) => {
+router.patch('/:id', auth, validate(v.patchQueue), async (req, res, next) => {
   try {
     const updates = {};
     if (req.body.status !== undefined)             updates.status = req.body.status;
@@ -194,8 +196,8 @@ router.patch('/:id/reorder', auth, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// POST /api/queue/:id/complete-consult — atomic: treatment plan + appointments + prescription
-router.post('/:id/complete-consult', auth, async (req, res, next) => {
+// POST /api/queue/:id/complete-consult — treatment plan + visit + appointments + prescription
+router.post('/:id/complete-consult', auth, validate(v.completeConsult), async (req, res, next) => {
   try {
     const {
       patientId,
@@ -215,10 +217,15 @@ router.post('/:id/complete-consult', auth, async (req, res, next) => {
     const today = new Date().toISOString().split('T')[0];
     const sittings = Math.max(1, parseInt(totalSittings) || 1);
 
+    // NOTE: This endpoint orchestrates 4 writes and is NOT yet transactional.
+    // TODO(Phase 5): move into TransactionService.completeConsultation() so plan +
+    // visit + appointments + prescription + queue update commit atomically.
+
     // 1. Create treatment plan
     const { data: plan, error: planErr } = await supabase.from('treatment_plans').insert({
       patient_id:         patientId,
       dentist_id:         req.dentistId,
+      clinic_id:          req.clinicId || null,
       diagnosis:          diagnosis || null,
       procedure_name:     procedure,
       total_sittings:     sittings,
@@ -231,7 +238,30 @@ router.post('/:id/complete-consult', auth, async (req, res, next) => {
 
     if (planErr) throw planErr;
 
-    // 2. Auto-generate future appointment stubs (sessions 2..N, 7 days apart)
+    // 2. Record this consultation session as a visit (was previously missing —
+    //    today's session was never recorded in `visits`). Non-fatal.
+    let visit = null;
+    try {
+      const { data: v } = await supabase.from('visits').insert({
+        patient_id:     patientId,
+        dentist_id:     req.dentistId,
+        clinic_id:      req.clinicId || null,
+        visit_date:     today,
+        procedure_name: procedure,
+        tooth_number:   toothNumber || null,
+        status:         'completed',
+        raw_transcript: transcript || null,
+        notes:          notes || null,
+        sitting_number: 1,
+        cost:           estimatedCost ? parseFloat(estimatedCost) : null,
+      }).select().single();
+      visit = v;
+    } catch (visitErr) {
+      console.error('Visit record (non-fatal):', visitErr.message);
+    }
+
+    // 3. Auto-generate SUGGESTED appointment stubs (sessions 2..N). No time is set
+    //    and status is 'suggested' — the receptionist confirms date/time at checkout.
     const appointments = [];
     if (sittings > 1) {
       const inserts = [];
@@ -241,10 +271,12 @@ router.post('/:id/complete-consult', auth, async (req, res, next) => {
         inserts.push({
           patient_id:       patientId,
           dentist_id:       req.dentistId,
+          clinic_id:        req.clinicId || null,
           appointment_date: d.toISOString().split('T')[0],
-          appointment_time: '10:00',
+          appointment_time: null,
+          sitting_number:   i,
           purpose:          `${procedure} — Session ${i}`,
-          status:           'scheduled',
+          status:           'suggested',
         });
       }
       const { data: apptData, error: apptErr } = await supabase
@@ -253,7 +285,7 @@ router.post('/:id/complete-consult', auth, async (req, res, next) => {
       if (apptData) appointments.push(...apptData);
     }
 
-    // 3. Create prescription from transcript (non-fatal if it fails)
+    // 4. Create prescription from transcript (non-fatal if it fails)
     let prescription = null;
     if (transcript) {
       try {
@@ -261,10 +293,13 @@ router.post('/:id/complete-consult', auth, async (req, res, next) => {
         const { data: rx } = await supabase.from('prescriptions').insert({
           patient_id:    patientId,
           dentist_id:    req.dentistId,
+          clinic_id:     req.clinicId || null,
+          visit_id:      visit?.id || null,
           queue_entry_id: req.params.id,
           raw_voice:     transcript,
           medicines:     extracted.medicines || [],
           instructions:  extracted.instructions || null,
+          follow_up:     extracted.followUp || null,
         }).select('*, patients(name, age, gender, phone)').single();
         prescription = rx;
       } catch (rxErr) {
@@ -272,7 +307,7 @@ router.post('/:id/complete-consult', auth, async (req, res, next) => {
       }
     }
 
-    // 4. Link treatment plan + save notes on queue entry
+    // 5. Link treatment plan + save notes on queue entry
     const queueUpdates = { treatment_plan_id: plan.id, updated_at: new Date().toISOString() };
     if (notes) queueUpdates.notes = notes;
 
@@ -281,7 +316,7 @@ router.post('/:id/complete-consult', auth, async (req, res, next) => {
       .eq('id', req.params.id)
       .eq('clinic_id', req.clinicId);
 
-    res.status(201).json({ plan, appointments, prescription });
+    res.status(201).json({ plan, visit, appointments, prescription });
   } catch (e) { next(e); }
 });
 

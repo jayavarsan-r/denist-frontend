@@ -2,9 +2,11 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const auth = require('../middleware/auth');
+const validate = require('../middleware/validate');
+const v = require('../validators');
 
 // POST /api/payments — record a payment
-router.post('/', auth, async (req, res, next) => {
+router.post('/', auth, validate(v.recordPayment), async (req, res, next) => {
   try {
     const { patientId, treatmentPlanId, queueEntryId, amount, paymentMethod, notes, paymentDate } = req.body;
     if (!patientId || !amount) return res.status(400).json({ error: 'patientId and amount required' });

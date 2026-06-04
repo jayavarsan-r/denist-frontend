@@ -2,6 +2,9 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const auth = require('../middleware/auth');
+const requireRole = require('../middleware/requireRole');
+const validate = require('../middleware/validate');
+const v = require('../validators');
 
 // GET /api/clinic
 router.get('/', auth, async (req, res, next) => {
@@ -13,8 +16,8 @@ router.get('/', auth, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// PATCH /api/clinic
-router.patch('/', auth, async (req, res, next) => {
+// PATCH /api/clinic — clinic settings are doctor/owner managed (not reception)
+router.patch('/', auth, requireRole('doctor'), validate(v.updateClinic), async (req, res, next) => {
   try {
     if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
     const { name, city, address, phone, openTime, closeTime, workingDays } = req.body;

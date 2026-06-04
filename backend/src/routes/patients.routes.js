@@ -2,10 +2,12 @@ const router = require('express').Router();
 const ctrl = require('../controllers/patients.controller');
 const auth = require('../middleware/auth');
 const supabase = require('../config/supabase');
+const validate = require('../middleware/validate');
+const v = require('../validators');
 
 router.use(auth);
 router.get('/', ctrl.list);
-router.post('/', ctrl.create);
+router.post('/', validate(v.createPatient), ctrl.create);
 
 // Tooth history — must come before /:id to avoid conflict
 router.get('/:id/tooth-history', async (req, res, next) => {
@@ -100,7 +102,7 @@ router.get('/:id/tooth-history', async (req, res, next) => {
 });
 
 router.get('/:id', ctrl.getById);
-router.put('/:id', ctrl.update);
+router.put('/:id', validate(v.updatePatient), ctrl.update);
 router.delete('/:id', ctrl.remove);
 
 // ─── NEW V4 SUB-ROUTES ───

@@ -1,0 +1,25 @@
+-- ════════════════════════════════════════════════════════════════════════════
+-- 006 — pending_amount MODEL  (DO NOT RUN BLINDLY — read 000 result first)
+-- ════════════════════════════════════════════════════════════════════════════
+-- treatment_plans.pending_amount is defined GENERATED in supabase_schema.sql, but
+-- payments.routes.js currently WRITES to it. These two cannot both be true on the
+-- live DB. Run query #2 in 000_verify_live_schema.sql, then pick ONE path.
+--
+-- ── PATH A — live column is GENERATED (is_generated = 'ALWAYS') ────────────────
+--    Nothing to run here. Instead, the application code must STOP writing
+--    pending_amount (payments + transaction service write only collected_amount;
+--    the DB computes pending_amount). This is the preferred long-term model.
+--
+-- ── PATH B — live column is PLAIN (is_generated = 'NEVER') ─────────────────────
+--    Keep code recalculating pending_amount on every collected_amount/estimated_cost
+--    change (payments.routes already does; treatment-plans PATCH must too — see
+--    audit recommendation #4). Optionally convert to GENERATED for guaranteed
+--    consistency (requires dropping + recreating the column AND removing all code
+--    writes in the same deploy):
+--
+--    -- alter table public.treatment_plans drop column pending_amount;
+--    -- alter table public.treatment_plans add column pending_amount numeric(10,2)
+--    --   generated always as (greatest(0, estimated_cost - collected_amount)) stored;
+--
+-- Until verified, the Security Pass leaves the existing recalculation code in place
+-- (assumes PATH B, which matches today's working behavior).
