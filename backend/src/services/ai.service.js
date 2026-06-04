@@ -53,14 +53,14 @@ Rules:
 
 Dentist's voice note: ${voiceText}`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${geminiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent`;
 
   try {
     const response = await axios.post(url, {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { temperature: 0.15, maxOutputTokens: 1500 },
     }, {
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiKey },
       timeout: 30000,
     });
 

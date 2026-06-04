@@ -31,11 +31,23 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
-// Response interceptor: handle 401
+// Response interceptor: unwrap new { success, data } envelope + handle errors
 apiClient.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // Unwrap { success: true, data: X } so all services keep reading response.data.X unchanged
+    if (response.data && response.data.success === true && response.data.data !== undefined) {
+      response.data = response.data.data;
+    }
+    return response;
+  },
   (error) => {
-    if (error.response && error.response.status === 401) {
+    const res = error.response;
+    // Standardize error message from new { success: false, error: { code, message } } shape
+    if (res?.data?.error?.message) {
+      error.message = res.data.error.message;
+      error.code = res.data.error.code;
+    }
+    if (res?.status === 401) {
       clearToken();
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('dentai:auth-expired'));
