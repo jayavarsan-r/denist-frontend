@@ -80,6 +80,12 @@ function ConsultModeScreen() {
             </button>
           ) : <div style={{ textAlign: 'center', fontSize: 15, color: 'var(--text-tertiary)' }}>No one is waiting.</div>}
         </div>
+      ) : !p ? (
+        <div className="scroll" style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: '0 24px 60px' }}>
+          <div style={{ textAlign: 'center', color: 'var(--text-tertiary)' }}>
+            <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--text-secondary)', marginTop: 12 }}>Loading patient…</div>
+          </div>
+        </div>
       ) : (
         <div className="scroll" style={{ flex: 1 }}>
           {!p ? (

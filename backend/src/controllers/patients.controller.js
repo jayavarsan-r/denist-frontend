@@ -13,13 +13,19 @@ function scopeQuery(query, req) {
 exports.list = async (req, res, next) => {
   try {
     const { q } = req.query;
-    let query = scopeQuery(
-      supabase.from('patients')
-        .select('*, visits(id, visit_date, procedure_name, status, follow_up_date), appointments(id, appointment_date, appointment_time, status)')
-        .eq('is_deleted', false)
-        .order('name'),
-      req
-    );
+    // Backfill clinic_id for any patients created before multi-staff support
+    if (req.clinicId && req.dentistId) {
+      await supabase.from('patients')
+        .update({ clinic_id: req.clinicId })
+        .eq('dentist_id', req.dentistId)
+        .is('clinic_id', null);
+    }
+    let query = supabase.from('patients')
+      .select('*, visits(id, visit_date, procedure_name, status, follow_up_date), appointments(id, appointment_date, appointment_time, status)')
+      .eq('is_deleted', false).order('name');
+    // Scope to clinic when available (all staff see the same patients), else fall back to dentist
+    if (req.clinicId) query = query.eq('clinic_id', req.clinicId);
+    else query = query.eq('dentist_id', req.dentistId);
     if (q) query = query.or(`name.ilike.%${q}%,phone.ilike.%${q}%`);
     const { data, error } = await query;
     if (error) throw error;
@@ -32,11 +38,7 @@ exports.create = async (req, res, next) => {
     const { name, phone, age, gender, medical_conditions, allergies, clinical_flags } = req.body;
     if (!name || !phone) return res.status(400).json({ error: 'Name and phone required' });
     const { data: patient, error } = await supabase.from('patients')
-      .insert({
-        dentist_id: req.dentistId,
-        clinic_id: req.clinicId || null,
-        name, phone, age, gender, medical_conditions, allergies, clinical_flags,
-      })
+      .insert({ dentist_id: req.dentistId, clinic_id: req.clinicId || null, name, phone, age, gender, medical_conditions, allergies })
       .select().single();
     if (error) throw error;
     res.status(201).json({ patient });
@@ -45,10 +47,10 @@ exports.create = async (req, res, next) => {
 
 exports.getById = async (req, res, next) => {
   try {
-    const { data: patient, error } = await scopeQuery(
-      supabase.from('patients').select('*, visits(*), appointments(*)').eq('id', req.params.id),
-      req
-    ).single();
+    let q = supabase.from('patients').select('*, visits(*), appointments(*)').eq('id', req.params.id);
+    if (req.clinicId) q = q.eq('clinic_id', req.clinicId);
+    else q = q.eq('dentist_id', req.dentistId);
+    const { data: patient, error } = await q.single();
     if (error || !patient) return res.status(404).json({ error: 'Patient not found' });
     res.json({ patient });
   } catch (e) { next(e); }
@@ -56,10 +58,10 @@ exports.getById = async (req, res, next) => {
 
 exports.update = async (req, res, next) => {
   try {
-    const { data: patient, error } = await scopeQuery(
-      supabase.from('patients').update({ ...req.body, updated_at: new Date().toISOString() }).eq('id', req.params.id),
-      req
-    ).select().single();
+    let uq = supabase.from('patients').update({ ...req.body, updated_at: new Date().toISOString() }).eq('id', req.params.id);
+    if (req.clinicId) uq = uq.eq('clinic_id', req.clinicId);
+    else uq = uq.eq('dentist_id', req.dentistId);
+    const { data: patient, error } = await uq.select().single();
     if (error) throw error;
     res.json({ patient });
   } catch (e) { next(e); }
@@ -67,10 +69,10 @@ exports.update = async (req, res, next) => {
 
 exports.remove = async (req, res, next) => {
   try {
-    const { error } = await scopeQuery(
-      supabase.from('patients').update({ is_deleted: true }).eq('id', req.params.id),
-      req
-    );
+    let dq = supabase.from('patients').update({ is_deleted: true }).eq('id', req.params.id);
+    if (req.clinicId) dq = dq.eq('clinic_id', req.clinicId);
+    else dq = dq.eq('dentist_id', req.dentistId);
+    const { error } = await dq;
     if (error) throw error;
     res.json({ success: true });
   } catch (e) { next(e); }

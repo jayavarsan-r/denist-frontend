@@ -58,6 +58,7 @@ export function parseDate(s) { const [y,m,d] = s.split('-').map(Number); return 
 export function formatDate(s) { const d = parseDate(s); return `${d.getDate()} ${MONTHS[d.getMonth()]}`; }
 export function formatDateLong(s) { const d = parseDate(s); return `${DAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]}`; }
 export function formatTime(t) {
+  if (!t) return { h12: 12, m: 0, ampm: 'AM', label: '--:--' };
   let [h, m] = t.split(':').map(Number);
   const ampm = h >= 12 ? 'PM' : 'AM';
   const h12 = h % 12 === 0 ? 12 : h % 12;
