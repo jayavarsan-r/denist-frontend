@@ -18,17 +18,21 @@ export function useQueueRealtime() {
     loadQueue();
     if (!clinicId) return;
 
+    // Poll every 5s as fallback when realtime is unavailable
+    const poll = setInterval(() => loadQueue(), 5000);
+
     let cancelled = false;
     subscribeToQueue(clinicId, (entry, eventType) => {
       if (eventType === 'DELETE') loadQueue();
       else mergeEntry(entry);
     }).then((unsub) => {
-      if (cancelled) { unsub(); return; } // React Strict Mode double-invoke guard
+      if (cancelled) { unsub(); return; }
       unsubRef.current = unsub;
     });
 
     return () => {
       cancelled = true;
+      clearInterval(poll);
       if (unsubRef.current) { unsubRef.current(); unsubRef.current = null; }
     };
   }, [clinicId]);

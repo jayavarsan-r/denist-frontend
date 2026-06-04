@@ -123,6 +123,44 @@ function WorkingHoursPanel({ showToast }) {
   );
 }
 
+function MyProfilePanel({ showToast }) {
+  const name = useAppStore(s => s.name);
+  const updateClinicLocal = useAppStore(s => s.updateClinicLocal);
+  const [displayName, setDisplayName] = useState(name || '');
+  const [phone, setPhone] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    apiClient.get('/api/auth/me').then(r => {
+      const s = r.data?.staff || r.data?.dentist;
+      if (s?.phone) setPhone(s.phone);
+      if (s?.name) setDisplayName(s.name);
+    }).catch(() => {});
+  }, []);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await apiClient.put('/api/auth/profile', { name: displayName, phone });
+      updateClinicLocal({ doctorName: displayName });
+      showToast('Profile saved');
+    } catch {
+      showToast('Failed to save');
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div>
+      <Field label="Full name" value={displayName} onChange={setDisplayName} placeholder="Dr. Your Name" />
+      <Field label="Mobile number" value={phone} onChange={setPhone} placeholder="10-digit number" type="tel" />
+      <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 8, lineHeight: 1.4 }}>
+        Changing your number will apply on your next sign-in.
+      </div>
+      <SaveBtn onClick={save} saving={saving} />
+    </div>
+  );
+}
+
 function StaffPanel() {
   const [staff, setStaff] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -167,19 +205,32 @@ export default function AccountSettingsSheet({ onClose }) {
   const name = useAppStore(s => s.name);
   const role = useAppStore(s => s.role);
   const clinic = useAppStore(s => s.clinic);
+  const updateClinicLocal = useAppStore(s => s.updateClinicLocal);
   const switchRole = useAppStore(s => s.switchRole);
   const signOut = useAppStore(s => s.signOut);
   const openSheet = useAppStore(s => s.openSheet);
   const showToast = useAppStore(s => s.showToast);
 
   const [openSection, setOpenSection] = useState(null);
+  const [joinCode, setJoinCode] = useState(clinic?.joinCode || '');
   const toggle = s => setOpenSection(prev => prev === s ? null : s);
 
-  const joinCode = clinic?.joinCode || '';
   const clinicName = clinic?.clinicName || '';
   const city = clinic?.city || '';
 
+  // Always fetch fresh clinic data on mount to ensure join code is available
+  useEffect(() => {
+    apiClient.get('/api/clinic').then(r => {
+      const c = r.data?.clinic;
+      if (c?.join_code) {
+        setJoinCode(c.join_code);
+        updateClinicLocal({ joinCode: c.join_code, clinicName: c.name || clinicName, city: c.city || city });
+      }
+    }).catch(() => {});
+  }, []);
+
   const handleShare = async () => {
+    if (!joinCode) return;
     const text = `Join ${clinicName || 'our clinic'} on DentWay!\n\nJoin code: ${joinCode}\n\nDownload DentWay and enter this code to connect.`;
     if (typeof navigator !== 'undefined' && navigator.share) {
       try { await navigator.share({ title: `${clinicName || 'DentWay'} — Join Code`, text }); } catch {}
@@ -196,19 +247,26 @@ export default function AccountSettingsSheet({ onClose }) {
         {clinicName && <span className="t-meta">{clinicName}{city ? ' · ' + city : ''}</span>}
       </div>
 
-      {joinCode ? (
-        <button onClick={handleShare} className="card" style={{ width: '100%', display: 'flex', alignItems: 'center', padding: '14px 16px', marginBottom: 16, gap: 12, textAlign: 'left', border: '2px solid var(--accent)', borderRadius: 16 }}>
-          <Icon name="share" size={20} color="var(--blue)" />
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 13, color: 'var(--text-secondary)', fontWeight: 500, marginBottom: 2 }}>Clinic join code</div>
-            <div className="tnum" style={{ fontSize: 20, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--accent)' }}>{joinCode}</div>
-            <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 2 }}>Tap to share with staff</div>
+      <button
+        onClick={handleShare}
+        className="card"
+        style={{ width: '100%', display: 'flex', alignItems: 'center', padding: '14px 16px', marginBottom: 16, gap: 12, textAlign: 'left', border: '2px solid var(--accent)', borderRadius: 16 }}
+      >
+        <Icon name="share" size={20} color="var(--blue)" />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)', fontWeight: 500, marginBottom: 2 }}>Clinic join code</div>
+          <div className="tnum" style={{ fontSize: 20, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--accent)' }}>
+            {joinCode || <span style={{ color: 'var(--text-tertiary)', fontSize: 14, fontWeight: 500 }}>Loading…</span>}
           </div>
-          <Icon name="chevRight" size={16} color="var(--text-tertiary)" />
-        </button>
-      ) : null}
+          <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 2 }}>Tap to share with staff</div>
+        </div>
+        <Icon name="chevRight" size={16} color="var(--text-tertiary)" />
+      </button>
 
       <div className="card" style={{ overflow: 'hidden', marginBottom: 16, padding: 0 }}>
+        <Section icon="person" label="My profile" open={openSection === 'profile'} onToggle={() => toggle('profile')}>
+          <MyProfilePanel showToast={showToast} />
+        </Section>
         <Section icon="pencil" label="Clinic name & address" open={openSection === 'clinic'} onToggle={() => toggle('clinic')}>
           <ClinicInfoPanel showToast={showToast} />
         </Section>

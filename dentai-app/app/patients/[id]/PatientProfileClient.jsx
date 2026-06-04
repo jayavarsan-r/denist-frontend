@@ -12,7 +12,8 @@ import { treatmentPlans } from '@/lib/data/procedures';
 import { TODAY } from '@/lib/data/patients';
 import { formatCurrency, formatDate, formatTime, clinicianFlags, hasComplications, parseDate, MONTHS, formatCurrencyK } from '@/lib/data/utils';
 import { getProcedureColor, TOOTH_STATE_STYLE } from '@/lib/data/procedures';
-import { getToothHistory } from '@/lib/services/patient.service';
+import { getToothHistory, getPatientCaseSheet } from '@/lib/services/patient.service';
+import { getPatientXrays, uploadXray, uploadPatientPhoto } from '@/lib/services/xray.service';
 
 function VoiceToolbar({ onClick, label = 'Add voice entry' }) {
   return (
@@ -125,27 +126,128 @@ function OverviewTab({ p, procedures, visits, labOrders, openSheet, router }) {
 }
 
 function CasesTab({ p, procedures, labOrders, openSheet, patientTreatmentPlans }) {
-  const plans = patientTreatmentPlans.filter(t => t.patientId === p.id);
-  if (plans.length === 0) return <EmptyState icon="stethoscope" title="No treatment plans" hint="Create a plan to map this patient's journey" />;
+  const [apiPlans, setApiPlans] = React.useState(null);
+  const [loadingPlans, setLoadingPlans] = React.useState(true);
+
+  React.useEffect(() => {
+    if (!p?.id) return;
+    setLoadingPlans(true);
+    import('@/lib/services/patient.service').then(({ getPatientTreatmentPlans }) =>
+      getPatientTreatmentPlans(p.id)
+        .then(data => setApiPlans(data?.treatment_plans || data?.treatmentPlans || data || []))
+        .catch(() => setApiPlans([]))
+        .finally(() => setLoadingPlans(false))
+    );
+  }, [p?.id]);
+
+  const localPlans = patientTreatmentPlans.filter(t => t.patientId === p.id);
+  const plans = apiPlans !== null ? apiPlans : localPlans;
+
+  if (loadingPlans) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', padding: '40px 0' }}>
+        <div style={{ width: 22, height: 22, borderRadius: '50%', border: '3px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin .7s linear infinite' }} />
+      </div>
+    );
+  }
+
+  const normalisePlan = (plan) => ({
+    id: plan.id,
+    title: plan.title || plan.procedure || plan.name || 'Treatment Plan',
+    diagnosis: plan.diagnosis,
+    status: plan.status || 'planned',
+    tooth: plan.tooth || plan.tooth_number,
+    totalSittings: plan.totalSittings || plan.total_sittings || plan.sessions,
+    completedSittings: plan.completedSittings || plan.completed_sittings || 0,
+    totalCost: plan.totalCost || plan.total_cost || plan.estimatedCost || plan.estimated_cost || 0,
+    procedures: plan.procedures?.map?.(pid =>
+      typeof pid === 'string' ? (procedures.find(x => x.id === pid) || null) : pid
+    ).filter(Boolean) || [],
+    instructions: plan.instructions || plan.notes,
+    createdAt: plan.createdAt || plan.created_at,
+  });
+
+  if (plans.length === 0) {
+    return (
+      <div>
+        <EmptyState icon="stethoscope" title="No treatment plans" hint="Record a diagnosis to auto-create a plan" />
+        <button
+          onClick={() => {}}
+          className="card tap"
+          style={{ width: '100%', height: 50, color: 'var(--blue)', fontSize: 15, fontWeight: 600, marginTop: 12 }}
+        >
+          + New treatment plan
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div>
-      {plans.map(plan => (
-        <div key={plan.id} style={{ marginBottom: 24 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 4px 10px' }}>
-            <span style={{ fontSize: 17, fontWeight: 600 }}>{plan.title}</span>
-            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
-              <StatusChip status={plan.status} />
-              <button style={{ color: 'var(--blue)', fontSize: 14, fontWeight: 500 }}>Edit</button>
+      {plans.map((raw, idx) => {
+        const plan = normalisePlan(raw);
+        const procItems = plan.procedures.length > 0 ? plan.procedures : [];
+        return (
+          <div key={plan.id || idx} style={{ marginBottom: 28 }}>
+            {/* plan header */}
+            <div className="card" style={{ padding: 16, marginBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 12 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: '-0.02em' }}>{plan.title}</div>
+                  {plan.diagnosis && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>{plan.diagnosis}</div>}
+                </div>
+                <StatusChip status={plan.status} />
+              </div>
+
+              {/* stats row */}
+              <div style={{ display: 'flex', gap: 18 }}>
+                {plan.totalCost > 0 && (
+                  <div>
+                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Cost</div>
+                    <div style={{ fontSize: 16, fontWeight: 700 }}>{formatCurrency(plan.totalCost)}</div>
+                  </div>
+                )}
+                {plan.totalSittings > 0 && (
+                  <div>
+                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Sittings</div>
+                    <div style={{ fontSize: 16, fontWeight: 700 }}>{plan.completedSittings || 0}/{plan.totalSittings}</div>
+                  </div>
+                )}
+                {plan.tooth && (
+                  <div>
+                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Tooth</div>
+                    <div style={{ fontSize: 16, fontWeight: 700 }}>#{plan.tooth}</div>
+                  </div>
+                )}
+              </div>
+
+              {/* progress bar */}
+              {plan.totalSittings > 0 && (
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ height: 5, borderRadius: 3, background: 'rgba(60,60,67,0.1)', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${Math.round((plan.completedSittings / plan.totalSittings) * 100)}%`, background: 'var(--green)', borderRadius: 3 }} />
+                  </div>
+                </div>
+              )}
+
+              {/* share with patient CTA */}
+              <button
+                onClick={() => openSheet('treatmentPlan', { plan: { ...raw, ...plan }, patientId: p.id })}
+                style={{ marginTop: 14, width: '100%', height: 40, borderRadius: 10, background: 'rgba(0,122,255,0.08)', color: 'var(--blue)', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}
+              >
+                <Icon name="share" size={16} color="var(--blue)" />
+                View / Share with Patient
+              </button>
             </div>
+
+            {/* procedures */}
+            {procItems.map(pr => (
+              <ProcedureCard key={pr.id} proc={pr} labOrders={labOrders} showLab onClick={() => openSheet('procedure', { id: pr.id })} />
+            ))}
           </div>
-          {plan.procedures.map(pid => {
-            const pr = procedures.find(x => x.id === pid);
-            return pr ? <ProcedureCard key={pid} proc={pr} labOrders={labOrders} showLab onClick={() => openSheet('procedure', { id: pr.id })} /> : null;
-          })}
-          <button style={{ color: 'var(--blue)', fontSize: 15, fontWeight: 500, padding: '4px 4px 0' }}>+ Add procedure</button>
-        </div>
-      ))}
-      <button className="card tap" style={{ width: '100%', height: 48, color: 'var(--blue)', fontSize: 15, fontWeight: 600, marginTop: 4 }}>+ New treatment plan</button>
+        );
+      })}
+      <button className="card tap" style={{ width: '100%', height: 48, color: 'var(--blue)', fontSize: 15, fontWeight: 600 }}>+ New treatment plan</button>
     </div>
   );
 }
@@ -339,7 +441,335 @@ function BillingTab({ p, bills, prescriptions, labOrders, visits, procedures, op
   );
 }
 
-const PROFILE_TABS = ['Overview', 'Cases', 'Tooth Map', 'Lab', 'Billing'];
+/* ─────────────────────────── MEDIA TAB ─────────────────────────── */
+function BeforeAfterSlot({ label, photo, onPick, onView }) {
+  const accent = label === 'Before' ? 'var(--amber)' : 'var(--green)';
+  if (photo) {
+    return (
+      <button
+        onClick={onView}
+        className="tap"
+        style={{ flex: 1, borderRadius: 14, overflow: 'hidden', position: 'relative', aspectRatio: '1', background: '#000' }}
+      >
+        <img src={photo.url || photo.preview} alt={label} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'linear-gradient(transparent, rgba(0,0,0,0.7))', padding: '20px 10px 8px' }}>
+          <span style={{ color: '#fff', fontSize: 13, fontWeight: 700 }}>{label}</span>
+        </div>
+        <div style={{ position: 'absolute', top: 6, right: 6, width: 22, height: 22, borderRadius: '50%', background: accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Icon name="check" size={12} color="#fff" stroke={2.5} />
+        </div>
+      </button>
+    );
+  }
+  return (
+    <button
+      onClick={onPick}
+      className="tap"
+      style={{ flex: 1, borderRadius: 14, border: `2px dashed ${accent}`, aspectRatio: '1', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6, background: label === 'Before' ? 'rgba(245,158,11,0.05)' : 'rgba(34,197,94,0.05)' }}
+    >
+      <Icon name="camera" size={26} color={accent} />
+      <span style={{ fontSize: 13, fontWeight: 700, color: accent }}>{label}</span>
+      <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>Tap to capture</span>
+    </button>
+  );
+}
+
+function XrayThumbnail({ photo, onView }) {
+  return (
+    <button
+      onClick={onView}
+      className="tap"
+      style={{ borderRadius: 12, overflow: 'hidden', position: 'relative', aspectRatio: '1', background: '#1a1a1a' }}
+    >
+      <img src={photo.url || photo.preview} alt={photo.xrayType || photo.type} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+      <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: '12px 6px 5px', background: 'linear-gradient(transparent, rgba(0,0,0,0.75))' }}>
+        <span style={{ color: '#fff', fontSize: 11, fontWeight: 700 }}>{photo.xrayType || photo.type}</span>
+      </div>
+    </button>
+  );
+}
+
+function MediaTab({ p, openSheet }) {
+  const showToast = useAppStore(s => s.showToast);
+  const [xrays, setXrays] = React.useState([]);
+  const [photos, setPhotos] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const beforeFileRef = React.useRef(null);
+  const afterFileRef = React.useRef(null);
+  const xrayFileRef = React.useRef(null);
+  const [uploading, setUploading] = React.useState(null);
+
+  React.useEffect(() => {
+    if (!p?.id) return;
+    setLoading(true);
+    getPatientXrays(p.id)
+      .then(data => {
+        const all = data?.xrays || data || [];
+        const normalised = all.map(x => ({
+          id: x.id,
+          url: x.url || x.file_url || x.imageUrl,
+          xrayType: x.xray_type || x.xrayType || x.type || 'Photo',
+          date: x.created_at || x.createdAt || x.date || '',
+          isBeforeAfter: ['before', 'after'].includes((x.xray_type || x.xrayType || '').toLowerCase()),
+          photoType: (x.xray_type || x.xrayType || '').toLowerCase(),
+        }));
+        setXrays(normalised.filter(x => !x.isBeforeAfter));
+        setPhotos(normalised.filter(x => x.isBeforeAfter));
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [p?.id]);
+
+  const beforePhoto = photos.find(x => x.photoType === 'before');
+  const afterPhoto = photos.find(x => x.photoType === 'after');
+
+  const handleFileUpload = async (file, type) => {
+    if (!file) return;
+    const preview = URL.createObjectURL(file);
+    setUploading(type);
+    try {
+      const res = await (type === 'xray'
+        ? uploadXray(file, p.id, 'OPG')
+        : uploadPatientPhoto(file, p.id, type));
+      const uploaded = {
+        id: res.id || res.xray_id,
+        url: res.url || res.file_url || preview,
+        xrayType: type,
+        photoType: type,
+        isBeforeAfter: ['before', 'after'].includes(type),
+      };
+      if (type === 'xray') {
+        setXrays(prev => [uploaded, ...prev]);
+      } else {
+        setPhotos(prev => prev.filter(x => x.photoType !== type).concat(uploaded));
+      }
+      showToast('Photo saved');
+    } catch {
+      // Keep local preview even if upload fails
+      const local = { preview, xrayType: type, photoType: type, isBeforeAfter: ['before', 'after'].includes(type) };
+      if (type === 'xray') {
+        setXrays(prev => [local, ...prev]);
+      } else {
+        setPhotos(prev => prev.filter(x => x.photoType !== type).concat(local));
+      }
+      showToast('Saved locally — will sync when online');
+    } finally {
+      setUploading(null);
+    }
+  };
+
+  const handleDeletePhoto = (id) => {
+    setXrays(prev => prev.filter(x => x.id !== id));
+    setPhotos(prev => prev.filter(x => x.id !== id));
+  };
+
+  const openAllXrays = (startIdx = 0) => openSheet('photoViewer', {
+    photos: xrays,
+    initialIndex: startIdx,
+    title: 'X-rays & Scans',
+    onDelete: handleDeletePhoto,
+  });
+
+  const openBeforeAfter = (type) => {
+    const target = type === 'before' ? beforePhoto : afterPhoto;
+    if (!target) return;
+    openSheet('photoViewer', {
+      photos: photos,
+      initialIndex: photos.indexOf(target),
+      title: 'Before / After',
+      onDelete: handleDeletePhoto,
+    });
+  };
+
+  return (
+    <div>
+      {/* ── Before / After ── */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)' }}>Before & After</span>
+        {(beforePhoto || afterPhoto) && (
+          <button
+            onClick={() => openSheet('photoViewer', { photos, title: 'Before / After', onDelete: handleDeletePhoto })}
+            style={{ fontSize: 13, color: 'var(--blue)', fontWeight: 600 }}
+          >
+            View all
+          </button>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
+        <input ref={beforeFileRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => { handleFileUpload(e.target.files[0], 'before'); e.target.value = ''; }} />
+        <input ref={afterFileRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => { handleFileUpload(e.target.files[0], 'after'); e.target.value = ''; }} />
+        <BeforeAfterSlot
+          label="Before"
+          photo={uploading === 'before' ? { preview: '' } : beforePhoto}
+          onPick={() => beforeFileRef.current?.click()}
+          onView={() => openBeforeAfter('before')}
+        />
+        <BeforeAfterSlot
+          label="After"
+          photo={uploading === 'after' ? { preview: '' } : afterPhoto}
+          onPick={() => afterFileRef.current?.click()}
+          onView={() => openBeforeAfter('after')}
+        />
+      </div>
+
+      {/* ── X-rays ── */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)' }}>X-rays & Scans</span>
+        <button onClick={() => xrayFileRef.current?.click()} style={{ fontSize: 13, color: 'var(--blue)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+          <Icon name="plus" size={14} color="var(--blue)" /> Add
+        </button>
+      </div>
+      <input ref={xrayFileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={e => { handleFileUpload(e.target.files[0], 'xray'); e.target.value = ''; }} />
+
+      {loading ? (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '24px 0' }}>
+          <div style={{ width: 22, height: 22, borderRadius: '50%', border: '3px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin .7s linear infinite' }} />
+        </div>
+      ) : xrays.length === 0 ? (
+        <button
+          onClick={() => xrayFileRef.current?.click()}
+          className="card"
+          style={{ width: '100%', padding: '28px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginBottom: 22 }}
+        >
+          <Icon name="scan" size={32} color="var(--text-tertiary)" />
+          <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-secondary)' }}>No X-rays added yet</span>
+          <span style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>Tap to upload OPG, RVG, CBCT…</span>
+        </button>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 22 }}>
+          {xrays.map((x, i) => (
+            <XrayThumbnail key={x.id || i} photo={x} onView={() => openAllXrays(i)} />
+          ))}
+          <button
+            onClick={() => xrayFileRef.current?.click()}
+            style={{ borderRadius: 12, border: '2px dashed var(--border)', aspectRatio: '1', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, background: 'transparent' }}
+          >
+            <Icon name="plus" size={22} color="var(--text-tertiary)" />
+            <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>Add</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─────────────────────────── CASE SHEET TAB ─────────────────────────── */
+function CaseSheetTab({ p, visits, procedures, openSheet }) {
+  const [caseSheet, setCaseSheet] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    if (!p?.id) return;
+    setLoading(true);
+    getPatientCaseSheet(p.id)
+      .then(data => setCaseSheet(data?.case_sheet || data?.caseSheet || data))
+      .catch(() => setCaseSheet(null))
+      .finally(() => setLoading(false));
+  }, [p?.id]);
+
+  const flags = clinicianFlags(p);
+  const lastVisit = visits
+    .filter(v => v.patientId === p.id && v.status === 'done')
+    .sort((a, b) => b.date.localeCompare(a.date))[0];
+
+  const medConditions = [];
+  if (p.hasDiabetes || (p.flags?.hasDiabetes)) medConditions.push('Diabetes Mellitus');
+  if (p.hasHypertension || (p.flags?.hasHypertension)) medConditions.push('Hypertension');
+  if (p.hasHeartCondition || (p.flags?.hasHeartCondition)) medConditions.push('Heart condition');
+  if (p.isPregnant || (p.flags?.isPregnant)) medConditions.push('Pregnant');
+  if (p.isOnBloodThinners || (p.flags?.isOnBloodThinners)) medConditions.push('Blood thinners');
+  if (p.medicalConditions) medConditions.push(...p.medicalConditions.split(',').map(s => s.trim()).filter(Boolean));
+
+  const Row = ({ label, value, accent }) => (
+    <div style={{ padding: '10px 0', borderTop: '1px solid var(--border-light)' }}>
+      <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)', marginBottom: 3 }}>{label}</div>
+      <div style={{ fontSize: 15, lineHeight: 1.5, color: accent || 'var(--text-primary)', fontWeight: accent ? 600 : 400 }}>{value || <span style={{ color: 'var(--text-tertiary)', fontStyle: 'italic' }}>Not recorded</span>}</div>
+    </div>
+  );
+
+  return (
+    <div>
+      {/* header chip */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(60,60,67,0.06)', borderRadius: 12, padding: '10px 14px', marginBottom: 18 }}>
+        <Icon name="clipboard" size={18} color="var(--text-secondary)" />
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700 }}>Case Sheet</div>
+          <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+            {lastVisit ? `Last updated ${formatDate(lastVisit.date)}` : 'No visits recorded'}
+          </div>
+        </div>
+        <button onClick={() => openSheet('editPatient', { id: p.id })} style={{ marginLeft: 'auto', color: 'var(--blue)', fontSize: 13, fontWeight: 600 }}>Edit</button>
+      </div>
+
+      {/* Patient Info */}
+      <SectionHeader>Patient Information</SectionHeader>
+      <div className="card" style={{ padding: '0 16px 6px', marginBottom: 16 }}>
+        <Row label="Full Name" value={p.name} />
+        <Row label="Age / Gender" value={[p.age && `${p.age} years`, p.gender].filter(Boolean).join(' · ')} />
+        <Row label="Blood Group" value={p.bloodGroup} />
+        <Row label="Phone" value={p.phone} />
+      </div>
+
+      {/* Medical History */}
+      <SectionHeader>Medical History</SectionHeader>
+      <div className="card" style={{ padding: '0 16px 6px', marginBottom: 16 }}>
+        <Row
+          label="Medical Conditions"
+          value={medConditions.length ? medConditions.join(', ') : 'None reported'}
+          accent={medConditions.length ? 'var(--red)' : undefined}
+        />
+        <Row label="Drug Allergies" value={Array.isArray(p.allergies) ? p.allergies.join(', ') : (p.allergies || null)} />
+        {flags.length > 0 && (
+          <Row label="Clinical Flags" value={flags.join(', ')} accent="var(--red)" />
+        )}
+      </div>
+
+      {/* Chief Complaint + Diagnosis */}
+      <SectionHeader>Presenting Complaint</SectionHeader>
+      <div className="card" style={{ padding: '0 16px 6px', marginBottom: 16 }}>
+        <Row label="Chief Complaint" value={p.chiefComplaint} />
+        <Row label="Duration" value={caseSheet?.duration || null} />
+      </div>
+
+      {/* Clinical Examination */}
+      <SectionHeader>Clinical Examination</SectionHeader>
+      <div className="card" style={{ padding: '0 16px 6px', marginBottom: 16 }}>
+        {loading ? (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '20px 0' }}>
+            <div style={{ width: 20, height: 20, borderRadius: '50%', border: '3px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin .7s linear infinite' }} />
+          </div>
+        ) : (
+          <>
+            <Row label="Extra-oral Examination" value={caseSheet?.extra_oral || caseSheet?.extraOral || null} />
+            <Row label="Intra-oral Examination" value={caseSheet?.intra_oral || caseSheet?.intraOral || null} />
+            <Row label="Periodontal Status" value={caseSheet?.periodontal_status || caseSheet?.periodontalStatus || null} />
+          </>
+        )}
+      </div>
+
+      {/* Diagnosis */}
+      <SectionHeader>Diagnosis & Investigations</SectionHeader>
+      <div className="card" style={{ padding: '0 16px 6px', marginBottom: 16 }}>
+        <Row label="Provisional Diagnosis" value={caseSheet?.diagnosis || p.clinicalNotes || null} />
+        <Row label="Final Diagnosis" value={caseSheet?.final_diagnosis || caseSheet?.finalDiagnosis || null} />
+        <Row label="Investigations Ordered" value={caseSheet?.investigations || null} />
+      </div>
+
+      {/* Visits summary */}
+      {lastVisit && (
+        <>
+          <SectionHeader>Last Visit Notes</SectionHeader>
+          <div className="card" style={{ padding: 14, marginBottom: 16 }}>
+            <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginBottom: 4 }}>{formatDate(lastVisit.date)}</div>
+            <div style={{ fontSize: 14, lineHeight: 1.5 }}>{lastVisit.clinicalNotes || lastVisit.notes || 'No notes recorded'}</div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+const PROFILE_TABS = ['Overview', 'Cases', 'Tooth Map', 'Media', 'Case Sheet', 'Lab', 'Billing'];
 
 function procedureToState(name) {
   const n = (name || '').toLowerCase();
@@ -462,6 +892,8 @@ function PatientProfile({ patientId, initialTab }) {
           {tab === 'Overview' && <OverviewTab p={p} procedures={procedures} visits={visits} labOrders={labOrders} openSheet={openSheet} router={router} />}
           {tab === 'Cases' && <CasesTab p={p} procedures={procedures} labOrders={labOrders} openSheet={openSheet} patientTreatmentPlans={patientTreatmentPlans} />}
           {tab === 'Tooth Map' && <ToothMapTab p={{ ...p, teeth: mergedTeeth }} bills={bills} openSheet={openSheet} toothHistory={toothHistory} toothLoading={toothLoading} />}
+          {tab === 'Media' && <MediaTab p={p} openSheet={openSheet} />}
+          {tab === 'Case Sheet' && <CaseSheetTab p={p} visits={visits} procedures={procedures} openSheet={openSheet} />}
           {tab === 'Lab' && <LabTab p={p} labOrders={labOrders} openSheet={openSheet} markLabReceived={markLabReceived} />}
           {tab === 'Billing' && <BillingTab p={p} bills={bills} prescriptions={prescriptions} labOrders={labOrders} visits={visits} procedures={procedures} openSheet={openSheet} toothHistory={toothHistory} />}
         </div>

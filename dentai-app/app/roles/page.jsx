@@ -81,7 +81,7 @@ export default function RolesPage() {
           <Icon name="layers" size={18} color="var(--text-secondary)" />
           <input
             type="text"
-            placeholder="e.g. MDC-204"
+            placeholder="e.g. SMILE1"
             value={joinCode}
             onChange={e => { setJoinCode(e.target.value.toUpperCase()); setError(''); setClinicPreview(null); }}
             style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: 18, fontWeight: 700, letterSpacing: '0.08em' }}

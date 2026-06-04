@@ -21,3 +21,17 @@ export async function deleteXray(id) {
   const { data } = await apiClient.delete(`/api/xrays/${id}`);
   return data;
 }
+
+export async function getPatientXrays(patientId) {
+  const { data } = await apiClient.get(`/api/patients/${patientId}/xrays`);
+  return data;
+}
+
+export async function uploadPatientPhoto(file, patientId, photoType) {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('patientId', patientId);
+  formData.append('xrayType', photoType);
+  const { data } = await apiClient.post('/api/xrays', formData);
+  return data;
+}

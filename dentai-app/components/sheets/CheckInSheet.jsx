@@ -30,10 +30,12 @@ export default function CheckInSheet({ onClose }) {
   const queue = useQueueStore((s) => s.queue);
   const addToQueue = useQueueStore((s) => s.addToQueue);
 
-  const [step, setStep] = useState(0); // 0 patient, 1 complaint, 2 xray, 3 confirm
+  const [step, setStep] = useState(0);
   const [mode, setMode] = useState('existing');
   const [pid, setPid] = useState(null);
   const [query, setQuery] = useState('');
+  const [age, setAge] = useState('');
+  const [bloodGroup, setBloodGroup] = useState('');
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [complaint, setComplaint] = useState('');
@@ -113,17 +115,15 @@ export default function CheckInSheet({ onClose }) {
           const result = await extractPatientInfo(transcript);
           if (result.name) setName(result.name);
           if (result.phone) setPhone(result.phone);
-          const c = result.chiefComplaint || result.chief_complaint;
+          if (result.age) setAge(String(result.age));
+          if (result.bloodGroup || result.blood_group) setBloodGroup(result.bloodGroup || result.blood_group);
+          const c = result.chiefComplaint || result.chief_complaint || result.complaint;
           if (c) { setComplaint(c); complaintCaptured = true; }
         } catch {
           // extraction failed — keep whatever was typed
         }
         setPatientPhase('done');
-        // Skip complaint step if we already captured it via voice
-        setTimeout(() => {
-          setPatientPhase('idle');
-          if (complaintCaptured) setStep(2); // jump to X-rays
-        }, 1200);
+        setTimeout(() => setPatientPhase('idle'), 1500);
       } catch {
         setPatientVoiceError('Recording failed — try again');
         setPatientPhase('idle');
@@ -183,8 +183,11 @@ export default function CheckInSheet({ onClose }) {
       // Create new patient
       if (mode === 'new') {
         const newPatient = await addPatient({
-          name, phone, age: 30, gender: 'Female',
-          status: 'new', chief_complaint: complaint,
+          name, phone,
+          age: age ? parseInt(age) : null,
+          blood_group: bloodGroup || null,
+          bloodGroup: bloodGroup || null,
+          status: 'new',
         });
         patientId = newPatient.id;
       }
@@ -245,7 +248,18 @@ export default function CheckInSheet({ onClose }) {
                     {pid === p.id && <Icon name="check" size={20} color="var(--blue)" stroke={2.6} />}
                   </button>
                 ))}
-                {list.length === 0 && <div style={{ padding: 20, textAlign: 'center' }} className="t-meta">No patients found</div>}
+                {list.length === 0 && query.length > 1 && (
+                  <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+                    <div className="t-meta">No patients found for "{query}"</div>
+                    <button
+                      onClick={() => { setMode('new'); setName(query); }}
+                      style={{ fontSize: 14, fontWeight: 700, color: 'var(--blue)', background: 'rgba(0,122,255,0.08)', borderRadius: 99, padding: '8px 18px' }}
+                    >
+                      + Register as new patient
+                    </button>
+                  </div>
+                )}
+                {list.length === 0 && query.length <= 1 && <div style={{ padding: 20, textAlign: 'center' }} className="t-meta">Search name or phone number</div>}
               </div>
             </>
           ) : (
@@ -297,8 +311,17 @@ export default function CheckInSheet({ onClose }) {
               <div className="card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <Field value={name} onChange={setName} placeholder="Full name" />
                 <Field value={phone} onChange={setPhone} placeholder="Phone number" type="tel" />
-                <div className="t-meta">Full medical details can be added later by the doctor.</div>
+                <Field value={complaint} onChange={setComplaint} placeholder="Chief complaint (e.g. tooth pain)" />
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <div style={{ flex: 1 }}><Field value={age} onChange={setAge} placeholder="Age" type="number" /></div>
+                  <div style={{ flex: 1 }}><Field value={bloodGroup} onChange={setBloodGroup} placeholder="Blood group (opt.)" /></div>
+                </div>
               </div>
+              {(name || complaint) && (
+                <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '6px 0 0', textAlign: 'center' }}>
+                  Dictate again to update only what you mention
+                </p>
+              )}
             </>
           )}
         </>
@@ -421,9 +444,14 @@ export default function CheckInSheet({ onClose }) {
       )}
 
       <div style={{ display: 'flex', gap: 12, marginTop: 22 }}>
-        {step > 0 && <button onClick={() => setStep(s => s - 1)} style={{ width: 88, height: 52, borderRadius: 14, border: '1px solid var(--border)', background: '#fff', fontSize: 15, fontWeight: 600 }}>Back</button>}
+        {step > 0 && <button onClick={() => { if (step === 2 && complaint.trim()) { setStep(0); return; } setStep(s => s - 1); }} style={{ width: 88, height: 52, borderRadius: 14, border: '1px solid var(--border)', background: '#fff', fontSize: 15, fontWeight: 600 }}>Back</button>}
         {step < 3
-          ? <PrimaryButton onClick={() => stepValid ? setStep(s => s + 1) : showToast('Pick a patient first')}>{step === 2 && xrays.length === 0 ? 'Skip' : 'Continue'}</PrimaryButton>
+          ? <PrimaryButton onClick={() => {
+              if (!stepValid) { showToast('Pick a patient first'); return; }
+              // Skip step 1 (complaint) if already filled from step 0
+              if (step === 0 && complaint.trim()) { setStep(2); return; }
+              setStep(s => s + 1);
+            }}>{step === 2 && xrays.length === 0 ? 'Skip' : 'Continue'}</PrimaryButton>
           : <PrimaryButton onClick={finish} style={{ opacity: loading ? 0.6 : 1 }}>{loading ? 'Adding…' : 'Add to queue'}</PrimaryButton>
         }
       </div>

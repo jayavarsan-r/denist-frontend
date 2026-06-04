@@ -2,7 +2,7 @@
    DentAI — patients data (ES module)
    ============================================================ */
 
-export const TODAY = '2026-06-02'; // Tuesday
+export const TODAY = new Date().toISOString().slice(0, 10);
 
 export const FREQUENT_MEDICINES = [
   "Amoxicillin 500mg", "Ibuprofen 400mg", "Paracetamol 500mg", "Metronidazole 400mg",

@@ -250,38 +250,47 @@ exports.extractPatientInfo = async (req, res, next) => {
       return res.json({ name: '', age: null, phone: '', complaint: transcript, flags: {} });
     }
 
-    const prompt = `You are a dental clinic assistant. Extract patient registration details from a receptionist or doctor's voice note. The voice may be in Tamil, English, or Tanglish (Tamil + English mix).
+    const prompt = `You are a patient registration assistant at an Indian dental clinic. A receptionist or doctor has spoken patient details by voice. The speech may be in ANY language — Tamil, Hindi, Telugu, Malayalam, Kannada, English, or any mix/transliteration of these.
 
-Return ONLY valid JSON — no markdown, no explanation:
+Your job: extract structured patient info from the transcript and return ONLY valid JSON.
+
+Return ONLY this JSON, no markdown, no extra text:
 {
-  "name": "string or null — patient's full name",
-  "age": number or null — patient's age as integer,
-  "phone": "string or null — 10-digit mobile number, digits only, no spaces/dashes",
-  "complaint": "string or null — chief complaint in clear English (max 20 words)",
+  "name": "Patient full name, properly capitalized. Null if not mentioned.",
+  "age": "Age as integer. Null if not mentioned.",
+  "phone": "10-digit mobile number, digits only, no spaces or dashes. Null if not mentioned.",
+  "chiefComplaint": "Chief complaint translated to clear English, max 20 words. Null if not mentioned.",
+  "bloodGroup": "One of: A+ A- B+ B- O+ O- AB+ AB- — or null if not mentioned.",
   "flags": {
-    "hasDiabetes": boolean,
-    "hasHypertension": boolean,
-    "hasHeartCondition": boolean,
-    "isPregnant": boolean,
-    "isOnBloodThinners": boolean,
-    "penicillin": boolean,
-    "latex": boolean
+    "hasDiabetes": false,
+    "hasHypertension": false,
+    "hasHeartCondition": false,
+    "isPregnant": false,
+    "isOnBloodThinners": false,
+    "penicillin": false,
+    "latex": false
   }
 }
 
-Rules:
-- "sugar patient" or "diabetic" = hasDiabetes: true
-- "BP" or "pressure" = hasHypertension: true
-- "heart problem" or "cardiac" = hasHeartCondition: true
-- "blood thinner" or "warfarin" = isOnBloodThinners: true
-- "penicillin allergy" = penicillin: true
-- "latex allergy" = latex: true
-- Name: capitalize properly (e.g. "arjun kumar" → "Arjun Kumar")
-- Phone: extract 10 consecutive digits if mentioned
-- If a field is not mentioned, return null or false
-- Translate Tamil complaint to English
+Extraction rules:
+- Name: any language name spoken — capitalize each word (e.g. "ravi kumar" → "Ravi Kumar")
+- Age: spoken as "28 years", "28 வயது", "28 saal" — extract the number
+- Phone: any 10 consecutive digits spoken (ignore country code +91)
+- Complaint: translate to English if spoken in any other language
+  • "பல் வலி" or "dant dard" or "tooth pain" → "Tooth pain"
+  • "வாய் புண்" → "Mouth ulcer"
+  • "ஈறு வலி" → "Gum pain"
+  • "jaw pain", "sensitivity", "bleeding gums" etc → keep in English
+- Blood group: "B positive", "B posi", "B+", "பி பாசிட்டிவ்" → "B+"
+- Medical flags:
+  • "sugar", "diabetic", "நீரிழிவு" → hasDiabetes: true
+  • "BP", "pressure", "blood pressure" → hasHypertension: true
+  • "heart problem", "cardiac", "heart patient" → hasHeartCondition: true
+  • "pregnant", "கர்ப்பிணி" → isPregnant: true
+  • "blood thinner", "warfarin", "aspirin daily" → isOnBloodThinners: true
+- If a field is not mentioned, return null (for strings/numbers) or false (for booleans)
 
-Voice note: ${transcript}`;
+Transcript: ${transcript}`;
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${geminiKey}`;
     const response = await axios.post(url, {

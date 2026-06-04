@@ -6,6 +6,54 @@ export const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oc
 export const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 export const DAYS_FULL = ['SUNDAY','MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY'];
 
+const GREETINGS = {
+  earlyMorning: [ // 5–9
+    'Rise and shine,',
+    'Early bird,',
+    'Good morning,',
+    'Morning, doc —',
+  ],
+  morning: [ // 9–12
+    'Good morning,',
+    'Morning,',
+    'Great to see you,',
+    'Ready for the day,',
+    'Hope your morning is going well,',
+  ],
+  afternoon: [ // 12–17
+    'Good afternoon,',
+    'Afternoon,',
+    'Hope lunch was good,',
+    'Halfway through,',
+    'Keep it up,',
+    'Good to have you back,',
+  ],
+  evening: [ // 17–20
+    'Good evening,',
+    'Evening,',
+    'Winding down,',
+    'Great work today,',
+    'Almost there,',
+  ],
+  night: [ // 20+
+    'Working late,',
+    'Burning the midnight oil,',
+    'Good night,',
+    'Rest well after this,',
+  ],
+};
+
+export function getGreeting() {
+  const h = new Date().getHours();
+  let pool;
+  if (h >= 5 && h < 9)        pool = GREETINGS.earlyMorning;
+  else if (h >= 9 && h < 12)  pool = GREETINGS.morning;
+  else if (h >= 12 && h < 17) pool = GREETINGS.afternoon;
+  else if (h >= 17 && h < 20) pool = GREETINGS.evening;
+  else                         pool = GREETINGS.night;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
 export function parseDate(s) { const [y,m,d] = s.split('-').map(Number); return new Date(y, m-1, d); }
 export function formatDate(s) { const d = parseDate(s); return `${d.getDate()} ${MONTHS[d.getMonth()]}`; }
 export function formatDateLong(s) { const d = parseDate(s); return `${DAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]}`; }
