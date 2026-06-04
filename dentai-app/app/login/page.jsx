@@ -87,10 +87,11 @@ export default function LoginPage() {
   const [joinError, setJoinError] = useState('');
   const phoneRef = React.useRef(null);
 
-  // If already logged in, redirect to home
+  // Redirect: token → home, first visit → onboarding
   useEffect(() => {
-    if (getToken()) {
-      router.replace('/');
+    if (getToken()) { router.replace('/'); return; }
+    if (typeof window !== 'undefined' && !localStorage.getItem('dentai_onboarded')) {
+      router.replace('/onboarding');
     }
   }, []);
 
@@ -289,18 +290,21 @@ export default function LoginPage() {
             <div style={{ fontSize: 15, color: 'var(--text-secondary)', marginTop: 6 }}>This sets up your workspace</div>
           </div>
           {[
-            { role: 'doctor', label: 'Doctor', sub: "I'm a dentist or specialist" },
-            { role: 'receptionist', label: 'Receptionist', sub: 'I manage the front desk' },
+            { role: 'doctor', icon: 'stethoscope', label: 'Doctor', sub: "I'm a dentist or specialist" },
+            { role: 'receptionist', icon: 'userCheck', label: 'Receptionist', sub: 'I manage the front desk' },
           ].map(opt => (
             <button key={opt.role} onClick={() => {
               setSelectedRole(opt.role);
               setPhase(opt.role === 'doctor' ? 'clinic_choice' : 'join_new');
-            }} className="card tap" style={{ width: '100%', display: 'flex', alignItems: 'center', padding: '18px 16px', marginBottom: 12, textAlign: 'left', gap: 14 }}>
+            }} className="card tap" style={{ width: '100%', display: 'flex', alignItems: 'center', padding: '20px 16px', marginBottom: 12, textAlign: 'left', gap: 16 }}>
+              <div style={{ width: 56, height: 56, borderRadius: 16, background: 'var(--accent)', color: 'var(--accent-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <Icon name={opt.icon} size={28} stroke={1.9} />
+              </div>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 17, fontWeight: 700 }}>{opt.label}</div>
                 <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginTop: 2 }}>{opt.sub}</div>
               </div>
-              <span style={{ fontSize: 18, color: 'var(--text-tertiary)' }}>›</span>
+              <Icon name="chevRight" size={20} color="var(--text-tertiary)" />
             </button>
           ))}
         </div>

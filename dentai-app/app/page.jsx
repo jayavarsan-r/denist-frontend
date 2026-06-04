@@ -76,18 +76,18 @@ function HomeScreen() {
         <button onClick={() => openSheet('account')} style={{ width: 42, height: 42, borderRadius: '50%', background: 'rgba(60,60,67,0.07)', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 14, flexShrink: 0 }}>{STAFF.doctor.initials}</button>
       </div>
 
-      {/* search — the hero entry point */}
-      <div style={{ padding: '0 22px' }}>
-        <button onClick={() => { setPatientsFocus(true); router.push('/patients'); }} className="tap" style={{ width: '100%', height: 56, borderRadius: 16, background: 'var(--bg)', display: 'flex', alignItems: 'center', padding: '0 16px', gap: 12 }}>
-          <Icon name="search" size={20} color="var(--text-secondary)" />
-          <span style={{ flex: 1, textAlign: 'left', fontSize: 16.5, color: 'var(--text-tertiary)' }}>Search a patient…</span>
-          <Icon name="mic" size={19} color="var(--text-secondary)" />
+      {/* search */}
+      <div style={{ padding: '0 20px' }}>
+        <button onClick={() => { setPatientsFocus(true); router.push('/patients'); }} className="tap" style={{ width: '100%', height: 50, borderRadius: 99, background: 'var(--bg)', display: 'flex', alignItems: 'center', padding: '0 18px', gap: 10 }}>
+          <Icon name="search" size={18} color="var(--text-tertiary)" />
+          <span style={{ flex: 1, textAlign: 'left', fontSize: 16, color: 'var(--text-tertiary)' }}>Search a patient…</span>
+          <Icon name="mic" size={18} color="var(--text-tertiary)" />
         </button>
       </div>
 
-      {/* start consultation — the single primary action */}
-      <div style={{ padding: '14px 22px 0' }}>
-        <button onClick={() => router.push('/consultation')} className="tap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14, background: 'var(--accent)', color: 'var(--accent-ink)', borderRadius: 16, padding: '16px 18px', textAlign: 'left' }}>
+      {/* start consultation */}
+      <div style={{ padding: '12px 20px 0' }}>
+        <button onClick={() => router.push('/consultation')} className="tap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14, background: 'var(--accent)', color: 'var(--accent-ink)', borderRadius: 99, padding: '16px 22px', textAlign: 'left' }}>
           <Icon name="stethoscope" size={24} color="var(--accent-ink)" />
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 17, fontWeight: 700 }}>Start consultation</div>
@@ -97,23 +97,23 @@ function HomeScreen() {
         </button>
       </div>
 
-      {/* four main actions — gently color-coded so they're instantly distinguishable */}
-      <div style={{ padding: '20px 22px 0' }}>
+      {/* four main actions */}
+      <div style={{ padding: '14px 20px 0' }}>
         <Eyebrow>Quick actions</Eyebrow>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           {[
-            { icon: 'personPlus', label: 'New patient', sub: 'Register someone new', bg: '#EAF2FE', fg: '#1A73E8', fn: () => openSheet('newPatient') },
-            { icon: 'plus', label: 'Walk-in', sub: "Add to today", bg: '#E8F6EE', fg: '#1E8E3E', fn: () => openSheet('walkin') },
-            { icon: 'rupee', label: 'Bills', sub: 'Payments & dues', bg: '#FCF1E2', fg: '#C2580A', fn: () => router.push('/finance') },
-            { icon: 'flask', label: 'Lab', sub: 'Crowns & orders', bg: '#E9F4FB', fg: '#1B86B8', fn: () => router.push('/finance/lab') },
+            { icon: 'personPlus', label: 'Add patient',  sub: 'New or walk-in', bg: '#2563EB', fn: () => openSheet('newPatient') },
+            { icon: 'pencil',     label: 'Prescription', sub: 'Write Rx',       bg: '#16A34A', fn: () => openSheet('rx', {}) },
+            { icon: 'flask',      label: 'Lab order',    sub: 'Send to lab',    bg: '#DC2626', fn: () => openSheet('newLab', {}) },
+            { icon: 'rupee',      label: 'Collect',      sub: 'Bill & payment', bg: '#D97706', fn: () => router.push('/finance') },
           ].map(a => (
-            <button key={a.label} onClick={a.fn} className="tap" style={{ background: a.bg, borderRadius: 18, padding: '16px', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 12, textAlign: 'left' }}>
-              <div style={{ width: 46, height: 46, borderRadius: '50%', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Icon name={a.icon} size={24} color={a.fg} stroke={2} />
+            <button key={a.label} onClick={a.fn} className="tap" style={{ background: a.bg, borderRadius: 24, padding: '14px', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 10, textAlign: 'left' }}>
+              <div style={{ width: 40, height: 40, borderRadius: 12, background: 'rgba(255,255,255,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Icon name={a.icon} size={20} color="#fff" stroke={2} />
               </div>
               <div>
-                <div style={{ fontSize: 16.5, fontWeight: 700, letterSpacing: '-0.01em', color: 'var(--text-primary)' }}>{a.label}</div>
-                <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 1 }}>{a.sub}</div>
+                <div style={{ fontSize: 15.5, fontWeight: 700, letterSpacing: '-0.01em', color: '#fff' }}>{a.label}</div>
+                <div style={{ fontSize: 12.5, color: 'rgba(255,255,255,0.7)', marginTop: 2 }}>{a.sub}</div>
               </div>
             </button>
           ))}

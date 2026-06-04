@@ -8,6 +8,7 @@ import { SheetHeader, SectionHeader, PrimaryButton, SelectPill, Field } from '@/
 import { TODAY, FREQUENT_MEDICINES } from '@/lib/data/patients';
 import { formatDate } from '@/lib/data/utils';
 import { createPrescription, getPrescription, getPrescriptionPdfUrl } from '@/lib/services/prescription.service';
+import { extractPrescription } from '@/lib/services/ai.service';
 import { useAudioRecorder } from '@/lib/hooks/useAudioRecorder';
 import { useTranscription } from '@/lib/hooks/useTranscription';
 
@@ -23,7 +24,11 @@ export default function PrescriptionSheet({ params, onClose }) {
   const [meds, setMeds] = useState(existing ? existing.medicines : []);
   const [instructions, setInstructions] = useState(existing ? existing.instructions : '');
   const [followUp, setFollowUp] = useState(existing ? existing.followUpDays : 7);
+  // phase: idle | recording | transcribing | extracting | done
   const [phase, setPhase] = useState('idle');
+  // dictateMode: 'full' fills medicines+instructions+followUp via AI; 'instructions' just transcribes into the instructions field
+  const [dictateMode, setDictateMode] = useState('full');
+  const [transcript, setTranscript] = useState('');
   const [expanded, setExpanded] = useState(null);
 
   const recorder = useAudioRecorder();
@@ -32,40 +37,61 @@ export default function PrescriptionSheet({ params, onClose }) {
   const addMed = (name) => { if (meds.some(m => m.name === name)) { setMeds(meds.filter(m => m.name !== name)); return; } setMeds([...meds, { name, dosage: '1 tab', frequency: 'BD', duration: '5 days', notes: '' }]); };
   const updateMed = (i, patch) => setMeds(meds.map((m, j) => j === i ? { ...m, ...patch } : m));
 
-  const dictate = async () => {
-    if (recorder.isRecording) {
-      // Stop recording, transcribe, and let backend extract medicines
-      setPhase('processing');
-      try {
-        const blob = await recorder.stopRecording();
-        const transcript = await transcribe(blob);
-        const result = await createPrescription({ patientId: params.patientId, rawVoice: transcript });
-        // Populate medicines from backend response
-        if (result && result.medicines && result.medicines.length > 0) {
-          setMeds(result.medicines.map(m => ({
-            name: m.name || '',
-            dosage: m.dosage || m.dose || '1 tab',
-            frequency: m.frequency || 'BD',
-            duration: m.duration || '5 days',
-            notes: m.notes || m.instructions || '',
-            uncertain: m.uncertain || false,
-          })));
-        }
-        if (result && result.instructions) setInstructions(result.instructions);
-        if (result && result.followUpDays) setFollowUp(result.followUpDays);
-        setPhase('idle');
-      } catch(e) {
-        showToast(e?.response?.data?.message || 'Dictation failed');
-        setPhase('idle');
-      }
-      return;
-    }
-    // Start recording
+  const startDictate = async (mode = 'full') => {
     try {
+      setDictateMode(mode);
       await recorder.startRecording();
       setPhase('recording');
+      setTranscript('');
     } catch(e) {
       showToast(e.message || 'Microphone unavailable');
+    }
+  };
+
+  const stopDictate = async () => {
+    setPhase('transcribing');
+    try {
+      const blob = await recorder.stopRecording();
+      // ── Step 1: Sarvam STT ──
+      const { text, warning } = await transcribe(blob);
+      if (warning && !text) { showToast(warning); setPhase('idle'); return; }
+      setTranscript(text);
+
+      if (dictateMode === 'instructions') {
+        setInstructions(prev => prev ? prev + ' ' + text : text);
+        setPhase('done');
+        setTimeout(() => setPhase('idle'), 2000);
+        return;
+      }
+
+      // ── Step 2: Gemini extraction for full prescription ──
+      setPhase('extracting');
+      const result = await extractPrescription(text);
+
+      if (result.medicines?.length > 0) {
+        setMeds(prev => {
+          const existing = new Set(prev.map(m => m.name.toLowerCase()));
+          const newMeds = result.medicines
+            .filter(m => !existing.has((m.name || '').toLowerCase()))
+            .map(m => ({
+              name: m.name || '',
+              dosage: m.dosage || '1 tab',
+              frequency: m.frequency || 'BD',
+              duration: m.duration || '5 days',
+              notes: m.notes || '',
+              uncertain: m.uncertain || false,
+            }));
+          return [...prev, ...newMeds];
+        });
+      }
+      if (result.instructions) setInstructions(result.instructions);
+      if (result.followUpDays) setFollowUp(result.followUpDays);
+      if (result.warning) showToast(result.warning);
+      setPhase('done');
+      setTimeout(() => setPhase('idle'), 2000);
+    } catch(e) {
+      showToast('Dictation failed — please try again');
+      setPhase('idle');
     }
   };
 
@@ -88,30 +114,41 @@ export default function PrescriptionSheet({ params, onClose }) {
 
   const printPrescription = async () => {
     try {
-      // If there's an existing prescription ID, open it directly
-      if (existing && existing.id) {
-        window.open(getPrescriptionPdfUrl(existing.id), '_blank');
-        return;
+      let rxId = existing?.id;
+      if (!rxId) {
+        const result = await createPrescription({
+          patientId: params.patientId,
+          medicines: meds,
+          instructions,
+          followUpDays: followUp,
+        });
+        rxId = result.id || result.prescription_id;
       }
-      // Otherwise save first then open PDF
-      const result = await createPrescription({
-        patientId: params.patientId,
-        medicines: meds,
-        instructions,
-        followUpDays: followUp,
-      });
-      const rxId = result.id || result.prescription_id;
-      if (rxId) {
-        window.open(getPrescriptionPdfUrl(rxId), '_blank');
-      } else {
-        showToast('Generating prescription…');
+      if (!rxId) { showToast('Could not generate prescription'); return; }
+
+      const pdfUrl = getPrescriptionPdfUrl(rxId);
+      const patientName = p ? p.name : 'Patient';
+
+      if (typeof navigator !== 'undefined' && navigator.share) {
+        try {
+          await navigator.share({
+            title: `Prescription — ${patientName}`,
+            text: `Prescription for ${patientName}`,
+            url: pdfUrl,
+          });
+          return;
+        } catch {}
       }
+      // Fallback: open in browser
+      window.open(pdfUrl, '_blank');
     } catch(e) {
       showToast(e?.response?.data?.message || 'Could not generate PDF');
     }
   };
 
   const isRecording = recorder.isRecording;
+  const isMedsRecording = isRecording && dictateMode === 'full';
+  const isInstructionsRecording = isRecording && dictateMode === 'instructions';
 
   return (
     <div style={{ padding: '0 20px 28px' }}>
@@ -121,7 +158,7 @@ export default function PrescriptionSheet({ params, onClose }) {
         <span className="t-meta">{formatDate(TODAY)}</span>
       </div>
 
-      <SectionHeader right={<button onClick={dictate} style={{ color: isRecording ? 'var(--red)' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 5, fontSize: 13, fontWeight: 500 }}><Icon name="mic" size={16} />{isRecording ? 'Listening…' : phase === 'processing' ? 'Processing…' : 'Dictate'}</button>}>Medicines</SectionHeader>
+      <SectionHeader right={<button onClick={isMedsRecording ? stopDictate : () => startDictate('full')} style={{ color: isMedsRecording ? 'var(--red)' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 5, fontSize: 13, fontWeight: 500 }}><Icon name="mic" size={16} />{isMedsRecording ? 'Listening…' : phase === 'extracting' ? 'Extracting…' : phase === 'transcribing' && dictateMode === 'full' ? 'Processing…' : 'Dictate'}</button>}>Medicines</SectionHeader>
       <div className="card" style={{ overflow: 'hidden', marginBottom: 12 }}>
         {meds.length === 0 && <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>Add medicines below or dictate</div>}
         {meds.map((m, i) => (
@@ -150,7 +187,7 @@ export default function PrescriptionSheet({ params, onClose }) {
         {FREQUENT_MEDICINES.map(name => <SelectPill key={name} label={name} active={meds.some(m => m.name === name)} onClick={() => addMed(name)} />)}
       </div>
 
-      <Field label="Instructions" multiline value={instructions} onChange={setInstructions} placeholder="Special instructions (after food, avoid spicy food)…" mic minHeight={50} onMic={() => showToast('Listening…')} />
+      <Field label="Instructions" multiline value={instructions} onChange={setInstructions} placeholder="Special instructions (after food, avoid spicy food)…" mic micActive={isInstructionsRecording} minHeight={50} onMic={isInstructionsRecording ? stopDictate : () => startDictate('instructions')} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '14px 0 20px' }}>
         <span style={{ fontSize: 15, color: 'var(--text-secondary)' }}>Review after</span>
         <input value={followUp || ''} onChange={e => setFollowUp(parseInt(e.target.value) || null)} inputMode="numeric" style={{ width: 48, textAlign: 'center', border: '1px solid var(--border)', borderRadius: 8, padding: '6px', fontSize: 15, outline: 'none', fontFamily: 'inherit' }} className="tnum" />

@@ -65,12 +65,12 @@ input, textarea { font-family: inherit; }
 .noscroll-x::-webkit-scrollbar { display: none; }
 
 /* ---- cards ---- */
-.card { background: var(--surface); border-radius: 16px; box-shadow: var(--elevation-1); }
+.card { background: var(--surface); border-radius: 20px; box-shadow: var(--elevation-1); }
 
 /* ---- buttons ---- */
 .btn-dark {
   background: var(--accent); color: var(--accent-ink);
-  border-radius: 14px; font-weight: 600; font-size: 17px;
+  border-radius: 16px; font-weight: 600; font-size: 17px;
   display: flex; align-items: center; justify-content: center;
   transition: transform .12s ease, opacity .12s ease;
 }
@@ -90,6 +90,7 @@ input, textarea { font-family: inherit; }
 @keyframes dots { 0%,80%,100% { opacity: 0.25; } 40% { opacity: 1; } }
 @keyframes pageInRight { from { opacity: 0; transform: translateX(28px); } to { opacity: 1; transform: translateX(0); } }
 @keyframes slideInRight { from { transform: translateX(100%); } to { transform: translateX(0); } }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 .scrim { animation: scrim .2s ease both; }
 .sheet-anim { animation: sheetUp .34s cubic-bezier(0.32,0.72,0,1) both; }

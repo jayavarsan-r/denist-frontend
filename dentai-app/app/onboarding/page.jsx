@@ -149,6 +149,7 @@ function Onboarding({ onDone }) {
 export default function OnboardingPage() {
   const router = useRouter();
   const handleDone = () => {
+    if (typeof window !== 'undefined') localStorage.setItem('dentai_onboarded', '1');
     router.push('/login');
   };
   return <Onboarding onDone={handleDone} />;

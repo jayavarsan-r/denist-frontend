@@ -17,10 +17,16 @@ router.get('/', auth, async (req, res, next) => {
 router.patch('/', auth, async (req, res, next) => {
   try {
     if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
-    const { name, city } = req.body;
+    const { name, city, address, phone, openTime, closeTime, workingDays } = req.body;
     const updates = {};
-    if (name) updates.name = name;
+    if (name !== undefined) updates.name = name;
     if (city !== undefined) updates.city = city;
+    if (address !== undefined) updates.address = address;
+    if (phone !== undefined) updates.phone = phone;
+    if (openTime !== undefined) updates.open_time = openTime;
+    if (closeTime !== undefined) updates.close_time = closeTime;
+    if (workingDays !== undefined) updates.working_days = workingDays;
+    if (Object.keys(updates).length === 0) return res.json({ clinic: null });
     const { data, error } = await supabase.from('clinics').update(updates).eq('id', req.clinicId).select().single();
     if (error) throw error;
     res.json({ clinic: data });

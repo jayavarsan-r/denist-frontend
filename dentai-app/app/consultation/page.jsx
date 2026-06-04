@@ -46,8 +46,8 @@ function ConsultModeScreen() {
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--surface)' }}>
       {/* slim top bar — Exit lives top-left (where leaving always is); Live signals the mode */}
       <div style={{ flexShrink: 0, paddingTop: 54, padding: '54px 16px 10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-light)' }}>
-        <button onClick={() => router.push('/')} className="tap" style={{ display: 'flex', alignItems: 'center', gap: 6, height: 38, padding: '0 16px 0 12px', borderRadius: 19, background: 'rgba(60,60,67,0.07)', color: 'var(--text-primary)', fontSize: 15, fontWeight: 600 }}>
-          <Icon name="chevLeft" size={20} color="var(--text-primary)" /> Exit
+        <button onClick={() => router.push('/')} className="tap" style={{ display: 'flex', alignItems: 'center', gap: 5, height: 36, padding: '0 16px 0 10px', borderRadius: 99, background: '#B91C1C', color: '#fff', fontSize: 15, fontWeight: 700 }}>
+          <Icon name="chevLeft" size={18} color="#fff" /> Exit
         </button>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
           <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--orange)', animation: 'donePulse 1.5s infinite' }} />

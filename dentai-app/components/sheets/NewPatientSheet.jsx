@@ -3,46 +3,76 @@ import { useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { usePatientStore } from '@/store/usePatientStore';
 import Icon from '@/components/icons';
-import { SheetHeader, SectionHeader, PrimaryButton, PillToggle, Field } from '@/components/ui';
+import { SheetHeader, PrimaryButton } from '@/components/ui';
 import { useAudioRecorder } from '@/lib/hooks/useAudioRecorder';
 import { useTranscription } from '@/lib/hooks/useTranscription';
-import { extractComplaint as apiExtractComplaint } from '@/lib/services/ai.service';
+import { extractPatientInfo } from '@/lib/services/ai.service';
 
-const FLAG_DEFS = [
-  ['isOnBloodThinners', 'Blood thinner'], ['hasDiabetes', 'Diabetes'],
-  ['hasHeartCondition', 'Heart condition'], ['isPregnant', 'Pregnancy'],
-  ['hasHypertension', 'Hypertension'], ['penicillin', 'Penicillin allergy'],
+const FLAGS = [
+  ['isOnBloodThinners', 'Blood thinner'],
+  ['hasDiabetes', 'Diabetes'],
+  ['hasHeartCondition', 'Heart condition'],
+  ['isPregnant', 'Pregnancy'],
+  ['hasHypertension', 'Hypertension'],
+  ['penicillin', 'Penicillin allergy'],
   ['latex', 'Latex allergy'],
 ];
 
-// Smooth animated bars for active recording
+function generatePatientId() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let id = 'PT-';
+  for (let i = 0; i < 5; i++) id += chars[Math.floor(Math.random() * chars.length)];
+  return id;
+}
+
 function RecordingWave() {
-  const peaks = [5, 9, 14, 8, 18, 11, 20, 13, 16, 9, 18, 7, 12, 8, 5];
+  const peaks = [4, 8, 14, 6, 20, 10, 24, 16, 22, 12, 24, 10, 20, 8, 16, 6, 18, 10, 14, 8, 6];
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3, height: 40 }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, height: 32, width: '100%' }}>
       {peaks.map((h, i) => (
         <div key={i} style={{
-          width: 3, borderRadius: 3, background: 'var(--red)', height: h,
-          animation: `wave ${0.5 + (i % 4) * 0.12}s ease-in-out ${i * 0.05}s infinite alternate`,
+          width: 4, borderRadius: 4, background: 'rgba(255,255,255,0.9)', height: h,
+          animation: `wave ${0.5 + (i % 5) * 0.1}s ease-in-out ${i * 0.04}s infinite alternate`,
         }} />
       ))}
     </div>
   );
 }
 
-// Three bouncing dots — used for async processing steps
-function ProcessingDots({ label }) {
+/* Single field row inside the grouped card */
+function FieldRow({ label, value, onChange, type = 'text', inputMode, placeholder, half, last, autoFocus }) {
+  const filled = value && value.toString().trim().length > 0;
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-      <div style={{ display: 'flex', gap: 6, height: 36, alignItems: 'center' }}>
-        {[0, 1, 2].map(i => (
-          <div key={i} style={{
-            width: 9, height: 9, borderRadius: '50%', background: 'var(--accent)',
-            animation: `dots 1.2s ease-in-out ${i * 0.18}s infinite`,
-          }} />
-        ))}
+    <div style={{
+      display: 'flex', flexDirection: 'column',
+      flex: half ? 1 : undefined,
+      padding: '12px 16px',
+      borderBottom: last ? 'none' : '1px solid var(--border-light)',
+      minHeight: 58,
+      position: 'relative',
+    }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-tertiary)', marginBottom: 3 }}>{label}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <input
+          autoFocus={autoFocus}
+          type={type}
+          inputMode={inputMode}
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          placeholder={placeholder || label}
+          style={{
+            flex: 1, border: 'none', outline: 'none', background: 'transparent',
+            fontSize: 17, fontWeight: 500,
+            color: filled ? 'var(--text-primary)' : 'var(--text-tertiary)',
+            fontFamily: 'inherit', padding: 0,
+          }}
+        />
+        {filled && (
+          <div style={{ width: 16, height: 16, borderRadius: '50%', background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, opacity: 0.85 }}>
+            <Icon name="check" size={9} color="var(--accent-ink)" stroke={3} />
+          </div>
+        )}
       </div>
-      <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)' }}>{label}</span>
     </div>
   );
 }
@@ -51,196 +81,209 @@ export default function NewPatientSheet({ onClose }) {
   const showToast = useAppStore((s) => s.showToast);
   const addPatient = usePatientStore((s) => s.addPatient);
 
+  const [displayId] = useState(generatePatientId);
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [age, setAge] = useState('');
   const [bloodGroup, setBloodGroup] = useState('');
   const [complaint, setComplaint] = useState('');
-  const [notes, setNotes] = useState('');
   const [flags, setFlags] = useState({});
   const [saving, setSaving] = useState(false);
-  const [voiceError, setVoiceError] = useState('');
-
-  // Voice state machine: idle | recording | transcribing | extracting
   const [voicePhase, setVoicePhase] = useState('idle');
+  const [voiceError, setVoiceError] = useState('');
 
   const recorder = useAudioRecorder();
   const { transcribe } = useTranscription();
-
   const toggle = (k) => setFlags(f => ({ ...f, [k]: !f[k] }));
 
-  /* ─── Voice flow: record → Sarvam STT → Gemini extract ─── */
+  const isRecording = voicePhase === 'recording';
+  const isProcessing = voicePhase === 'transcribing' || voicePhase === 'extracting';
+
   const handleVoiceTap = async () => {
-    if (voicePhase === 'recording') {
-      // Stop recording → start Sarvam transcription
+    if (isProcessing) return;
+    if (isRecording) {
       setVoicePhase('transcribing');
       setVoiceError('');
       try {
         const blob = await recorder.stopRecording();
-
-        // Step 1: Sarvam speech-to-text
         const { text: transcript, warning } = await transcribe(blob);
-
-        if (!transcript) {
-          setVoiceError(warning || "Couldn't hear clearly — try again or type below");
-          setVoicePhase('idle');
-          return;
-        }
-
-        // Step 2: Gemini LLM — clean and translate to English
+        if (!transcript) { setVoiceError(warning || "Couldn't hear — try again"); setVoicePhase('idle'); return; }
         setVoicePhase('extracting');
-        try {
-          const result = await apiExtractComplaint(transcript);
-          const cleaned = result?.complaint || result?.chief_complaint || transcript;
-          setComplaint(cleaned);
-        } catch {
-          // Gemini failed — use raw Sarvam transcript
-          setComplaint(transcript);
-        }
-        setVoicePhase('idle');
-      } catch (e) {
-        setVoiceError('Recording failed — please try again');
+        const result = await extractPatientInfo(transcript);
+        // Only fill empty fields
+        if (result.name      && !name.trim())      setName(result.name);
+        if (result.phone     && !phone.trim())     setPhone(result.phone);
+        if (result.age       && !age.trim())       setAge(String(result.age));
+        if (result.complaint && !complaint.trim()) setComplaint(result.complaint);
+        if (result.flags) setFlags(f => ({
+          ...f, ...Object.fromEntries(Object.entries(result.flags).filter(([k, v]) => v === true && !f[k]))
+        }));
+        if (result.warning) setVoiceError(result.warning);
+        setVoicePhase('done');
+        setTimeout(() => setVoicePhase('idle'), 1800);
+      } catch (err) {
+        const msg = err?.response?.data?.error || err?.message || '';
+        setVoiceError(msg.includes('transcri') ? 'Voice recognition unavailable — type below' : 'Could not process — fill fields manually');
         setVoicePhase('idle');
       }
       return;
     }
-
-    if (voicePhase !== 'idle') return; // don't allow tap during processing
-
-    // Start recording
     setVoiceError('');
-    try {
-      await recorder.startRecording();
-      setVoicePhase('recording');
-    } catch (e) {
-      setVoiceError(e.message || 'Microphone unavailable — check browser permissions');
-    }
+    try { await recorder.startRecording(); setVoicePhase('recording'); }
+    catch (e) { setVoiceError(e.message || 'Microphone unavailable'); }
   };
 
-  /* ─── Create patient ─── */
   const create = async () => {
-    if (!name.trim()) { showToast('Add a name first'); return; }
-    if (!phone.trim()) { showToast('Add a phone number'); return; }
+    if (!name.trim()) { showToast('Name is required'); return; }
+    if (!phone.trim()) { showToast('Phone number is required'); return; }
     setSaving(true);
-    const allergies = [];
-    if (flags.penicillin) allergies.push('Penicillin');
-    if (flags.latex) allergies.push('Latex');
     try {
       await addPatient({
-        name: name.trim(),
-        phone: phone.trim(),
-        age: age ? Number(age) : null,
-        gender: 'other',
-        hasDiabetes:       !!flags.hasDiabetes,
-        hasHypertension:   !!flags.hasHypertension,
-        hasHeartCondition: !!flags.hasHeartCondition,
-        isPregnant:        !!flags.isPregnant,
+        name: name.trim(), phone: phone.trim(),
+        age: age ? Number(age) : null, gender: 'other', displayId,
+        hasDiabetes: !!flags.hasDiabetes, hasHypertension: !!flags.hasHypertension,
+        hasHeartCondition: !!flags.hasHeartCondition, isPregnant: !!flags.isPregnant,
         isOnBloodThinners: !!flags.isOnBloodThinners,
-        allergies,
-        clinicalNotes: notes,
-        chiefComplaint: complaint,
-        status: 'new',
+        allergies: [flags.penicillin && 'Penicillin', flags.latex && 'Latex'].filter(Boolean),
+        chiefComplaint: complaint, status: 'new',
       });
-      showToast('Patient created');
+      showToast(`Patient created · ${displayId}`);
       onClose();
     } catch (e) {
-      showToast(e?.response?.data?.error || 'Could not create patient — try again');
-    } finally {
-      setSaving(false);
-    }
+      showToast(e?.response?.data?.error || 'Could not create patient');
+    } finally { setSaving(false); }
   };
 
-  const isProcessing = voicePhase === 'transcribing' || voicePhase === 'extracting';
-  const isRecording = voicePhase === 'recording';
+  const btnLabel = voicePhase === 'transcribing' ? 'Transcribing…'
+    : voicePhase === 'extracting' ? 'Filling fields…'
+    : voicePhase === 'done' ? 'All done'
+    : isRecording ? `${recorder.seconds}s  ·  Tap to finish`
+    : (name || phone) ? 'Speak to add more'
+    : 'Speak patient details';
+
+  const btnSub = isProcessing ? null
+    : voicePhase === 'done' ? 'Review and edit below'
+    : isRecording ? 'Name · phone · age · complaint'
+    : 'Fill everything hands-free';
 
   return (
-    <div style={{ padding: '0 20px 28px' }}>
+    <div style={{ padding: '0 20px 32px' }}>
       <SheetHeader title="New patient" onClose={onClose} />
 
-      {/* ── Basic info ── */}
-      <div className="card" style={{ padding: 16, marginBottom: 18 }}>
-        <Field value={name} onChange={setName} placeholder="Full name" autoFocus />
-        <div style={{ height: 14 }} />
-        <Field value={phone} onChange={setPhone} placeholder="Phone number" type="tel" />
-        <div style={{ height: 14 }} />
-        <div style={{ display: 'flex', gap: 12 }}>
-          <div style={{ flex: 1 }}>
-            <Field value={age} onChange={v => setAge(v.replace(/\D/g, ''))} placeholder="Age" type="tel" />
-          </div>
-          <div style={{ flex: 1 }}>
-            <Field value={bloodGroup} onChange={setBloodGroup} placeholder="Blood group" />
-          </div>
-        </div>
+      {/* Patient ID badge */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 18 }}>
+        <span style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>Patient ID</span>
+        <span style={{
+          height: 26, padding: '0 10px', borderRadius: 99,
+          background: 'rgba(60,60,67,0.07)',
+          display: 'inline-flex', alignItems: 'center',
+          fontSize: 13, fontWeight: 700, letterSpacing: '0.05em', color: 'var(--text-secondary)',
+        }}>{displayId}</span>
       </div>
 
-      {/* ── Chief complaint with voice ── */}
-      <SectionHeader>Chief complaint</SectionHeader>
-
-      {/* Voice button */}
+      {/* ── Voice button ── */}
       <button
         onClick={handleVoiceTap}
         disabled={isProcessing}
         style={{
-          width: '100%',
-          border: `1.5px dashed ${isRecording ? 'var(--red)' : isProcessing ? 'var(--accent)' : voiceError ? 'var(--red)' : 'var(--border)'}`,
-          borderRadius: 12, padding: '18px 16px',
-          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
-          background: isRecording ? 'rgba(255,59,48,0.04)' : isProcessing ? 'rgba(28,28,30,0.03)' : 'rgba(255,255,255,0.5)',
-          marginBottom: voiceError ? 6 : 12,
-          transition: 'border-color .2s ease, background .2s ease',
-          cursor: isProcessing ? 'default' : 'pointer',
+          width: '100%', borderRadius: 99,
+          background: voicePhase === 'done' ? '#16A34A' : isRecording ? '#C0392B' : 'var(--accent)',
+          border: 'none', cursor: isProcessing ? 'default' : 'pointer',
+          transition: 'background .25s ease', marginBottom: voiceError ? 8 : 20,
+          /* layout switches between recording and idle */
+          display: 'flex',
+          flexDirection: isRecording ? 'column' : 'row',
+          alignItems: 'center',
+          justifyContent: isRecording ? 'center' : 'flex-start',
+          gap: isRecording ? 6 : 14,
+          padding: isRecording ? '18px 20px 14px' : '16px 18px',
         }}
       >
-        {voicePhase === 'transcribing' ? (
-          <ProcessingDots label="Sarvam is transcribing your voice…" />
-        ) : voicePhase === 'extracting' ? (
-          <ProcessingDots label="Gemini is cleaning the complaint…" />
-        ) : isRecording ? (
+        {isRecording ? (
+          /* Recording — waveform full-width, timer + hint below */
           <>
             <RecordingWave />
-            <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--red)' }}>
-              {recorder.seconds}s · Tap to stop
-            </span>
-            <span className="t-meta">Speak in Tamil or English</span>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#fff' }}>
+              {recorder.seconds}s · Tap to finish
+            </div>
+            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.65)' }}>
+              Name · phone · age · complaint
+            </div>
           </>
         ) : (
+          /* Idle / processing / done — icon + text side by side */
           <>
-            <div style={{ width: 46, height: 46, borderRadius: '50%', background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Icon name="mic" size={22} color="var(--accent-ink)" />
+            <div style={{ width: 46, height: 46, borderRadius: '50%', background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              {isProcessing
+                ? <div style={{ width: 20, height: 20, borderRadius: '50%', border: '2.5px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', animation: 'spin .7s linear infinite' }} />
+                : voicePhase === 'done'
+                ? <Icon name="check" size={24} color="#fff" stroke={2.5} />
+                : <Icon name="mic" size={24} color="#fff" />}
             </div>
-            <span style={{ fontSize: 15, fontWeight: 600 }}>Record complaint</span>
-            <span className="t-meta">Tamil or English → Sarvam STT → Gemini cleanup</span>
+            <div style={{ flex: 1, textAlign: 'left' }}>
+              <div style={{ fontSize: 16, fontWeight: 700, color: '#fff' }}>{btnLabel}</div>
+              {btnSub && <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.72)', marginTop: 2 }}>{btnSub}</div>}
+            </div>
           </>
         )}
       </button>
 
-      {/* Error message */}
-      {voiceError && (
-        <p style={{ fontSize: 12, color: 'var(--red)', margin: '0 0 10px 4px' }}>{voiceError}</p>
-      )}
+      {voiceError && <p style={{ fontSize: 12.5, color: 'var(--red)', margin: '0 0 14px 2px' }}>{voiceError}</p>}
 
-      {/* Editable text field — always visible so user can type or correct */}
-      <Field
-        multiline value={complaint} onChange={setComplaint}
-        placeholder="Or type the chief complaint here…"
-        minHeight={52}
-      />
-
-      <div style={{ height: 18 }} />
-
-      {/* ── Clinical flags ── */}
-      <SectionHeader>Clinical flags</SectionHeader>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 18 }}>
-        {FLAG_DEFS.map(([k, label]) => (
-          <PillToggle key={k} label={label} active={!!flags[k]} onClick={() => toggle(k)} />
-        ))}
+      {/* ── Grouped card — iOS-style inset table ── */}
+      <div style={{ background: 'var(--surface)', borderRadius: 20, overflow: 'hidden', boxShadow: 'var(--elevation-1)', marginBottom: 16 }}>
+        <FieldRow label="Full name"    value={name}    onChange={setName}  placeholder="Full name" autoFocus />
+        <FieldRow label="Phone number" value={phone}   onChange={v => setPhone(v.replace(/\D/g, '').slice(0, 10))} inputMode="tel" placeholder="Phone number" />
+        {/* Age + Blood group side by side */}
+        <div style={{ display: 'flex', borderBottom: 'none' }}>
+          <FieldRow label="Age"         value={age}        onChange={v => setAge(v.replace(/\D/g, ''))} inputMode="numeric" placeholder="Age" half />
+          <div style={{ width: 1, background: 'var(--border-light)', alignSelf: 'stretch', margin: '10px 0' }} />
+          <FieldRow label="Blood group" value={bloodGroup} onChange={v => setBloodGroup(v.toUpperCase())} placeholder="A+" half last />
+        </div>
       </div>
 
-      <Field label="Notes" multiline value={notes} onChange={setNotes} placeholder="Add clinical notes…" minHeight={44} />
+      {/* ── Chief complaint card ── */}
+      <div style={{ background: 'var(--surface)', borderRadius: 20, overflow: 'hidden', boxShadow: 'var(--elevation-1)', marginBottom: 20 }}>
+        <div style={{ padding: '12px 16px' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-tertiary)', marginBottom: 6 }}>Chief complaint</div>
+          <textarea
+            value={complaint}
+            onChange={e => setComplaint(e.target.value)}
+            placeholder="What brings the patient in?"
+            rows={2}
+            style={{
+              width: '100%', border: 'none', outline: 'none', background: 'transparent',
+              fontSize: 16, fontFamily: 'inherit', resize: 'none', padding: 0,
+              color: complaint ? 'var(--text-primary)' : 'var(--text-tertiary)',
+              lineHeight: 1.5, minHeight: 48,
+            }}
+          />
+        </div>
+      </div>
 
-      <div style={{ height: 22 }} />
-      <PrimaryButton onClick={create} style={{ opacity: saving ? 0.6 : 1 }}>
-        {saving ? 'Creating…' : 'Create patient'}
+      {/* ── Medical flags ── */}
+      <div style={{ marginBottom: 26 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 10 }}>Medical flags</div>
+        <div className="noscroll-x" style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 2 }}>
+          {FLAGS.map(([k, label]) => {
+            const on = !!flags[k];
+            return (
+              <button key={k} onClick={() => toggle(k)} style={{
+                height: 34, padding: '0 14px', borderRadius: 99, flexShrink: 0,
+                fontSize: 13, fontWeight: 600,
+                background: on ? '#C0392B' : 'var(--surface)',
+                color: on ? '#fff' : 'var(--text-secondary)',
+                border: on ? 'none' : '1px solid var(--border)',
+                boxShadow: on ? 'none' : 'var(--elevation-1)',
+                transition: 'all .15s ease',
+              }}>{label}</button>
+            );
+          })}
+        </div>
+      </div>
+
+      <PrimaryButton onClick={create} style={{ opacity: saving ? 0.6 : 1, borderRadius: 99 }}>
+        {saving ? 'Creating…' : `Create patient · ${displayId}`}
       </PrimaryButton>
     </div>
   );

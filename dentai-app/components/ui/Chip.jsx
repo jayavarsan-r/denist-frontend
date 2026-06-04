@@ -17,7 +17,7 @@ function Chip({ label, tone = 'neutral', size = 'sm', style }) {
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: 5,
       background: t.bg, color: t.fg, border: t.border || 'none',
-      borderRadius: 8, padding: size === 'lg' ? '5px 11px' : '3px 8px',
+      borderRadius: 99, padding: size === 'lg' ? '5px 12px' : '3px 9px',
       fontSize: size === 'lg' ? 13 : 12, fontWeight: 600, whiteSpace: 'nowrap',
       ...style,
     }}>{label}</span>

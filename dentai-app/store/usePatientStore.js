@@ -18,6 +18,7 @@ function toArray(value) {
 function normalisePatient(raw) {
   return {
     id: raw.patient_id ?? raw.id,
+    displayId: raw.display_id ?? raw.displayId ?? null,
     name: raw.name ?? '',
     phone: raw.phone ?? '',
     age: raw.age ?? null,

@@ -21,6 +21,8 @@ import CheckInSheet from '@/components/sheets/CheckInSheet';
 import RemoveQueueSheet from '@/components/sheets/RemoveQueueSheet';
 import RecordDiagnosisSheet from '@/components/sheets/RecordDiagnosisSheet';
 import QueueActionsSheet from '@/components/sheets/QueueActionsSheet';
+import VisitRecordSheet from '@/components/sheets/VisitRecordSheet';
+import PrescriptionDesignSheet from '@/components/sheets/PrescriptionDesignSheet';
 
 const SHEETS = {
   account: AccountSettingsSheet,
@@ -43,6 +45,8 @@ const SHEETS = {
   removeQueue: RemoveQueueSheet,
   recordDiagnosis: RecordDiagnosisSheet,
   queueActions: QueueActionsSheet,
+  visitRecord: VisitRecordSheet,
+  prescriptionDesign: PrescriptionDesignSheet,
 };
 
 export default function SheetHost() {

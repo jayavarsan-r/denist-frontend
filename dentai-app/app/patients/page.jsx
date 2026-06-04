@@ -30,6 +30,7 @@ function PatientsScreen() {
   const clearPatientsFocus = useAppStore(s => s.clearPatientsFocus);
   const openSheet = useAppStore(s => s.openSheet);
   const patients = usePatientStore(s => s.patients);
+  const patientsLoading = usePatientStore(s => s.loading);
   const visits = useVisitStore(s => s.visits);
   const procedures = useClinicalStore(s => s.procedures);
   const bills = useClinicalStore(s => s.bills);
@@ -58,7 +59,13 @@ function PatientsScreen() {
   const outstandingFor = (pid) => bills.filter(b => b.patientId === pid).reduce((s, b) => s + b.outstanding, 0);
 
   let list = patients.filter(p => {
-    if (query && !(p.name.toLowerCase().includes(query.toLowerCase()) || p.phone.includes(query))) return false;
+    if (query) {
+      const q = query.toLowerCase();
+      const matchName = p.name.toLowerCase().includes(q);
+      const matchPhone = p.phone.includes(query.replace(/\D/g, ''));
+      const matchId = p.displayId && p.displayId.toLowerCase().includes(q);
+      if (!matchName && !matchPhone && !matchId) return false;
+    }
     if (filter !== 'All') {
       const procs = procedures.filter(pr => pr.patientId === p.id);
       if (!procs.some(pr => pr.type === filter)) return false;
@@ -72,7 +79,7 @@ function PatientsScreen() {
   const rowH = 'standard' === 'compact' ? 60 : 68;
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
       <div className="scroll" style={{ flex: 1 }}>
         {/* header */}
         <div style={{ padding: '58px 20px 8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -84,7 +91,7 @@ function PatientsScreen() {
         <div style={{ padding: '0 20px' }}>
           <div className="card" style={{ height: 44, borderRadius: 12, display: 'flex', alignItems: 'center', padding: '0 14px', gap: 10 }}>
             <Icon name="search" size={18} color="var(--text-secondary)" />
-            <input ref={inputRef} value={query} onChange={e => setQuery(e.target.value)} placeholder="Name or phone number" style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: 16 }} />
+            <input ref={inputRef} value={query} onChange={e => setQuery(e.target.value)} placeholder="Name, phone, or patient ID…" style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: 16 }} />
             <Icon name="mic" size={18} color="var(--text-secondary)" />
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
@@ -97,7 +104,11 @@ function PatientsScreen() {
         {/* list */}
         <div style={{ padding: '8px 20px 16px' }}>
           <SectionHeader>{sort === 'Recent' ? 'Recent patients' : sort + ' order'}</SectionHeader>
-          {list.length === 0 ? (
+          {patientsLoading && patients.length === 0 ? (
+            <div className="card" style={{ padding: 32, display: 'flex', justifyContent: 'center' }}>
+              <div style={{ width: 24, height: 24, borderRadius: '50%', border: '3px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin .7s linear infinite' }} />
+            </div>
+          ) : list.length === 0 ? (
             <div className="card"><EmptyState icon="person" title="No patients found" hint="Try a different name or filter" /></div>
           ) : (
             <div className="card" style={{ overflow: 'hidden' }}>

@@ -5,6 +5,28 @@ import {
   createAppointment,
   updateAppointment as apiUpdateAppointment,
 } from '@/lib/services/appointment.service';
+import { listVisits } from '@/lib/services/visit.service';
+
+function normaliseClinicalVisit(raw) {
+  return {
+    id: raw.id,
+    type: 'consultation',
+    patientId: raw.patient_id,
+    dentistId: raw.dentist_id,
+    date: raw.visit_date || raw.created_at?.slice(0, 10) || '',
+    procedureName: raw.procedure_name || '',
+    toothNumber: raw.tooth_number || null,
+    status: raw.status || 'completed',
+    notes: raw.notes || '',
+    medications: raw.medications || [],
+    nextSteps: raw.next_steps || '',
+    followUpDate: raw.follow_up_date || null,
+    rawTranscript: raw.raw_transcript || '',
+    cost: raw.cost || null,
+    currency: raw.currency || 'INR',
+    createdAt: raw.created_at || null,
+  };
+}
 
 function normaliseAppointment(raw) {
   // Strip trailing seconds from time strings like "09:00:00" → "09:00"
@@ -31,8 +53,19 @@ function normaliseAppointment(raw) {
 
 export const useVisitStore = create((set) => ({
   visits: [],
+  clinicalVisits: [],
   loading: false,
   error: null,
+
+  loadClinicalVisits: async () => {
+    try {
+      const raw = await listVisits();
+      const list = raw?.visits || (Array.isArray(raw) ? raw : []);
+      set({ clinicalVisits: list.map(normaliseClinicalVisit) });
+    } catch (err) {
+      console.warn('[VisitStore] loadClinicalVisits failed', err?.message);
+    }
+  },
 
   loadAppointments: async (date) => {
     set({ loading: true, error: null });

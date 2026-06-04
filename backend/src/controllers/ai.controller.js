@@ -34,25 +34,24 @@ exports.transcribe = async (req, res, next) => {
     const origName = req.file.originalname || '';
     const mimeType = req.file.mimetype || 'audio/ogg';
 
-    let ext = 'ogg'; // safe default Sarvam accepts
-    if (origName.endsWith('.ogg') || mimeType.includes('ogg')) ext = 'ogg';
-    else if (origName.endsWith('.mp4') || origName.endsWith('.m4a') || mimeType.includes('mp4') || mimeType.includes('mpeg')) ext = 'm4a';
+    // Sarvam accepts: wav, mp3, ogg, flac, m4a — NOT webm
+    // Chrome records webm/opus → we label it as ogg/opus (same codec, Sarvam accepts the container)
+    let ext = 'ogg'; // safe default
+    if (origName.endsWith('.m4a') || origName.endsWith('.mp4') || mimeType.includes('mp4') || mimeType.includes('mpeg')) ext = 'm4a';
     else if (origName.endsWith('.wav') || mimeType.includes('wav')) ext = 'wav';
     else if (origName.endsWith('.mp3') || mimeType.includes('mp3')) ext = 'mp3';
-    // webm is NOT accepted by Sarvam — rename to ogg (same opus codec, Sarvam accepts the container)
-    // This works because webm/opus and ogg/opus share the same audio codec
+    else if (origName.endsWith('.flac') || mimeType.includes('flac')) ext = 'flac';
+    // webm and ogg both use Opus codec → tell Sarvam it's ogg
+    // ogg stays ogg
 
     const filename = `recording.${ext}`;
-    const contentType = ext === 'ogg' ? 'audio/ogg' : ext === 'm4a' ? 'audio/mp4' : `audio/${ext}`;
-    console.log(`Transcribe: file=${filename} mime=${mimeType} orig=${origName}`);
+    const contentType = ext === 'm4a' ? 'audio/mp4' : ext === 'wav' ? 'audio/wav' : `audio/${ext}`;
+    console.log(`[Sarvam] Sending: filename=${filename} contentType=${contentType} origMime=${mimeType} size=${req.file.size}b`);
 
     const formData = new FormData();
-    formData.append('file', fs.createReadStream(req.file.path), {
-      filename,
-      contentType,
-    });
-    formData.append('language_code', 'en-IN');
+    formData.append('file', fs.createReadStream(req.file.path), { filename, contentType });
     formData.append('model', 'saarika:v2.5');
+    formData.append('language_code', 'en-IN');   // en-IN handles Tamil + English mixing reliably
     formData.append('with_timestamps', 'false');
 
     const response = await axios.post('https://api.sarvam.ai/speech-to-text', formData, {
@@ -82,11 +81,12 @@ exports.transcribe = async (req, res, next) => {
     res.json({ transcript: response.data.transcript, audioStoragePath, audioFileSizeKb });
   } catch (e) {
     if (req.file?.path) try { fs.unlinkSync(req.file.path); } catch {}
-    const sarvamErr = e.response?.data?.error?.message || e.response?.data?.message || e.message;
-    console.error('Transcribe error (Sarvam):', sarvamErr, '| HTTP:', e.response?.status, '| Body:', JSON.stringify(e.response?.data));
+    const sarvamBody = e.response?.data;
+    const sarvamErr = sarvamBody?.error?.message || sarvamBody?.message || sarvamBody?.detail || e.message;
+    console.error('[Sarvam] HTTP', e.response?.status, '| body:', JSON.stringify(sarvamBody));
     res.json({
       transcript: '',
-      warning: `Transcription failed: ${sarvamErr}. You can type your notes manually below.`,
+      warning: `Sarvam error (${e.response?.status || 'network'}): ${sarvamErr}`,
     });
   }
 };
@@ -237,6 +237,124 @@ Recording: ${transcript}`;
   } catch (e) {
     console.error('extractPatient error:', e.message);
     res.json({ patient: { age: null, gender: null, bloodGroup: null, conditions: [], allergies: [], medications: [] } });
+  }
+};
+
+exports.extractPatientInfo = async (req, res, next) => {
+  try {
+    const { transcript } = req.body;
+    if (!transcript) return res.status(400).json({ error: 'transcript required' });
+
+    const geminiKey = process.env.GEMINI_API_KEY;
+    if (!geminiKey || geminiKey.startsWith('your_')) {
+      return res.json({ name: '', age: null, phone: '', complaint: transcript, flags: {} });
+    }
+
+    const prompt = `You are a dental clinic assistant. Extract patient registration details from a receptionist or doctor's voice note. The voice may be in Tamil, English, or Tanglish (Tamil + English mix).
+
+Return ONLY valid JSON — no markdown, no explanation:
+{
+  "name": "string or null — patient's full name",
+  "age": number or null — patient's age as integer,
+  "phone": "string or null — 10-digit mobile number, digits only, no spaces/dashes",
+  "complaint": "string or null — chief complaint in clear English (max 20 words)",
+  "flags": {
+    "hasDiabetes": boolean,
+    "hasHypertension": boolean,
+    "hasHeartCondition": boolean,
+    "isPregnant": boolean,
+    "isOnBloodThinners": boolean,
+    "penicillin": boolean,
+    "latex": boolean
+  }
+}
+
+Rules:
+- "sugar patient" or "diabetic" = hasDiabetes: true
+- "BP" or "pressure" = hasHypertension: true
+- "heart problem" or "cardiac" = hasHeartCondition: true
+- "blood thinner" or "warfarin" = isOnBloodThinners: true
+- "penicillin allergy" = penicillin: true
+- "latex allergy" = latex: true
+- Name: capitalize properly (e.g. "arjun kumar" → "Arjun Kumar")
+- Phone: extract 10 consecutive digits if mentioned
+- If a field is not mentioned, return null or false
+- Translate Tamil complaint to English
+
+Voice note: ${transcript}`;
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${geminiKey}`;
+    const response = await axios.post(url, {
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.1, maxOutputTokens: 512 },
+    }, { headers: { 'Content-Type': 'application/json' }, timeout: 20000 });
+
+    let text = (response.data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+    text = text.replace(/^```json?\n?/i, '').replace(/```$/, '').trim();
+    const result = JSON.parse(text);
+    res.json(result);
+  } catch (e) {
+    console.error('extractPatientInfo error:', e.response?.data || e.message);
+    res.json({ name: null, age: null, phone: null, complaint: null, flags: {}, warning: 'Could not extract — please fill manually' });
+  }
+};
+
+exports.extractPrescription = async (req, res, next) => {
+  try {
+    const { transcript } = req.body;
+    if (!transcript) return res.status(400).json({ error: 'transcript required' });
+
+    const geminiKey = process.env.GEMINI_API_KEY;
+    if (!geminiKey || geminiKey.startsWith('your_')) {
+      return res.json({
+        medicines: [
+          { name: 'Amoxicillin', dosage: '500mg', frequency: 'TDS', duration: '5 days', notes: 'After food' },
+          { name: 'Ibuprofen',   dosage: '400mg', frequency: 'BD',  duration: '3 days', notes: 'After food' },
+        ],
+        instructions: 'Avoid hard food. Warm salt water rinse twice daily.',
+        followUpDays: 7,
+      });
+    }
+
+    const prompt = `You are a dental clinical AI assistant. Extract a prescription from the dentist's voice note.
+Return ONLY valid JSON with this exact schema — no markdown, no explanation:
+{
+  "medicines": [
+    {
+      "name": "string (medicine name only, no dose here)",
+      "dosage": "string (e.g. '500mg', '1 tab')",
+      "frequency": "OD|BD|TDS|QID|SOS|HS (choose the closest match)",
+      "duration": "string (e.g. '5 days', '1 week')",
+      "notes": "string or null (e.g. 'after food', 'before bed')",
+      "uncertain": boolean (true if you're not confident about this medicine)
+    }
+  ],
+  "instructions": "string or null (general patient instructions beyond individual medicines)",
+  "followUpDays": number or null
+}
+
+Rules:
+- If the doctor says 'Amoxicillin 500mg three times a day for 5 days after food', extract: name=Amoxicillin, dosage=500mg, frequency=TDS, duration=5 days, notes=after food
+- Common Indian dental medicines: Amoxicillin, Metronidazole (Flagyl), Ibuprofen, Diclofenac, Paracetamol, Clindamycin, Chlorhexidine mouthwash, Pantoprazole, Aceclofenac
+- 'once daily'=OD, 'twice daily'=BD, 'thrice daily'=TDS, 'four times'=QID, 'at night'=HS, 'as needed'=SOS
+- Return empty array for medicines if none found
+- Be generous with uncertain=true when you're guessing
+
+Voice note: ${transcript}`;
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${geminiKey}`;
+    const response = await axios.post(url, {
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.1, maxOutputTokens: 1024 },
+    }, { headers: { 'Content-Type': 'application/json' }, timeout: 20000 });
+
+    let text = (response.data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+    text = text.replace(/^```json?\n?/i, '').replace(/```$/, '').trim();
+    const result = JSON.parse(text);
+    res.json(result);
+  } catch (e) {
+    console.error('extractPrescription error:', e.response?.data || e.message);
+    res.json({ medicines: [], instructions: null, followUpDays: null, warning: 'Could not extract — please fill manually' });
   }
 };
 
