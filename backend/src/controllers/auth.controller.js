@@ -222,6 +222,11 @@ exports.getMe = async (req, res, next) => {
     }
     if (req.clinicId) {
       const { data: c } = await supabase.from('clinics').select('*').eq('id', req.clinicId).single();
+      if (c && !c.join_code) {
+        const newCode = await uniqueJoinCode();
+        await supabase.from('clinics').update({ join_code: newCode }).eq('id', c.id);
+        c.join_code = newCode;
+      }
       clinic = c;
     }
     res.json({ dentist, staff, clinic });

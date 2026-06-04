@@ -21,6 +21,8 @@ exports.transcribe = async (req, res, next) => {
       return res.status(400).json({ error: 'No audio file received. Make sure field name is "audio".' });
     }
 
+    const recordingType = req.body?.recordingType || 'general';
+
     const noKey = !process.env.SARVAM_API_KEY || process.env.SARVAM_API_KEY === 'your_sarvam_api_key_here';
     if (noKey) {
       try { fs.unlinkSync(req.file.path); } catch {}
@@ -69,12 +71,28 @@ exports.transcribe = async (req, res, next) => {
       const tempId = `tmp_${Date.now()}`;
       const uploaded = await storageService.uploadFile(
         req.file.path, 'voice-notes',
-        `${req.dentistId}/${tempId}`
+        `${recordingType}/${req.dentistId}/${tempId}`
       );
       audioStoragePath = uploaded.storagePath;
       audioFileSizeKb = uploaded.sizeKb;
     } catch (uploadErr) {
       console.error('[AI] Audio upload failed (non-fatal):', uploadErr.message);
+    }
+
+    // Save to voice_recordings dataset table (non-fatal)
+    if (audioStoragePath) {
+      try {
+        const supabase = require('../config/supabase');
+        await supabase.from('voice_recordings').insert({
+          dentist_id:     req.dentistId,
+          recording_type: recordingType,
+          transcript:     response.data.transcript || '',
+          audio_path:     audioStoragePath,
+          audio_size_kb:  audioFileSizeKb,
+        });
+      } catch (datasetErr) {
+        console.error('[AI] voice_recordings insert failed (non-fatal):', datasetErr.message);
+      }
     }
 
     try { fs.unlinkSync(req.file.path); } catch {}
@@ -198,13 +216,14 @@ exports.extractPatient = async (req, res, next) => {
 
     const geminiKey = process.env.GEMINI_API_KEY;
     if (!geminiKey || geminiKey.startsWith('your_')) {
-      return res.json({ patient: { age: null, gender: null, bloodGroup: null, conditions: [], allergies: [], medications: [] } });
+      return res.json({ patient: { name: null, age: null, gender: null, bloodGroup: null, conditions: [], allergies: [], medications: [] } });
     }
 
     const prompt = `You are a medical receptionist assistant at an Indian dental clinic. The receptionist has recorded patient details by voice — it may be in Tamil, English, or Tanglish.
 
 Extract the following fields and return ONLY valid JSON:
 {
+  "name": "string or null — patient's full name if mentioned. Look for 'patient name is X', 'her name is X', 'his name is X', 'name X'. Return full name as stated.",
   "age": number or null,
   "gender": "Male" | "Female" | "Other" | null,
   "bloodGroup": "A+" | "A-" | "B+" | "B-" | "O+" | "O-" | "AB+" | "AB-" | null,
@@ -236,7 +255,7 @@ Recording: ${transcript}`;
     res.json({ patient });
   } catch (e) {
     console.error('extractPatient error:', e.message);
-    res.json({ patient: { age: null, gender: null, bloodGroup: null, conditions: [], allergies: [], medications: [] } });
+    res.json({ patient: { name: null, age: null, gender: null, bloodGroup: null, conditions: [], allergies: [], medications: [] } });
   }
 };
 
