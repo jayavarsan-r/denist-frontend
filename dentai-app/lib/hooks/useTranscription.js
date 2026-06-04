@@ -9,7 +9,7 @@ import { transcribeAudio } from '@/lib/services/ai.service';
  *   loading  boolean
  *   error    string | null
  */
-export function useTranscription() {
+export function useTranscription(recordingType = 'general') {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -27,7 +27,12 @@ export function useTranscription() {
         : 'webm';
       const data = await transcribeAudio(blob, `recording.${ext}`);
       setLoading(false);
-      return { text: data.transcript || '', warning: data.warning || null };
+      return {
+        text: data.transcript || '',
+        warning: data.warning || null,
+        audioStoragePath: data.audioStoragePath || null,
+        audioFileSizeKb: data.audioFileSizeKb || null,
+      };
     } catch (e) {
       const msg = e?.response?.data?.error || e?.response?.data?.message || 'Transcription failed';
       setError(msg);

@@ -45,7 +45,7 @@ export default function RecordDiagnosisSheet({ params, onClose }) {
   const [aiError, setAiError] = useState(null);
 
   const recorder = useAudioRecorder();
-  const { transcribe, loading: transcribing } = useTranscription();
+  const { transcribe, loading: transcribing } = useTranscription('diagnosis');
   const { generateFromTranscript, loading: generating } = useGenerateNote();
 
   if (!entry || !p) return null;

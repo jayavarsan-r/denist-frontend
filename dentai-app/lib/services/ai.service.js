@@ -1,8 +1,9 @@
 import { apiClient } from '../api/client';
 
-export async function transcribeAudio(audioBlob, filename) {
+export async function transcribeAudio(audioBlob, filename, recordingType = 'general') {
   const formData = new FormData();
   formData.append('audio', audioBlob, filename || 'recording.webm');
+  if (recordingType !== 'general') formData.append('recordingType', recordingType);
   const { data } = await apiClient.post('/api/ai/transcribe', formData);
   return data;
 }
