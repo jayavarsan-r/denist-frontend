@@ -11,7 +11,7 @@ import Icon from '@/components/icons';
 import { SectionHeader, Chip, StatusChip, Avatar, EmptyState, SelectPill, Segmented } from '@/components/ui';
 import { TODAY } from '@/lib/data/patients';
 import { STAFF } from '@/lib/data/queue';
-import { formatCurrency, formatCurrencyK, formatDate, formatDateLong, formatTime, parseDate, getInitials, hasComplications, clinicianFlags, MONTHS, DAYS, DAYS_FULL } from '@/lib/data/utils';
+import { formatCurrency, formatCurrencyK, formatDate, formatDateLong, formatTime, parseDate, getInitials, hasComplications, clinicianFlags, MONTHS, DAYS, DAYS_FULL, getGreeting } from '@/lib/data/utils';
 
 const APPT_DOT = { confirmed: 'var(--blue)', arrived: 'var(--yellow)', done: 'var(--green)', no_show: 'var(--red)', scheduled: 'var(--blue)', completed: 'var(--green)', cancelled: 'var(--red)' };
 const APPT_WORD = { confirmed: 'Confirmed', arrived: 'In chair', done: 'Done', no_show: 'No-show' };
@@ -63,17 +63,18 @@ function HomeScreen() {
   bills.filter(b => b.outstanding > 0).forEach(b => { if (!alerts.some(a => a.pid === b.patientId && a.kind === 'pay')) alerts.push({ pid: b.patientId, kind: 'pay', text: formatCurrency(b.outstanding) + ' pending', name: b.patientName }); });
 
   const firstName = (clinic.doctorName || 'Doctor').replace(/^Dr\.?\s*/i, 'Dr. ');
+  const greeting = useMemo(() => getGreeting(), []);
 
   return (
     <div className="scroll" style={{ flex: 1, background: 'var(--surface)' }}>
       {/* greeting */}
       <div style={{ padding: '58px 22px 18px', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
         <div>
-          <div style={{ fontSize: 15, color: 'var(--text-secondary)', fontWeight: 500 }}>Good morning</div>
+          <div style={{ fontSize: 15, color: 'var(--text-secondary)', fontWeight: 500 }}>{greeting}</div>
           <div style={{ fontSize: 30, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.08, marginTop: 1 }}>{firstName}</div>
           <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginTop: 3 }}>{clinic.clinicName}</div>
         </div>
-        <button onClick={() => openSheet('account')} style={{ width: 42, height: 42, borderRadius: '50%', background: 'rgba(60,60,67,0.07)', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 14, flexShrink: 0 }}>{STAFF.doctor.initials}</button>
+        <button onClick={() => openSheet('account')} style={{ width: 42, height: 42, borderRadius: '50%', background: 'rgba(60,60,67,0.07)', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 14, flexShrink: 0 }}>{(clinic.doctorName || 'Dr').replace(/^Dr\.?\s*/i, '').split(' ').map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase() || 'DR'}</button>
       </div>
 
       {/* search */}
@@ -102,21 +103,45 @@ function HomeScreen() {
         <Eyebrow>Quick actions</Eyebrow>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           {[
-            { icon: 'personPlus', label: 'Add patient',  sub: 'New or walk-in', bg: 'var(--green)',  ink: '#fff',      fn: () => openSheet('newPatient') },
-            { icon: 'pencil',     label: 'Prescription', sub: 'Write Rx',       bg: 'var(--blue)',   ink: '#fff',      fn: () => openSheet('rx', {}) },
-            { icon: 'flask',      label: 'Lab order',    sub: 'Send to lab',    bg: 'var(--red)',    ink: '#fff',      fn: () => openSheet('newLab', {}) },
-            { icon: 'rupee',      label: 'Collect',      sub: 'Bill & payment', bg: 'var(--yellow)', ink: '#1C1C1E',  fn: () => router.push('/finance') },
-          ].map(a => (
-            <button key={a.label} onClick={a.fn} className="tap" style={{ background: a.bg, borderRadius: 24, padding: '14px', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 10, textAlign: 'left' }}>
-              <div style={{ width: 40, height: 40, borderRadius: 12, background: 'rgba(255,255,255,0.22)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Icon name={a.icon} size={20} color={a.ink} stroke={2} />
-              </div>
-              <div>
-                <div style={{ fontSize: 15.5, fontWeight: 700, letterSpacing: '-0.01em', color: a.ink }}>{a.label}</div>
-                <div style={{ fontSize: 12.5, color: a.ink === '#fff' ? 'rgba(255,255,255,0.72)' : 'rgba(28,28,30,0.6)', marginTop: 2 }}>{a.sub}</div>
-              </div>
-            </button>
-          ))}
+            { icon: 'personPlus', label: 'Add patient',  sub: 'New or walk-in', bg: 'var(--green)',  ink: '#fff',     fn: () => openSheet('newPatient') },
+            { icon: 'pencil',     label: 'Prescription', sub: 'Write Rx',       bg: 'var(--blue)',   ink: '#fff',     fn: () => openSheet('rx', {}) },
+            { icon: 'flask',      label: 'Lab order',    sub: 'Send to lab',    bg: 'var(--red)',    ink: '#fff',     fn: () => openSheet('newLab', {}) },
+            { icon: 'rupee',      label: 'Collect',      sub: 'Bill & payment', bg: 'var(--yellow)', ink: '#1C1C1E', fn: () => router.push('/finance') },
+          ].map(a => {
+            const dark = a.ink !== '#fff';
+            return (
+              <button key={a.label} onClick={a.fn} className="tap" style={{
+                background: a.bg,
+                borderRadius: 22,
+                padding: '16px',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'flex-start',
+                textAlign: 'left',
+                minHeight: 136,
+                position: 'relative',
+                overflow: 'hidden',
+                boxShadow: dark
+                  ? 'inset 0 1px 0 rgba(255,255,255,0.35), 0 4px 12px rgba(0,0,0,0.14)'
+                  : 'inset 0 1px 0 rgba(255,255,255,0.28), 0 4px 12px rgba(0,0,0,0.18)',
+              }}>
+                {/* icon */}
+                <div style={{
+                  width: 46, height: 46, borderRadius: 14,
+                  background: dark ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.22)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  marginBottom: 'auto',
+                }}>
+                  <Icon name={a.icon} size={22} color={a.ink} stroke={2} />
+                </div>
+                {/* label + sub */}
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: '-0.025em', color: a.ink, lineHeight: 1.15 }}>{a.label}</div>
+                  <div style={{ fontSize: 12, fontWeight: 500, color: dark ? 'rgba(28,28,30,0.52)' : 'rgba(255,255,255,0.72)', marginTop: 3 }}>{a.sub}</div>
+                </div>
+              </button>
+            );
+          })}
         </div>
       </div>
 

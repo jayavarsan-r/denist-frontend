@@ -344,24 +344,34 @@ export default function LoginPage() {
           </label>
           <label style={{ display: 'block', marginBottom: 20 }}>
             <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8 }}>Clinic join code</div>
-            <input value={joinCode} onChange={e => { setJoinCode(e.target.value.toUpperCase()); setClinicPreview(null); setJoinError(''); }} placeholder="e.g. DENT-MUM-423" style={{ width: '100%', border: 'none', borderBottom: '1.5px solid var(--border)', outline: 'none', background: 'transparent', fontSize: 20, fontWeight: 700, padding: '4px 0 8px', color: 'var(--text-primary)', fontFamily: 'inherit', letterSpacing: '0.04em' }} />
+            <input
+              value={joinCode}
+              onChange={e => {
+                const val = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+                setJoinCode(val);
+                setClinicPreview(null);
+                setJoinError('');
+                if (val.length >= 4) {
+                  setJoinLoading(true);
+                  lookupClinic(val).then(res => { setClinicPreview(res.clinic || res); setJoinLoading(false); }).catch(() => { setJoinLoading(false); });
+                }
+              }}
+              placeholder="e.g. SMILE1"
+              style={{ width: '100%', border: 'none', borderBottom: '1.5px solid var(--border)', outline: 'none', background: 'transparent', fontSize: 20, fontWeight: 700, padding: '4px 0 8px', color: 'var(--text-primary)', fontFamily: 'inherit', letterSpacing: '0.04em' }}
+            />
           </label>
+          {joinLoading && <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 12 }}>Looking up…</div>}
           {clinicPreview && (
-            <div style={{ background: 'var(--bg)', borderRadius: 12, padding: '14px 16px', marginBottom: 16, border: '1px solid var(--border)' }}>
+            <div style={{ background: 'var(--bg)', borderRadius: 12, padding: '14px 16px', marginBottom: 16, border: '1.5px solid var(--green)' }}>
+              <div style={{ fontSize: 13, color: 'var(--green)', fontWeight: 700, marginBottom: 2 }}>✓ Clinic found</div>
               <div style={{ fontSize: 16, fontWeight: 700 }}>{clinicPreview.name}</div>
               {clinicPreview.city && <div style={{ fontSize: 14, color: 'var(--text-secondary)' }}>{clinicPreview.city}</div>}
             </div>
           )}
           {joinError && <div style={{ color: 'var(--red)', fontSize: 14, marginBottom: 12 }}>{joinError}</div>}
-          {!clinicPreview ? (
-            <PrimaryButton onClick={handleLookupClinic} style={{ opacity: joinLoading ? 0.5 : 1 }}>
-              {joinLoading ? 'Looking up…' : 'Find clinic'}
-            </PrimaryButton>
-          ) : (
-            <PrimaryButton onClick={handleJoinClinic} style={{ opacity: joinLoading ? 0.5 : 1 }}>
-              {joinLoading ? 'Joining…' : `Join as ${selectedRole === 'doctor' ? 'Doctor' : 'Receptionist'}`}
-            </PrimaryButton>
-          )}
+          <PrimaryButton onClick={clinicPreview ? handleJoinClinic : handleLookupClinic} style={{ opacity: joinLoading ? 0.5 : 1 }}>
+            {joinLoading ? 'Looking up…' : clinicPreview ? `Join as ${selectedRole === 'doctor' ? 'Doctor' : 'Receptionist'}` : 'Find clinic'}
+          </PrimaryButton>
           <button onClick={() => { setPhase('role_select'); setClinicPreview(null); setJoinError(''); }} style={{ width: '100%', textAlign: 'center', marginTop: 12, fontSize: 15, color: 'var(--blue)', fontWeight: 500 }}>← Back</button>
         </div>
       )}

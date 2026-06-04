@@ -23,6 +23,8 @@ import RecordDiagnosisSheet from '@/components/sheets/RecordDiagnosisSheet';
 import QueueActionsSheet from '@/components/sheets/QueueActionsSheet';
 import VisitRecordSheet from '@/components/sheets/VisitRecordSheet';
 import PrescriptionDesignSheet from '@/components/sheets/PrescriptionDesignSheet';
+import PhotoViewerSheet from '@/components/sheets/PhotoViewerSheet';
+import TreatmentPlanSheet from '@/components/sheets/TreatmentPlanSheet';
 
 const SHEETS = {
   account: AccountSettingsSheet,
@@ -47,6 +49,8 @@ const SHEETS = {
   queueActions: QueueActionsSheet,
   visitRecord: VisitRecordSheet,
   prescriptionDesign: PrescriptionDesignSheet,
+  photoViewer: PhotoViewerSheet,
+  treatmentPlan: TreatmentPlanSheet,
 };
 
 export default function SheetHost() {

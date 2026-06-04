@@ -50,6 +50,10 @@ export default function Icon({ name, size = 24, stroke = 2, color = 'currentColo
     userCheck: <><circle cx="9" cy="8" r="3.6" {...p}/><path d="M3 20c0-3.6 2.8-5.6 6-5.6 1.2 0 2.3.3 3.2.8" {...p}/><path d="m15 17 2 2 4-4" {...p}/></>,
     layers: <><path d="M12 3 3 8l9 5 9-5-9-5Z" {...p}/><path d="m3 13 9 5 9-5M3 18l9 5 9-5" {...p}/></>,
     dots: <><circle cx="5" cy="12" r="1.6" fill={color} stroke="none"/><circle cx="12" cy="12" r="1.6" fill={color} stroke="none"/><circle cx="19" cy="12" r="1.6" fill={color} stroke="none"/></>,
+    camera: <><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" {...p}/><circle cx="12" cy="13" r="4" {...p}/></>,
+    scan: <><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2" {...p}/><path d="M3 12h18" {...p}/></>,
+    clipboard: <><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" {...p}/><rect x="8" y="2" width="8" height="4" rx="1" {...p}/><path d="M9 12h6M9 16h6M9 8h2" {...p}/></>,
+    compare: <><path d="M11 3H4a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h7M21 3h-7v18h7a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1Z" {...p}/></>,
   };
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" style={style} aria-hidden="true">

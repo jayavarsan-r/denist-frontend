@@ -10,7 +10,7 @@ import Icon from '@/components/icons';
 import { SectionHeader, Chip, StatusChip, Avatar, EmptyState, SelectPill, Segmented } from '@/components/ui';
 import { TODAY } from '@/lib/data/patients';
 import { STAFF, CLINIC, minutesAgo, waitLabel } from '@/lib/data/queue';
-import { formatCurrency, formatTime, parseDate, hasComplications, MONTHS, DAYS_FULL } from '@/lib/data/utils';
+import { formatCurrency, formatTime, parseDate, hasComplications, MONTHS, DAYS_FULL, getGreeting } from '@/lib/data/utils';
 import { useQueueRealtime } from '@/lib/hooks/useQueueRealtime';
 
 function QueueStatChip({ icon, value, label, color }) {
@@ -40,6 +40,8 @@ function ReceptionScreen() {
   const router = useRouter();
   const openSheet = useAppStore((s) => s.openSheet);
   const clinicName = useAppStore((s) => s.clinic?.clinicName || 'Clinic');
+  const staffName = useAppStore((s) => s.name || '');
+  const greeting = useMemo(() => getGreeting(), []);
   const patients = usePatientStore((s) => s.patients);
   const queue = useQueueStore((s) => s.queue);
   const checkoutsToday = useQueueStore((s) => s.checkoutsToday);
@@ -60,11 +62,13 @@ function ReceptionScreen() {
       <div style={{ flexShrink: 0, background: 'var(--surface)', borderBottom: '1px solid var(--border-light)' }}>
         <div style={{ padding: '56px 20px 12px', display: 'flex', alignItems: 'flex-start', gap: 12 }}>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 14, color: 'var(--text-secondary)', fontWeight: 500 }}>Front desk · {CLINIC.name}</div>
-            <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.1, marginTop: 1 }}>Today's Queue</div>
-            <div className="t-meta" style={{ marginTop: 2 }}>{dateLabel}</div>
+            <div style={{ fontSize: 15, color: 'var(--text-secondary)', fontWeight: 500 }}>{greeting}</div>
+            <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.08, marginTop: 1 }}>{staffName || 'Front desk'}</div>
+            <div className="t-meta" style={{ marginTop: 2 }}>{clinicName} · {dateLabel}</div>
           </div>
-          <button onClick={() => openSheet('account')} style={{ width: 44, height: 44, borderRadius: '50%', background: 'rgba(50,173,230,0.16)', color: '#1B86B8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 15, flexShrink: 0 }}>{STAFF.receptionist.initials}</button>
+          <button onClick={() => openSheet('account')} style={{ width: 44, height: 44, borderRadius: '50%', background: 'rgba(60,60,67,0.07)', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 15, flexShrink: 0 }}>
+            {staffName.split(' ').map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase() || 'RX'}
+          </button>
         </div>
         <div style={{ display: 'flex', padding: '4px 20px 14px', gap: 8 }}>
           <QueueStatChip icon="clock" value={waiting.length} label="waiting" />
@@ -74,10 +78,33 @@ function ReceptionScreen() {
       </div>
 
       <div className="scroll" style={{ flex: 1, padding: '16px 20px 24px' }}>
-        {/* primary CTA */}
-        <button onClick={() => openSheet('checkin')} className="btn-dark tap" style={{ width: '100%', height: 56, borderRadius: 16, gap: 9, marginBottom: 22 }}>
-          <Icon name="personPlus" size={22} color="var(--accent-ink)" /> Check in a patient
-        </button>
+        {/* quick actions grid */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 22 }}>
+          {[
+            { icon: 'personPlus', label: 'Check in',     sub: 'Add to queue',      bg: 'var(--green)',  ink: '#fff',     fn: () => openSheet('checkin') },
+            { icon: 'calendar',   label: 'Appointment',  sub: 'Book a slot',        bg: 'var(--blue)',   ink: '#fff',     fn: () => openSheet('newVisit', {}) },
+            { icon: 'rupee',      label: 'Collect',      sub: 'Bill & payment',     bg: 'var(--yellow)', ink: '#1C1C1E', fn: () => router.push('/finance') },
+            { icon: 'person',     label: 'Patients',     sub: 'Search & records',   bg: 'var(--red)',    ink: '#fff',     fn: () => router.push('/patients') },
+          ].map(a => {
+            const dark = a.ink !== '#fff';
+            return (
+              <button key={a.label} onClick={a.fn} className="tap" style={{
+                background: a.bg, borderRadius: 22, padding: '16px',
+                display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
+                textAlign: 'left', minHeight: 136, position: 'relative', overflow: 'hidden',
+                boxShadow: dark ? 'inset 0 1px 0 rgba(255,255,255,0.35), 0 4px 12px rgba(0,0,0,0.14)' : 'inset 0 1px 0 rgba(255,255,255,0.28), 0 4px 12px rgba(0,0,0,0.18)',
+              }}>
+                <div style={{ width: 46, height: 46, borderRadius: 14, background: dark ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.22)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 'auto' }}>
+                  <Icon name={a.icon} size={22} color={a.ink} stroke={2} />
+                </div>
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: '-0.025em', color: a.ink, lineHeight: 1.15 }}>{a.label}</div>
+                  <div style={{ fontSize: 12, fontWeight: 500, color: dark ? 'rgba(28,28,30,0.52)' : 'rgba(255,255,255,0.72)', marginTop: 3 }}>{a.sub}</div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
 
         {/* ready for checkout */}
         {ready.length > 0 && (

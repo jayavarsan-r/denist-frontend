@@ -1,5 +1,5 @@
 'use client';
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAppStore } from '@/store/useAppStore';
 import { usePatientStore } from '@/store/usePatientStore';
@@ -19,15 +19,24 @@ function ConsultModeScreen() {
   const showToast = useAppStore(s => s.showToast);
   const queue = useQueueStore(s => s.queue);
   const callIn = useQueueStore(s => s.callIn);
+  const loadQueue = useQueueStore(s => s.loadQueue);
   const patients = usePatientStore(s => s.patients);
   const visits = useVisitStore(s => s.visits);
   const procedures = useClinicalStore(s => s.procedures);
   const prescriptions = useClinicalStore(s => s.prescriptions);
 
+  const fetchPatient = usePatientStore(s => s.fetchPatient);
   const pById = id => patients.find(p => p.id === id);
   const current = queue.find(e => e.status === 'in_consultation');
   const waiting = queue.filter(e => e.status === 'waiting');
   const p = current && pById(current.patientId);
+
+  // If patient not in local store, fetch them
+  useEffect(() => {
+    if (current?.patientId && !p) {
+      fetchPatient(current.patientId).catch(() => {});
+    }
+  }, [current?.patientId, p]);
 
   const lastVisit = p && visits.filter(v => v.patientId === p.id && v.status === 'done').sort((a, b) => b.date.localeCompare(a.date))[0];
   const activeProc = p && procedures.filter(x => x.patientId === p.id && (x.status === 'in_progress' || x.status === 'planned')).sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''))[0];
@@ -49,9 +58,12 @@ function ConsultModeScreen() {
         <button onClick={() => router.push('/')} className="tap" style={{ display: 'flex', alignItems: 'center', gap: 5, height: 36, padding: '0 16px 0 10px', borderRadius: 99, background: '#B91C1C', color: '#fff', fontSize: 15, fontWeight: 700 }}>
           <Icon name="chevLeft" size={18} color="#fff" /> Exit
         </button>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-          <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--orange)', animation: 'donePulse 1.5s infinite' }} />
-          <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: '0.04em', color: 'var(--orange)', textTransform: 'uppercase' }}>Live</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button onClick={() => loadQueue()} style={{ fontSize: 13, color: 'var(--text-secondary)', fontWeight: 600, padding: '6px 12px', borderRadius: 99, background: 'rgba(60,60,67,0.07)' }}>↻ Sync</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--orange)', animation: 'donePulse 1.5s infinite' }} />
+            <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: '0.04em', color: 'var(--orange)', textTransform: 'uppercase' }}>Live</span>
+          </div>
         </div>
       </div>
 
@@ -70,35 +82,56 @@ function ConsultModeScreen() {
         </div>
       ) : (
         <div className="scroll" style={{ flex: 1 }}>
-          {/* patient focus — flows on the surface, no box */}
-          <div style={{ padding: '20px 24px 0' }}>
-            <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--orange)', marginBottom: 8 }}>Now treating · Token {current.tokenNumber}</div>
-            <div style={{ fontSize: 30, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.05 }}>{p.name}</div>
-            <div style={{ fontSize: 15, color: 'var(--text-secondary)', marginTop: 3 }}>{p.age} · {p.gender} · {p.bloodGroup}</div>
-
-            {/* medical risk — the one thing that must never be missed */}
-            {flags.length > 0 && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(255,59,48,0.07)', borderRadius: 12, padding: '11px 14px', marginTop: 14 }}>
-                <Icon name="alert" size={17} color="var(--red)" /><span style={{ fontSize: 14, fontWeight: 700, color: 'var(--red)' }}>{flags.join(' · ')}</span>
-              </div>
-            )}
-
-            {/* complaint — the clinical anchor */}
-            <div style={{ fontSize: 20, fontWeight: 500, lineHeight: 1.35, color: 'var(--text-primary)', margin: '18px 0 0', textWrap: 'pretty' }}>"{current.chiefComplaint}"</div>
-
-            {/* quiet ongoing context */}
-            {activeProc && (
-              <div style={{ fontSize: 14.5, color: 'var(--text-secondary)', marginTop: 12 }}>
-                Ongoing: <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{activeProc.type}{activeProc.tooth ? ' · Tooth ' + activeProc.tooth : ''}</span> — {activeProc.currentStage}{activeProc.status === 'in_progress' ? ` · visit ${activeProc.completedVisits + 1} of ${activeProc.estimatedVisits}` : ''}
-              </div>
-            )}
-
-            {/* reference links — reachable without leaving the flow */}
-            <div style={{ display: 'flex', gap: 18, marginTop: 14, flexWrap: 'wrap' }}>
-              <button onClick={() => router.push('/patients/' + p.id)} style={{ display: 'flex', alignItems: 'center', gap: 5, color: 'var(--blue)', fontSize: 14.5, fontWeight: 600 }}><Icon name="clock" size={15} color="var(--blue)" />History{lastVisit ? ' · ' + formatDate(lastVisit.date) : ''}</button>
-              {hasRx && <button onClick={() => router.push('/patients/' + p.id)} style={{ display: 'flex', alignItems: 'center', gap: 5, color: 'var(--blue)', fontSize: 14.5, fontWeight: 600 }}><Icon name="pill" size={15} color="var(--blue)" />Previous Rx</button>}
-              {current.xrays && current.xrays.length > 0 && <button onClick={() => showToast('Opening ' + current.xrays[0].type)} style={{ display: 'flex', alignItems: 'center', gap: 5, color: 'var(--blue)', fontSize: 14.5, fontWeight: 600 }}><Icon name="image" size={15} color="var(--blue)" />{current.xrays[0].type}</button>}
+          {!p ? (
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '60px 24px' }}>
+              <div style={{ width: 24, height: 24, borderRadius: '50%', border: '3px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin .7s linear infinite' }} />
             </div>
+          ) : null}
+          {/* patient card — tappable, leads to full profile */}
+          {p && <>
+          <div style={{ padding: '16px 20px 0' }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--orange)', marginBottom: 10 }}>Now treating · Token {current.tokenNumber}</div>
+
+            <button
+              onClick={() => router.push('/patients/' + p.id)}
+              className="tap"
+              style={{ width: '100%', textAlign: 'left', background: 'var(--surface)', border: '1.5px solid var(--border)', borderRadius: 20, padding: '16px 18px', boxShadow: 'var(--elevation-1)' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 26, fontWeight: 800, letterSpacing: '-0.03em', lineHeight: 1.1 }}>{p.name}</div>
+                  <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginTop: 4 }}>
+                    {[p.age && `${p.age} yrs`, p.gender, p.bloodGroup].filter(Boolean).join(' · ')}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
+                  <Icon name="chevRight" size={18} color="var(--text-tertiary)" />
+                  <span style={{ fontSize: 11, color: 'var(--blue)', fontWeight: 600 }}>View profile</span>
+                </div>
+              </div>
+
+              {/* medical risk */}
+              {flags.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(255,95,87,0.08)', borderRadius: 10, padding: '8px 12px', marginTop: 12 }}>
+                  <Icon name="alert" size={15} color="var(--red)" />
+                  <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--red)' }}>{flags.join(' · ')}</span>
+                </div>
+              )}
+
+              {/* complaint */}
+              {current.chiefComplaint && (
+                <div style={{ fontSize: 15, fontWeight: 500, lineHeight: 1.45, color: 'var(--text-primary)', marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border-light)' }}>
+                  "{current.chiefComplaint}"
+                </div>
+              )}
+
+              {/* quick links */}
+              <div style={{ display: 'flex', gap: 14, marginTop: 12, flexWrap: 'wrap' }}>
+                {lastVisit && <span style={{ fontSize: 13, color: 'var(--blue)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}><Icon name="clock" size={13} color="var(--blue)" />Last visit {formatDate(lastVisit.date)}</span>}
+                {hasRx && <span style={{ fontSize: 13, color: 'var(--blue)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}><Icon name="pill" size={13} color="var(--blue)" />Has prescription</span>}
+                {activeProc && <span style={{ fontSize: 13, color: 'var(--text-secondary)', fontWeight: 500 }}>Ongoing: {activeProc.type}</span>}
+              </div>
+            </button>
           </div>
 
           {/* THE dominant action */}
@@ -111,6 +144,8 @@ function ConsultModeScreen() {
               </div>
             </button>
           </div>
+
+          </>}
 
           {/* queue — quiet, human language */}
           {waiting.length > 0 && (

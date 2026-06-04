@@ -37,9 +37,11 @@ exports.sendOtp = async (req, res, next) => {
     if (!phone || !/^\d{10}$/.test(phone))
       return res.status(400).json({ error: 'Valid 10-digit phone required' });
 
-    const otp = process.env.USE_DEV_OTP === 'true'
-      ? process.env.DEV_OTP
-      : Math.floor(100000 + Math.random() * 900000).toString();
+    // Demo phone gets its pinned OTP; all others get the dev fallback or random OTP
+    const isDemoPhone = process.env.DEMO_PHONE && phone === process.env.DEMO_PHONE;
+    const otp = isDemoPhone
+      ? (process.env.DEV_OTP || '012345')
+      : (process.env.DEV_OTP_OTHER || Math.floor(100000 + Math.random() * 900000).toString());
 
     await supabase.from('otp_codes').delete().eq('phone', phone);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
