@@ -9,8 +9,19 @@ import { XRAY_TYPES } from '@/lib/data/queue';
 import { hasComplications } from '@/lib/data/utils';
 import { useAudioRecorder } from '@/lib/hooks/useAudioRecorder';
 import { useTranscription } from '@/lib/hooks/useTranscription';
-import { extractComplaint as apiExtractComplaint } from '@/lib/services/ai.service';
+import { extractComplaint as apiExtractComplaint, extractPatientInfo } from '@/lib/services/ai.service';
 import { uploadXray } from '@/lib/services/xray.service';
+
+function RecordingWave() {
+  const peaks = [4, 8, 14, 6, 20, 10, 24, 16, 22, 12, 24, 10, 20, 8, 16, 6, 18, 10, 14, 8, 6];
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, height: 32, width: '100%' }}>
+      {peaks.map((h, i) => (
+        <div key={i} style={{ width: 4, borderRadius: 4, background: 'rgba(255,255,255,0.9)', height: h, animation: `wave ${0.5 + (i % 5) * 0.1}s ease-in-out ${i * 0.04}s infinite alternate` }} />
+      ))}
+    </div>
+  );
+}
 
 export default function CheckInSheet({ onClose }) {
   const showToast = useAppStore((s) => s.showToast);
@@ -33,9 +44,12 @@ export default function CheckInSheet({ onClose }) {
 
   const recorder = useAudioRecorder();
   const { transcribe } = useTranscription();
-  // idle | recording | transcribing | extracting
+  // idle | recording | transcribing | extracting | done
   const [complaintPhase, setComplaintPhase] = useState('idle');
   const [voiceError, setVoiceError] = useState('');
+  // voice state for new-patient step
+  const [patientPhase, setPatientPhase] = useState('idle'); // idle | recording | transcribing | extracting | done
+  const [patientVoiceError, setPatientVoiceError] = useState('');
 
   const patient = pid && patients.find(p => p.id === pid);
   const list = patients.filter(p => !query || p.name.toLowerCase().includes(query.toLowerCase()) || p.phone.includes(query));
@@ -79,6 +93,55 @@ export default function CheckInSheet({ onClose }) {
 
   const recording = complaintPhase === 'recording';
   const processing = complaintPhase === 'transcribing' || complaintPhase === 'extracting';
+
+  /* ─── Voice: fill new-patient name + phone ─── */
+  const handlePatientDictate = async () => {
+    if (patientPhase === 'recording') {
+      setPatientPhase('transcribing');
+      setPatientVoiceError('');
+      try {
+        const blob = await recorder.stopRecording();
+        const { text: transcript, warning } = await transcribe(blob);
+        if (!transcript) {
+          setPatientVoiceError(warning || "Couldn't hear — try again or type below");
+          setPatientPhase('idle');
+          return;
+        }
+        setPatientPhase('extracting');
+        let complaintCaptured = false;
+        try {
+          const result = await extractPatientInfo(transcript);
+          if (result.name) setName(result.name);
+          if (result.phone) setPhone(result.phone);
+          const c = result.chiefComplaint || result.chief_complaint;
+          if (c) { setComplaint(c); complaintCaptured = true; }
+        } catch {
+          // extraction failed — keep whatever was typed
+        }
+        setPatientPhase('done');
+        // Skip complaint step if we already captured it via voice
+        setTimeout(() => {
+          setPatientPhase('idle');
+          if (complaintCaptured) setStep(2); // jump to X-rays
+        }, 1200);
+      } catch {
+        setPatientVoiceError('Recording failed — try again');
+        setPatientPhase('idle');
+      }
+      return;
+    }
+    if (patientPhase !== 'idle') return;
+    setPatientVoiceError('');
+    try {
+      await recorder.startRecording();
+      setPatientPhase('recording');
+    } catch (e) {
+      setPatientVoiceError(e.message || 'Microphone unavailable');
+    }
+  };
+
+  const patientRecording = patientPhase === 'recording';
+  const patientProcessing = patientPhase === 'transcribing' || patientPhase === 'extracting';
 
   /* ─── File picker for xrays ─── */
   const handleFileSelect = (e) => {
@@ -186,11 +249,57 @@ export default function CheckInSheet({ onClose }) {
               </div>
             </>
           ) : (
-            <div className="card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <Field value={name} onChange={setName} placeholder="Full name" />
-              <Field value={phone} onChange={setPhone} placeholder="Phone number" type="tel" />
-              <div className="t-meta">Full medical details can be added later by the doctor.</div>
-            </div>
+            <>
+              {/* Voice fill button */}
+              <button
+                onClick={handlePatientDictate}
+                disabled={patientProcessing}
+                style={{
+                  width: '100%', borderRadius: 99, border: 'none', cursor: 'pointer',
+                  background: patientRecording ? '#C0392B' : patientPhase === 'done' ? '#16A34A' : 'var(--accent)',
+                  transition: 'background .25s',
+                  display: 'flex',
+                  flexDirection: patientRecording ? 'column' : 'row',
+                  alignItems: 'center',
+                  justifyContent: patientRecording ? 'center' : 'flex-start',
+                  gap: patientRecording ? 6 : 14,
+                  padding: patientRecording ? '18px 20px 14px' : '14px 18px',
+                  marginBottom: 14,
+                }}
+              >
+                {patientRecording ? (
+                  <>
+                    <RecordingWave />
+                    <div style={{ fontSize: 14, fontWeight: 700, color: '#fff' }}>Tap to finish</div>
+                    <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.65)' }}>Name · phone number · reason for visit</div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'rgba(255,255,255,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      {patientProcessing
+                        ? <div style={{ width: 20, height: 20, borderRadius: '50%', border: '2.5px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', animation: 'spin .7s linear infinite' }} />
+                        : patientPhase === 'done'
+                        ? <Icon name="check" size={22} color="#fff" stroke={2.5} />
+                        : <Icon name="mic" size={22} color="#fff" />}
+                    </div>
+                    <div style={{ flex: 1, textAlign: 'left' }}>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: '#fff' }}>
+                        {patientProcessing ? (patientPhase === 'transcribing' ? 'Transcribing…' : 'Filling details…') : patientPhase === 'done' ? 'All done!' : 'Speak patient details'}
+                      </div>
+                      <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.65)', marginTop: 2 }}>
+                        {patientPhase === 'done' ? 'Moving to next step…' : 'Name · phone · complaint — one go'}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </button>
+              {patientVoiceError && <p style={{ fontSize: 12, color: 'var(--red)', margin: '-8px 0 10px 2px' }}>{patientVoiceError}</p>}
+              <div className="card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <Field value={name} onChange={setName} placeholder="Full name" />
+                <Field value={phone} onChange={setPhone} placeholder="Phone number" type="tel" />
+                <div className="t-meta">Full medical details can be added later by the doctor.</div>
+              </div>
+            </>
           )}
         </>
       )}

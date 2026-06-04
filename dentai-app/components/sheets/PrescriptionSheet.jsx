@@ -14,6 +14,17 @@ import { useTranscription } from '@/lib/hooks/useTranscription';
 
 const FREQ_OPTIONS = ['OD', 'BD', 'TDS', 'SOS', 'HS'];
 
+function RecordingWave() {
+  const peaks = [4, 8, 14, 6, 20, 10, 24, 16, 22, 12, 24, 10, 20, 8, 16, 6, 18, 10, 14, 8, 6];
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, height: 32, width: '100%' }}>
+      {peaks.map((h, i) => (
+        <div key={i} style={{ width: 4, borderRadius: 4, background: 'rgba(255,255,255,0.9)', height: h, animation: `wave ${0.5 + (i % 5) * 0.1}s ease-in-out ${i * 0.04}s infinite alternate` }} />
+      ))}
+    </div>
+  );
+}
+
 export default function PrescriptionSheet({ params, onClose }) {
   const showToast = useAppStore((s) => s.showToast);
   const patients = usePatientStore((s) => s.patients);
@@ -34,7 +45,7 @@ export default function PrescriptionSheet({ params, onClose }) {
   const recorder = useAudioRecorder();
   const { transcribe } = useTranscription();
 
-  const addMed = (name) => { if (meds.some(m => m.name === name)) { setMeds(meds.filter(m => m.name !== name)); return; } setMeds([...meds, { name, dosage: '1 tab', frequency: 'BD', duration: '5 days', notes: '' }]); };
+  const addMed = (name) => { if (meds.some(m => m.name === name)) { setMeds(meds.filter(m => m.name !== name)); return; } setMeds([...meds, { name, dosage: '', frequency: '', duration: '', notes: '' }]); };
   const updateMed = (i, patch) => setMeds(meds.map((m, j) => j === i ? { ...m, ...patch } : m));
 
   const startDictate = async (mode = 'full') => {
@@ -153,12 +164,59 @@ export default function PrescriptionSheet({ params, onClose }) {
   return (
     <div style={{ padding: '0 20px 28px' }}>
       <SheetHeader title="Prescription" onClose={onClose} />
-      <div className="card" style={{ padding: 14, marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
-        <span style={{ fontSize: 16, fontWeight: 600 }}>{p ? p.name : ''}</span>
-        <span className="t-meta">{formatDate(TODAY)}</span>
-      </div>
+      {p && (
+        <div className="card" style={{ padding: 14, marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: 16, fontWeight: 600 }}>{p.name}</span>
+          <span className="t-meta">{formatDate(TODAY)}</span>
+        </div>
+      )}
 
-      <SectionHeader right={<button onClick={isMedsRecording ? stopDictate : () => startDictate('full')} style={{ color: isMedsRecording ? 'var(--red)' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 5, fontSize: 13, fontWeight: 500 }}><Icon name="mic" size={16} />{isMedsRecording ? 'Listening…' : phase === 'extracting' ? 'Extracting…' : phase === 'transcribing' && dictateMode === 'full' ? 'Processing…' : 'Dictate'}</button>}>Medicines</SectionHeader>
+      <SectionHeader>Medicines</SectionHeader>
+
+      {/* Dictate pill button */}
+      <button
+        onClick={isMedsRecording ? stopDictate : () => startDictate('full')}
+        disabled={phase === 'transcribing' || phase === 'extracting'}
+        style={{
+          width: '100%', borderRadius: 99, border: 'none', cursor: 'pointer',
+          background: isMedsRecording ? '#C0392B' : phase === 'done' && dictateMode === 'full' ? '#16A34A' : 'var(--accent)',
+          transition: 'background .25s',
+          display: 'flex',
+          flexDirection: isMedsRecording ? 'column' : 'row',
+          alignItems: 'center',
+          justifyContent: isMedsRecording ? 'center' : 'flex-start',
+          gap: isMedsRecording ? 6 : 14,
+          padding: isMedsRecording ? '18px 20px 14px' : '14px 18px',
+          marginBottom: 14,
+        }}
+      >
+        {isMedsRecording ? (
+          <>
+            <RecordingWave />
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#fff' }}>Tap to finish</div>
+            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.65)' }}>Medicines · instructions · review days</div>
+          </>
+        ) : (
+          <>
+            <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'rgba(255,255,255,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              {phase === 'transcribing' || phase === 'extracting'
+                ? <div style={{ width: 20, height: 20, borderRadius: '50%', border: '2.5px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', animation: 'spin .7s linear infinite' }} />
+                : phase === 'done' && dictateMode === 'full'
+                ? <Icon name="check" size={22} color="#fff" stroke={2.5} />
+                : <Icon name="mic" size={22} color="#fff" />}
+            </div>
+            <div style={{ flex: 1, textAlign: 'left' }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: '#fff' }}>
+                {phase === 'transcribing' ? 'Transcribing…' : phase === 'extracting' ? 'Filling prescription…' : phase === 'done' && dictateMode === 'full' ? 'Done!' : 'Dictate prescription'}
+              </div>
+              <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.65)', marginTop: 2 }}>
+                {phase === 'done' && dictateMode === 'full' ? 'Medicines · instructions · review filled' : 'Medicines · instructions · review — hands-free'}
+              </div>
+            </div>
+          </>
+        )}
+      </button>
+
       <div className="card" style={{ overflow: 'hidden', marginBottom: 12 }}>
         {meds.length === 0 && <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>Add medicines below or dictate</div>}
         {meds.map((m, i) => (

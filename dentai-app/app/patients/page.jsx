@@ -118,11 +118,16 @@ function PatientsScreen() {
                   <button key={p.id} onClick={() => router.push('/patients/' + p.id)} className="rowtap" style={{ width: '100%', minHeight: rowH, display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left' }}>
                     <Avatar name={p.name} size={44} dot={hasComplications(p)} />
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 16, fontWeight: 600 }}>{p.name}</div>
-                      <div className="t-meta" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.phone}{lv ? ' · ' + formatDate(lv.date) : p.status === 'new' ? ' · New' : ''}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                        <span style={{ fontSize: 16, fontWeight: 600 }}>{p.name}</span>
+                        {p.status === 'new'
+                          ? <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', background: 'rgba(39,201,63,0.15)', color: '#15892D', borderRadius: 99, padding: '2px 7px' }}>New</span>
+                          : <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--blue)', flexShrink: 0 }} />}
+                      </div>
+                      <div className="t-meta" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.phone}{lv ? ' · ' + formatDate(lv.date) : ''}</div>
                       {lp && <div style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>{lp.type}{lp.tooth ? ' · Tooth ' + lp.tooth : ''}</div>}
                     </div>
-                    {out > 0 && <span className="tnum" style={{ fontSize: 15, fontWeight: 600, color: 'var(--orange)', flexShrink: 0 }}>{formatCurrency(out)}</span>}
+                    {out > 0 && <span className="tnum" style={{ fontSize: 15, fontWeight: 600, color: 'var(--amber)', flexShrink: 0 }}>{formatCurrency(out)}</span>}
                   </button>
                 );
               })}
