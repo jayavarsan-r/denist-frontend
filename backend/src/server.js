@@ -4,9 +4,20 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
+const requestId = require('./middleware/requestId');
+const { logger } = require('./utils/logger');
+
+// Validate required environment variables at startup
+const REQUIRED_VARS = ['SUPABASE_URL', 'JWT_SECRET'];
+const REQUIRED_IN_PROD = ['GEMINI_API_KEY', 'SARVAM_API_KEY'];
+REQUIRED_VARS.forEach(v => { if (!process.env[v]) throw new Error(`Missing required env var: ${v}`); });
+if (process.env.NODE_ENV === 'production') {
+  REQUIRED_IN_PROD.forEach(v => { if (!process.env[v] || process.env[v].startsWith('your_')) throw new Error(`Missing required env var in production: ${v}`); });
+}
 
 const app = express();
 
+app.use(requestId); // must be first — attaches req.requestId to all subsequent middleware
 app.use(helmet());
 // Allow all origins — Capacitor APK makes requests from capacitor://localhost
 // and the Authorization header handles security (not CORS)

@@ -147,13 +147,13 @@ exports.generateNote = async (req, res, next) => {
       return res.json({ structured: mockNote(transcript) });
     }
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${geminiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent`;
     const response = await axios.post(url, {
       system_instruction: { parts: [{ text: buildPrompt() }] },
       contents: [{ parts: [{ text: transcript }] }],
       generationConfig: { temperature: 0.1, maxOutputTokens: 1024 },
     }, {
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiKey },
       timeout: 30000,
     });
 
@@ -195,11 +195,11 @@ Return ONLY the clean English complaint sentence. No quotes, no explanation.
 
 Receptionist's recording: ${transcript}`;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${geminiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent`;
     const response = await axios.post(url, {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { temperature: 0.1, maxOutputTokens: 64 },
-    }, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
+    }, { headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiKey }, timeout: 15000 });
 
     const text = (response.data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
     res.json({ complaint: text || transcript });
@@ -243,11 +243,11 @@ Rules:
 
 Recording: ${transcript}`;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${geminiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent`;
     const response = await axios.post(url, {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { temperature: 0.1, maxOutputTokens: 256 },
-    }, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
+    }, { headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiKey }, timeout: 15000 });
 
     let text = (response.data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
     text = text.replace(/^```json?\n?/i, '').replace(/```$/, '').trim();
@@ -311,11 +311,11 @@ Extraction rules:
 
 Transcript: ${transcript}`;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${geminiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent`;
     const response = await axios.post(url, {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { temperature: 0.1, maxOutputTokens: 512 },
-    }, { headers: { 'Content-Type': 'application/json' }, timeout: 20000 });
+    }, { headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiKey }, timeout: 20000 });
 
     let text = (response.data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
     text = text.replace(/^```json?\n?/i, '').replace(/```$/, '').trim();
@@ -370,11 +370,11 @@ Rules:
 
 Voice note: ${transcript}`;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${geminiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent`;
     const response = await axios.post(url, {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { temperature: 0.1, maxOutputTokens: 1024 },
-    }, { headers: { 'Content-Type': 'application/json' }, timeout: 20000 });
+    }, { headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiKey }, timeout: 20000 });
 
     let text = (response.data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
     text = text.replace(/^```json?\n?/i, '').replace(/```$/, '').trim();

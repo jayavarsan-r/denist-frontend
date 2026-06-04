@@ -2,12 +2,13 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const auth = require('../middleware/auth');
+const { ok, okCreated, fail } = require('../utils/response');
 
 // POST /api/payments — record a payment
 router.post('/', auth, async (req, res, next) => {
   try {
     const { patientId, treatmentPlanId, queueEntryId, amount, paymentMethod, notes, paymentDate } = req.body;
-    if (!patientId || !amount) return res.status(400).json({ error: 'patientId and amount required' });
+    if (!patientId || !amount) return fail(res, 400, 'VALIDATION_ERROR', 'patientId and amount required');
 
     const { data, error } = await supabase.from('payments').insert({
       clinic_id:         req.clinicId,
@@ -23,20 +24,20 @@ router.post('/', auth, async (req, res, next) => {
 
     if (error) throw error;
 
-    // Sync collected_amount and pending_amount on treatment plan
+    // Update collected_amount on treatment plan — pending_amount is a generated column
+    // (Postgres recomputes it automatically as estimated_cost - collected_amount)
     if (treatmentPlanId) {
       const { data: plan } = await supabase.from('treatment_plans')
-        .select('collected_amount, estimated_cost').eq('id', treatmentPlanId).single();
+        .select('collected_amount').eq('id', treatmentPlanId).single();
       if (plan) {
         const newCollected = parseFloat(plan.collected_amount || 0) + parseFloat(amount);
-        const newPending = Math.max(0, parseFloat(plan.estimated_cost || 0) - newCollected);
         await supabase.from('treatment_plans')
-          .update({ collected_amount: newCollected, pending_amount: newPending })
+          .update({ collected_amount: newCollected })
           .eq('id', treatmentPlanId);
       }
     }
 
-    res.status(201).json({ payment: data });
+    return okCreated(res, { payment: data });
   } catch (e) { next(e); }
 });
 
@@ -53,7 +54,7 @@ router.get('/patient/:patientId', auth, async (req, res, next) => {
 
     if (error) throw error;
     const total = (data || []).reduce((s, p) => s + parseFloat(p.amount), 0);
-    res.json({ payments: data || [], total });
+    return ok(res, { payments: data || [], total });
   } catch (e) { next(e); }
 });
 
@@ -69,7 +70,7 @@ router.get('/plan/:planId', auth, async (req, res, next) => {
 
     if (error) throw error;
     const total = (data || []).reduce((s, p) => s + parseFloat(p.amount), 0);
-    res.json({ payments: data || [], total });
+    return ok(res, { payments: data || [], total });
   } catch (e) { next(e); }
 });
 

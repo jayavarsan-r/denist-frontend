@@ -3,8 +3,20 @@ const router = express.Router({ mergeParams: true });
 const supabase = require('../config/supabase');
 const auth = require('../middleware/auth');
 
+// Verify the visitId in the URL belongs to the current user before touching notes
+async function assertVisitOwnership(req, res) {
+  let q = supabase.from('visits').select('id').eq('id', req.params.visitId);
+  if (req.clinicId) q = q.eq('clinic_id', req.clinicId);
+  else q = q.eq('dentist_id', req.dentistId);
+  const { data } = await q.single();
+  return !!data;
+}
+
 router.get('/', auth, async (req, res, next) => {
   try {
+    const owned = await assertVisitOwnership(req, res);
+    if (!owned) return res.status(403).json({ error: 'Visit not found or access denied' });
+
     const { data, error } = await supabase
       .from('visit_notes')
       .select('*')
@@ -19,6 +31,9 @@ router.get('/', auth, async (req, res, next) => {
 
 router.post('/', auth, async (req, res, next) => {
   try {
+    const owned = await assertVisitOwnership(req, res);
+    if (!owned) return res.status(403).json({ error: 'Visit not found or access denied' });
+
     const {
       patientId, rawTranscript, structuredNote, procedureName,
       toothNumber, status, notes, medications, nextSteps, followUpDate, cost,
