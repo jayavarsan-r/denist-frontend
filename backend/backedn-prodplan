@@ -1,0 +1,1810 @@
+Ready for review
+Select text to add comments on the plan
+DentAI Backend — Production Architecture Plan
+Decision: Full breaking change (new response envelope). Frontend integration updated in same pass. Data: Pre-launch only — clean migrations permitted, column renames/drops safe.
+
+Context
+The backend is a functional MVP that handles real dental clinic workflows but was built for speed, not production. The audit identified 5 critical security vulnerabilities (IDOR on visits/appointments), no role-based access control, dentist_id used as the authorization boundary (wrong — clinic_id must be), GET endpoints that mutate state, no input validation, readFileSync on 25 MB files, N+1 queries, and an AI layer that silently returns fake data on failure.
+
+This plan transforms it incrementally into a production-grade backend: secure, consistently authorized at the clinic level, validated, paginated, with a clean repository layer separating DB concerns from controllers, and a standard response envelope across all endpoints.
+
+Guiding principle: Every write touches exactly what it needs to — no speculative abstractions, no features beyond the audit's identified gaps.
+
+Authorization Model (The Core Architectural Rule)
+Old:  WHERE dentist_id = req.dentistId   ← WRONG for multi-staff
+New:  WHERE clinic_id  = req.clinicId    ← RIGHT
+
+dentist_id  = audit trail only (who created it)
+clinic_id   = authorization boundary (who can see it)
+req.role    = operation permission (what they can do)
+Request Flow (Layered Monolith)
+HTTP Request
+    ↓
+Route (express router — path + method only)
+    ↓
+Middleware (requestId → auth → requireClinic → requireRole → validate)
+    ↓
+Controller (receive, call service, return response — NO DB calls)
+    ↓
+Transaction Service (orchestrate multi-step operations, enforce business rules)
+    ↓
+Repository (clinic-scoped DB access — NO business logic)
+    ↓
+Supabase (DB + Storage)
+This is a Modular Monolith — one deployable, one process, clean internal layers. No microservices. No event bus. No message queue. No separate worker processes.
+
+New Directory Structure
+backend/src/
+├── config/supabase.js          (unchanged)
+├── middleware/
+│   ├── auth.js                 (minor update)
+│   ├── errorHandler.js         (update: new error envelope)
+│   ├── requestId.js            (NEW — x-request-id on every request)
+│   ├── requireClinic.js        (NEW)
+│   ├── requireRole.js          (NEW)
+│   └── validate.js             (NEW — Zod middleware)
+├── utils/
+│   ├── response.js             (NEW — ok() / fail() helpers)
+│   ├── errors.js               (NEW — AppError class + error codes)
+│   ├── pagination.js           (NEW — parsePagination / paginationMeta)
+│   └── logger.js               (NEW — structured logger with requestId/clinicId context)
+├── validators/
+│   ├── auth.validator.js       (NEW)
+│   ├── patient.validator.js    (NEW)
+│   ├── visit.validator.js      (NEW)
+│   ├── appointment.validator.js(NEW)
+│   ├── queue.validator.js      (NEW)
+│   ├── payment.validator.js    (NEW)
+│   ├── clinic.validator.js     (NEW)
+│   ├── staff.validator.js      (NEW)
+│   └── xray.validator.js       (NEW)
+├── repositories/
+│   ├── base-clinic.repository.js (NEW — BaseClinicRepository with auto clinic_id scoping)
+│   ├── patient.repository.js   (NEW)
+│   ├── visit.repository.js     (NEW)
+│   ├── appointment.repository.js (NEW)
+│   ├── queue.repository.js     (NEW)
+│   ├── treatment-plan.repository.js (NEW)
+│   ├── prescription.repository.js (NEW)
+│   ├── payment.repository.js   (NEW)
+│   ├── xray.repository.js      (NEW)
+│   ├── staff.repository.js     (NEW)
+│   ├── clinic.repository.js    (NEW)
+│   └── audit-log.repository.js (NEW)
+├── services/
+│   ├── ai.service.js           (update: medicine schema, error signaling)
+│   ├── storage.service.js      (update: streaming, content-type)
+│   ├── pdf.service.js          (unchanged)
+│   └── transaction.service.js  (NEW — multi-step atomic orchestration)
+├── controllers/                (update all — NO direct DB calls)
+├── routes/                     (update all)
+├── jobs/
+│   ├── audio-cleanup.job.js    (NEW — extracted from cleanup.job.js, covers visit_notes)
+│   ├── voice-cleanup.job.js    (NEW — covers voice_recordings)
+│   └── orphan-file-cleanup.job.js (NEW — files in storage with no DB record)
+└── migrations/
+    ├── 001_missing_columns.sql
+    ├── 002_indexes.sql
+    ├── 003_soft_delete.sql
+    ├── 004_audit_log.sql
+    └── 005_pending_amount_fix.sql
+Response Envelope (All Endpoints)
+// Success
+{ success: true, data: <payload> }
+
+// Success + pagination
+{ success: true, data: [...], meta: { page, limit, total } }
+
+// Error
+{ success: false, error: { code: 'UNAUTHORIZED', message: '...', details: {} } }
+
+// AI endpoint (always present)
+{ success: true, data: { structured: {...} }, ai: { status: 'success'|'fallback'|'error', provider: 'gemini'|'sarvam', warning: null } }
+utils/response.js exports ok(res, data, meta?), fail(res, status, code, message, details?). utils/errors.js exports AppError(code, message, status) for throw-able errors. errorHandler.js catches AppError and unknown errors, always responds with the error envelope.
+
+Medicine Schema Standardization
+Unified schema (replaces both dose and dosage):
+
+{
+  name: string,
+  strength: string,   // was: dose / dosage
+  frequency: string,  // human-readable: "Three times daily"
+  duration: string,
+  mealTiming: string, // was: timing
+  instructions: string,
+  meal_timing_slots: { breakfast, lunch, dinner }
+}
+Both ai.controller.js extractPrescription and ai.service.js extractPrescription updated to return this schema. Existing Gemini prompt updated to use strength / mealTiming field names.
+
+Phase 1 — Foundation (do first; everything else depends on this)
+Files to create:
+
+src/utils/response.js — ok(), fail(), okPaginated()
+src/utils/errors.js — AppError, standard error codes (UNAUTHORIZED, FORBIDDEN, NOT_FOUND, VALIDATION_ERROR, CONFLICT)
+src/utils/pagination.js — parsePagination(query, defaults?) → { limit, offset, page }, paginationMeta(total, limit, page)
+src/middleware/requireClinic.js — throws AppError('FORBIDDEN', 'Clinic context required', 403) if !req.clinicId
+src/middleware/requireRole.js — factory: requireRole(['doctor']) throws AppError('FORBIDDEN', ...) if role not in list
+src/middleware/validate.js — Zod middleware factory: validate(schema) → validates req.body, returns 400 on failure
+Files to modify:
+
+backend/package.json — add "zod": "^3.22.0"
+backend/.env.example:
+Add: GEMINI_API_KEY=your_gemini_api_key_here
+Add: DEMO_PHONE= (optional — for dev pinned OTP)
+Add: DEV_OTP_OTHER= (optional)
+Remove: ANTHROPIC_API_KEY (never used)
+Remove: USE_DEV_OTP (never used)
+src/middleware/errorHandler.js — update to emit { success: false, error: { code, message } } envelope
+Phase 2 — Security: IDOR Fixes (CRITICAL)
+Fix every route that queries by :id without an ownership check.
+
+controllers/visits.controller.js
+getById (line 38): add .eq('clinic_id', req.clinicId) — falls back to .eq('dentist_id', req.dentistId) if clinicId absent
+update (line 47): same ownership filter; replace ...req.body spread with explicit field whitelist: { procedure_name, tooth_number, status, raw_transcript, notes, medications, next_steps, follow_up_date, follow_up_done, visit_date, cost, currency }
+controllers/appointments.controller.js
+update (line 68): add .eq('dentist_id', req.dentistId) (no clinic_id on appointments yet — add after migration); replace ...req.body spread with whitelist: { appointment_date, appointment_time, purpose, tooth_number, status }
+routes/visit-notes.routes.js
+Both GET and POST: before operating on notes, verify the visit belongs to this user with a .eq('dentist_id', req.dentistId) check on the visits table. Return 403 if visit not found.
+routes/queue.routes.js — GET /:id/context
+visits query (line ~322): add .eq('patient_id', patientId) already present; ensure xrays query also has .eq('dentist_id', req.dentistId) — currently neither has a filter
+controllers/patients.controller.js
+update (line 63): replace ...req.body spread with explicit field whitelist: { name, phone, age, gender, medical_conditions, allergies, clinical_flags }
+Phase 3 — Remove GET Side Effects
+controllers/patients.controller.js
+list (line 17–21): delete the UPDATE patients SET clinic_id backfill block entirely. Create a one-time migration utility POST /api/internal/backfill-clinic-id (admin only, no auth middleware, only callable if NODE_ENV !== production) for the backfill.
+getById (line 55–57): remove the async update({ clinic_id }) fire-and-forget side effect.
+controllers/auth.controller.js
+getMe (line 225–229): remove the join_code generation block. Move to: if clinic has no join_code, it should have been generated at createClinic. Add join_code generation to POST /api/auth/create-clinic as a guaranteed step. Add POST /api/clinic/regenerate-join-code (doctor role only) for explicit regeneration.
+Phase 4 — RBAC (Role-Based Access Control)
+Apply requireRole middleware to these routes:
+
+Route	Role Required
+POST /api/queue/:id/complete-consult	doctor
+PATCH /api/clinic	doctor
+POST /api/clinic/regenerate-join-code (new)	doctor
+DELETE /api/patients/:id	doctor
+POST /api/treatment-plans	doctor
+PATCH /api/treatment-plans/:id	doctor
+POST /api/prescriptions	doctor
+POST /api/ai/*	doctor
+POST /api/visits	doctor
+GET /api/staff	any (clinic context)
+PATCH /api/staff/:id (new)	doctor
+DELETE /api/staff/:id (new)	doctor
+Queue status updates (PATCH /api/queue/:id) remain open to both roles — receptionists need to check in patients.
+
+Phase 5 — Response Format (All Controllers + Routes)
+Wrap every endpoint response. Pattern:
+
+// Before
+res.json({ patients: data });
+
+// After
+return ok(res, { patients: data });
+
+// Error before
+return res.status(404).json({ error: 'Not found' });
+
+// Error after — throw and let errorHandler catch it
+throw new AppError('NOT_FOUND', 'Patient not found', 404);
+// OR for inline
+return fail(res, 404, 'NOT_FOUND', 'Patient not found');
+Files to update (response wrapping):
+
+controllers/auth.controller.js
+controllers/patients.controller.js
+controllers/visits.controller.js
+controllers/appointments.controller.js
+controllers/ai.controller.js
+routes/analytics.routes.js
+routes/treatment-plans.routes.js
+routes/visit-notes.routes.js
+routes/prescriptions.routes.js
+routes/xrays.routes.js
+routes/dataset.routes.js
+routes/queue.routes.js
+routes/staff.routes.js
+routes/clinic.routes.js
+routes/payments.routes.js
+Phase 6 — Validation Layer (Zod)
+Install: npm install zod
+
+validators/patient.validator.js
+createSchema: z.object({ name: z.string().min(1), phone: z.string().regex(/^\d{10}$/), age: z.number().int().positive().optional(), gender: z.enum(['Male','Female','Other']).optional(), medical_conditions: z.any().optional(), allergies: z.any().optional(), clinical_flags: z.any().optional() })
+updateSchema: createSchema.partial()
+validators/appointment.validator.js
+createSchema: z.object({ patientId: z.string().uuid(), appointmentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), appointmentTime: z.string(), purpose: z.string().optional(), toothNumber: z.string().optional() })
+updateSchema: z.object({ status: z.enum(['scheduled','completed','cancelled','no_show']).optional(), appointmentDate: ..., appointmentTime: ..., purpose: ..., toothNumber: ... })
+validators/visit.validator.js
+Fields: patientId (uuid), procedureName (string), toothNumber (optional string), status (enum), visitDate (date string), cost (optional number), currency (optional string)
+
+validators/queue.validator.js
+Create: patientId (uuid required), chiefComplaint, visitReason, priority (enum: normal|urgent|emergency), assignedDoctor (uuid optional), treatmentPlanId (uuid optional) CompleteConsult: patientId (uuid), procedure (string), diagnosis, toothNumber, totalSittings (int), estimatedCost (number), transcript, notes
+
+validators/payment.validator.js
+patientId (uuid), amount (positive number), treatmentPlanId (optional uuid), paymentMethod (enum: cash|card|upi|insurance), paymentDate (optional date)
+
+validators/clinic.validator.js
+name, city, address, phone, openTime, closeTime, workingDays (array of string)
+
+Apply validators using validate(schema) middleware on all POST/PUT/PATCH routes.
+
+Phase 7 — BaseClinicRepository
+repositories/base-clinic.repository.js
+Every business entity belongs to a clinic. BaseClinicRepository enforces this at the data layer — controllers and services NEVER write .eq('clinic_id', ...) manually.
+
+class BaseClinicRepository {
+  constructor(table) { this.table = table; }
+
+  // All methods require clinicId — this is the only place clinic scoping lives
+  async findById(id, clinicId)
+    // → WHERE id = :id AND clinic_id = :clinicId AND deleted_at IS NULL
+    // → throws AppError('NOT_FOUND') if missing
+
+  async findAll(clinicId, { filters, pagination, select, order })
+    // → WHERE clinic_id = :clinicId AND deleted_at IS NULL + filters
+
+  async create(data)
+    // → INSERT ... RETURNING *
+
+  async update(id, clinicId, data)
+    // → UPDATE ... WHERE id = :id AND clinic_id = :clinicId AND deleted_at IS NULL
+
+  async softDelete(id, clinicId, deletedBy)
+    // → UPDATE SET deleted_at = NOW(), deleted_by = :deletedBy
+    // → WHERE id = :id AND clinic_id = :clinicId
+
+  async restore(id, clinicId)
+    // → UPDATE SET deleted_at = NULL, deleted_by = NULL
+
+  async count(clinicId, filters)
+}
+Repositories never contain business logic. They contain query logic only.
+
+Repository mapping:
+Repository	Table	Extra methods
+PatientRepository	patients	search(clinicId, q) — ILIKE on name+phone
+VisitRepository	visits	findByPatient(patientId, clinicId, pagination)
+AppointmentRepository	appointments	findByDate(clinicId, date), bookedSlots(clinicId, date)
+QueueRepository	queue_entries	findTodayQueue(clinicId), findByStatus(clinicId, status)
+TreatmentPlanRepository	treatment_plans	recalcPendingAmount(planId)
+PrescriptionRepository	prescriptions	findByPatient(patientId, clinicId, pagination)
+PaymentRepository	payments	findByPatient(patientId, clinicId), findByPlan(planId, clinicId)
+XrayRepository	xrays	
+StaffRepository	staff	findByClinic(clinicId), findByDentistId(dentistId)
+ClinicRepository	clinics	— no clinic_id scoping (clinics ARE the top-level entity)
+AuditLogRepository	audit_logs	log(entry) — insert only, no reads in app code
+Migration plan for controllers:
+
+Create repositories alongside existing controllers (no disruption)
+Refactor one controller at a time: patients → visits → appointments → queue → inline routes
+Inline route handlers in queue.routes.js, treatment-plans.routes.js etc. get extracted to a QueueController, TreatmentPlanController with the same refactor
+Phase 7b — Transaction Service
+services/transaction.service.js
+Orchestrates multi-step operations that touch multiple repositories. This is the only place where multi-table writes happen. Repositories do single-table work; the transaction service combines them.
+
+// Route → Controller → Transaction Service → Repositories → DB
+
+async completeConsultation({ queueEntryId, clinicId, dentistId, patientId, procedure, diagnosis, toothNumber, totalSittings, estimatedCost, transcript, notes })
+  // 1. Create treatment_plan (via TreatmentPlanRepository)
+  // 2. Create visit record (via VisitRepository) ← currently MISSING, now added
+  // 3. If transcript → extractPrescription → create prescription (via PrescriptionRepository)
+  // 4. If totalSittings > 1 → create appointment stubs (via AppointmentRepository)
+  // 5. Update queue_entry treatment_plan_id + status → 'ready_for_checkout' (via QueueRepository)
+  // 6. Log to audit_log
+  // On any fatal step failure: attempt to undo completed steps (compensating updates)
+  // Returns { plan, visit, prescription, appointments }
+
+async completeCheckout({ queueEntryId, clinicId, staffId, amount, paymentMethod, treatmentPlanId })
+  // 1. Record payment (via PaymentRepository)
+  // 2. Recalc pending_amount on treatment_plan atomically (via TreatmentPlanRepository.recalcPendingAmount)
+  // 3. Update queue_entry status → 'checked_out'
+  // 4. Log to audit_log
+
+async recordPayment({ clinicId, patientId, amount, treatmentPlanId, receivedBy, ... })
+  // 1. INSERT payment
+  // 2. Atomically UPDATE treatment_plan collected_amount + pending_amount
+  //    Uses: SELECT FOR UPDATE (via Supabase RPC) or sequential update with optimistic lock
+  // 3. Log to audit_log
+
+async createClinic({ dentistId, clinicName, yourName, city, phone })
+  // 1. Generate join_code (guaranteed unique)
+  // 2. INSERT clinics
+  // 3. INSERT staff (role: doctor)
+  // 4. UPDATE clinics SET owner_staff_id
+  // 5. UPDATE dentists name/clinic_name
+  // 6. Backfill clinic_id on patients/visits/appointments/treatment_plans/prescriptions/xrays
+  //    (moved from controller)
+  // 7. Sign + return new V3 token
+
+async joinClinic({ dentistId, joinCode, yourName, role })
+  // 1. Lookup clinic by join_code
+  // 2. INSERT staff (or return existing on 23505)
+  // 3. UPDATE dentists name
+  // 4. Sign + return new V3 token
+Note on atomicity: Supabase JS client has no native transaction API. We simulate atomicity via:
+
+Ordering operations so reads happen before writes
+Non-fatal steps are explicitly marked and logged on failure (prescription creation, appointment stubs)
+Fatal steps (treatment_plan creation) are the first write — if they fail, nothing else ran
+recalcPendingAmount uses an RPC function (Postgres) to do atomic read+update: UPDATE treatment_plans SET pending_amount = GREATEST(0, estimated_cost - collected_amount) WHERE id = $1
+Phase 8 — AI Layer Fixes
+controllers/ai.controller.js — error signaling
+// Before: silently falls back
+catch (e) { return res.json({ structured: mockNote(transcript) }); }
+
+// After: explicit status
+if (noKey || NODE_ENV === 'development') {
+  return ok(res, { structured: mockNote(transcript) }, null, { ai: { status: 'mock', provider: 'gemini' } });
+}
+// ... actual call ...
+catch (e) {
+  return ok(res, { structured: mockNote(transcript) }, null, { ai: { status: 'error', provider: 'gemini', warning: e.message } });
+}
+Response shape for all AI endpoints:
+
+{ success: true, data: { <payload> }, ai: { status: 'success'|'mock'|'error', provider: string, warning: string|null } }
+Mock data only in NODE_ENV === 'development' (not in production).
+
+Medicine schema unification
+Both ai.controller.js extractPrescription and ai.service.js extractPrescription:
+
+Update Gemini prompt to request strength (not dose/dosage) and mealTiming (not timing)
+Ensure both return identical medicine object shape
+Phase 9 — Storage: readFileSync → Streaming
+services/storage.service.js
+// Before
+const buffer = fs.readFileSync(localPath);
+await supabase.storage.from(bucket).upload(path, buffer, ...);
+
+// After
+const stream = fs.createReadStream(localPath);
+await supabase.storage.from(bucket).upload(path, stream, ...);
+Also fix contentType detection:
+
+function detectContentType(localPath, bucket) {
+  if (bucket === 'voice-notes') {
+    const ext = path.extname(localPath).toLowerCase();
+    const map = { '.webm': 'audio/webm', '.ogg': 'audio/ogg', '.mp4': 'audio/mp4', '.m4a': 'audio/mp4', '.wav': 'audio/wav', '.mp3': 'audio/mpeg', '.flac': 'audio/flac' };
+    return map[ext] || 'audio/ogg';
+  }
+  const ext = path.extname(localPath).toLowerCase();
+  const map = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.pdf': 'application/pdf', '.dcm': 'application/dicom' };
+  return map[ext] || 'image/jpeg';
+}
+Add MIME validation in xrays.routes.js:
+
+const allowed = ['image/jpeg','image/png','image/webp','application/pdf','application/dicom'];
+if (!allowed.includes(req.file.mimetype)) return fail(res, 400, 'VALIDATION_ERROR', 'Invalid file type for X-ray');
+Phase 10 — Pagination
+Add to: patients, visits, appointments, prescriptions, payments, xrays, dataset exports.
+
+utils/pagination.js:
+
+parsePagination(query, { defaultLimit=20, maxLimit=100 }) → { limit, offset, page }
+paginationMeta(total, limit, page) → { page, limit, total, totalPages, hasNext, hasPrev }
+Response shape for lists:
+
+{ success: true, data: [...], meta: { page: 1, limit: 20, total: 342, totalPages: 18 } }
+Requires { count: 'exact' } in Supabase select for total count.
+
+Endpoints to paginate:
+
+Endpoint	Default Limit
+GET /api/patients	20
+GET /api/visits	20
+GET /api/appointments	50
+GET /api/prescriptions/:patientId (via patient sub-route)	20
+GET /api/payments/patient/:id	20
+GET /api/xrays via patient sub-route	20
+GET /api/dataset/export	100 (max 500)
+GET /api/dataset/recordings	50
+Phase 11 — Fix N+1 Queries
+routes/queue.routes.js — GET /action-queue
+Current: one prescriptions COUNT query per entry (line 54).
+
+Replace with a single batch query:
+
+// After fetching entries, get all prescription counts in one query
+const patientIds = entries.map(e => e.patient_id);
+const oneHourAgo = new Date(Date.now() - 60*60*1000).toISOString();
+const { data: rxRows } = await supabase
+  .from('prescriptions')
+  .select('patient_id')
+  .in('patient_id', patientIds)
+  .gte('created_at', oneHourAgo);
+
+const rxSet = new Set(rxRows.map(r => r.patient_id));
+// Enrich entries without per-entry queries
+routes/dataset.routes.js — signed URL generation
+Keep as-is for now (it's a dataset tool, not a live endpoint). Add a warning comment. Batch signing is not supported by Supabase SDK; resolve in Phase 11 by caching signed URLs in the DB on upload.
+
+Phase 11b — Request ID + Structured Logging
+middleware/requestId.js
+module.exports = (req, res, next) => {
+  req.requestId = req.headers['x-request-id'] || crypto.randomUUID();
+  res.setHeader('x-request-id', req.requestId);
+  next();
+};
+Register first in server.js middleware stack (before all other middleware).
+
+utils/logger.js
+Simple structured logger — no external dependency (just console with JSON formatting in production, human-readable in development):
+
+function createLogger(context = {}) {
+  return {
+    info(message, extra = {})  { log('info',  message, { ...context, ...extra }); },
+    warn(message, extra = {})  { log('warn',  message, { ...context, ...extra }); },
+    error(message, extra = {}) { log('error', message, { ...context, ...extra }); },
+    debug(message, extra = {}) { if (process.env.NODE_ENV !== 'production') log('debug', message, { ...context, ...extra }); },
+  };
+}
+
+function log(level, message, meta) {
+  const entry = { level, message, timestamp: new Date().toISOString(), ...meta };
+  if (process.env.NODE_ENV === 'production') console.log(JSON.stringify(entry));
+  else console.log(`[${level.toUpperCase()}] ${message}`, meta);
+}
+
+// Attach to req in a middleware after requestId
+module.exports = { createLogger };
+Usage in controllers:
+
+const logger = createLogger({ requestId: req.requestId, clinicId: req.clinicId, staffId: req.staffId });
+logger.info('Completing consultation', { patientId, procedure });
+Replace all console.log/error calls across the codebase with logger.*.
+
+Phase 12 — Database Migrations
+File: backend/src/migrations/001_missing_columns.sql
+
+-- clinical_flags (queue SELECT fails without this)
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS clinical_flags JSONB DEFAULT '{}';
+
+-- sitting_number (treatment plan detail view)
+ALTER TABLE visits ADD COLUMN IF NOT EXISTS sitting_number INTEGER;
+ALTER TABLE appointments ADD COLUMN IF NOT EXISTS sitting_number INTEGER;
+
+-- audio_uploaded_at (cleanup job)
+ALTER TABLE visit_notes ADD COLUMN IF NOT EXISTS audio_uploaded_at TIMESTAMPTZ;
+
+-- follow_up on prescriptions (PDF)
+ALTER TABLE prescriptions ADD COLUMN IF NOT EXISTS follow_up TEXT;
+
+-- clinic_id on visits/appointments (multi-doctor scoping)
+ALTER TABLE visits ADD COLUMN IF NOT EXISTS clinic_id UUID REFERENCES clinics(id);
+ALTER TABLE appointments ADD COLUMN IF NOT EXISTS clinic_id UUID REFERENCES clinics(id);
+ALTER TABLE prescriptions ADD COLUMN IF NOT EXISTS clinic_id UUID REFERENCES clinics(id);
+
+-- pending_amount if not present
+ALTER TABLE treatment_plans ADD COLUMN IF NOT EXISTS pending_amount NUMERIC DEFAULT 0;
+File: backend/src/migrations/002_indexes.sql
+
+CREATE INDEX IF NOT EXISTS idx_patients_clinic_id ON patients(clinic_id);
+CREATE INDEX IF NOT EXISTS idx_patients_dentist_id ON patients(dentist_id);
+CREATE INDEX IF NOT EXISTS idx_patients_is_deleted ON patients(is_deleted);
+CREATE INDEX IF NOT EXISTS idx_visits_clinic_id ON visits(clinic_id);
+CREATE INDEX IF NOT EXISTS idx_visits_dentist_id ON visits(dentist_id);
+CREATE INDEX IF NOT EXISTS idx_visits_patient_id ON visits(patient_id);
+CREATE INDEX IF NOT EXISTS idx_visits_visit_date ON visits(visit_date);
+CREATE INDEX IF NOT EXISTS idx_visits_follow_up ON visits(follow_up_date) WHERE follow_up_done = false;
+CREATE INDEX IF NOT EXISTS idx_appointments_dentist_id ON appointments(dentist_id);
+CREATE INDEX IF NOT EXISTS idx_appointments_date ON appointments(appointment_date);
+CREATE INDEX IF NOT EXISTS idx_queue_clinic_date ON queue_entries(clinic_id, queue_date);
+CREATE INDEX IF NOT EXISTS idx_queue_status ON queue_entries(status);
+CREATE INDEX IF NOT EXISTS idx_treatment_plans_patient ON treatment_plans(patient_id, status);
+CREATE INDEX IF NOT EXISTS idx_prescriptions_patient ON prescriptions(patient_id);
+CREATE INDEX IF NOT EXISTS idx_voice_recordings_dentist ON voice_recordings(dentist_id);
+
+-- Trigram index for name/phone search (requires pg_trgm extension)
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS idx_patients_name_trgm ON patients USING gin(name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_patients_phone_trgm ON patients USING gin(phone gin_trgm_ops);
+File: backend/src/migrations/003_soft_delete.sql
+
+-- Replace is_deleted BOOLEAN with deleted_at TIMESTAMPTZ + deleted_by UUID
+-- Run table by table. patients first (most critical).
+
+ALTER TABLE patients
+  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS deleted_by UUID REFERENCES staff(id);
+
+-- Migrate existing is_deleted = true rows
+UPDATE patients SET deleted_at = NOW() WHERE is_deleted = true;
+-- Keep is_deleted column until all queries migrated, then drop it.
+
+-- Repeat for:
+ALTER TABLE appointments  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS deleted_by UUID;
+ALTER TABLE visits         ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS deleted_by UUID;
+ALTER TABLE treatment_plans ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS deleted_by UUID;
+ALTER TABLE prescriptions  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS deleted_by UUID;
+ALTER TABLE xrays          ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS deleted_by UUID;
+ALTER TABLE payments       ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS deleted_by UUID;
+ALTER TABLE queue_entries  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS deleted_by UUID;
+ALTER TABLE staff          ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS deleted_by UUID;
+
+-- Index soft-delete columns (used in every WHERE clause)
+CREATE INDEX IF NOT EXISTS idx_patients_deleted_at    ON patients(deleted_at)    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_visits_deleted_at      ON visits(deleted_at)      WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_appointments_deleted_at ON appointments(deleted_at) WHERE deleted_at IS NULL;
+File: backend/src/migrations/004_audit_log.sql
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  clinic_id    UUID REFERENCES clinics(id),
+  staff_id     UUID REFERENCES staff(id),
+  entity_type  TEXT NOT NULL,  -- 'patient', 'prescription', 'payment', etc.
+  entity_id    UUID NOT NULL,
+  action       TEXT NOT NULL,  -- 'CREATE', 'UPDATE', 'DELETE', 'PAYMENT', 'ROLE_CHANGE'
+  old_value    JSONB,
+  new_value    JSONB,
+  request_id   TEXT,           -- correlates to x-request-id
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_audit_logs_clinic    ON audit_logs(clinic_id, created_at DESC);
+CREATE INDEX idx_audit_logs_entity    ON audit_logs(entity_type, entity_id);
+CREATE INDEX idx_audit_logs_staff     ON audit_logs(staff_id, created_at DESC);
+File: backend/src/migrations/005_pending_amount_rpc.sql
+
+-- Atomic pending_amount recalculation (called by transaction.service.js)
+CREATE OR REPLACE FUNCTION recalc_pending_amount(plan_id UUID)
+RETURNS TABLE(collected_amount NUMERIC, pending_amount NUMERIC) AS $$
+BEGIN
+  UPDATE treatment_plans
+  SET pending_amount = GREATEST(0, estimated_cost - collected_amount)
+  WHERE id = plan_id
+  RETURNING collected_amount, pending_amount;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Recalculate all existing plans
+UPDATE treatment_plans
+SET pending_amount = GREATEST(0, estimated_cost - collected_amount)
+WHERE pending_amount IS NULL OR pending_amount != GREATEST(0, estimated_cost - collected_amount);
+Phase 12b — Soft Delete Standardization
+Rule: Medical records must never be hard-deleted. deleted_at IS NOT NULL = soft deleted.
+
+All BaseClinicRepository methods automatically filter WHERE deleted_at IS NULL.
+
+Soft delete sets deleted_at = NOW() and deleted_by = staffId.
+
+hardDelete is only available via InternalAdminRepository (separate class, not exposed to routes, only callable from admin utilities with NODE_ENV !== production guard).
+
+Migration from is_deleted:
+
+Columns added in 003_soft_delete.sql
+Existing is_deleted = true rows get deleted_at = NOW()
+is_deleted column kept until all queries confirmed migrated, then dropped in a follow-up migration
+Phase 12c — Audit Log
+When to audit (write to audit_logs):
+Event	Entity	Action
+Patient created	patient	CREATE
+Patient updated (any field)	patient	UPDATE
+Patient soft-deleted	patient	DELETE
+Prescription created	prescription	CREATE
+Prescription regenerated	prescription	UPDATE
+Payment recorded	payment	PAYMENT
+Treatment plan status changed	treatment_plan	UPDATE
+Queue entry status changed	queue_entry	UPDATE
+Staff role changed	staff	ROLE_CHANGE
+Staff deactivated	staff	DELETE
+Join code regenerated	clinic	UPDATE
+Clinic settings updated	clinic	UPDATE
+Not audited: reads, AI transcription calls, queue reorders (sort_order only), background job runs.
+
+audit-log.repository.js — insert only:
+class AuditLogRepository {
+  async log({ clinicId, staffId, requestId, entityType, entityId, action, oldValue, newValue }) {
+    await supabase.from('audit_logs').insert({ clinic_id: clinicId, staff_id: staffId, request_id: requestId, entity_type: entityType, entity_id: entityId, action, old_value: oldValue, new_value: newValue });
+    // Non-fatal — audit failure must NOT break the primary operation
+  }
+}
+The transaction.service.js calls auditLog.log(...) after every successful write. Audit log failures are caught, logged to logger.warn, and swallowed.
+
+Phase 12d — Background Jobs Reorganization
+Split jobs/cleanup.job.js into three focused files:
+
+jobs/audio-cleanup.job.js
+Processes visit_notes rows with audio_storage_path IS NOT NULL AND audio_uploaded_at < cutoff
+Deletes from voice-notes bucket, nulls audio_storage_path
+Batch: 100 per run
+jobs/voice-cleanup.job.js
+NEW — Processes voice_recordings rows with audio_path IS NOT NULL AND created_at < cutoff
+Deletes from voice-notes bucket, nulls audio_path
+Batch: 100 per run
+jobs/orphan-file-cleanup.job.js
+NEW — Lists files in xrays bucket, checks each against xrays table
+If no DB record exists for a storage path → delete from bucket
+Runs weekly (not daily — expensive operation)
+server.js job scheduling (updated):
+// Boot: 30s delay then daily
+const { runAudioCleanup } = require('./jobs/audio-cleanup.job');
+const { runVoiceCleanup }  = require('./jobs/voice-cleanup.job');
+const { runOrphanCleanup } = require('./jobs/orphan-file-cleanup.job');
+
+setTimeout(() => {
+  runAudioCleanup(18).catch(e => logger.error('audio-cleanup failed', { error: e.message }));
+  runVoiceCleanup(18).catch(e => logger.error('voice-cleanup failed', { error: e.message }));
+}, 30000);
+
+setInterval(() => runAudioCleanup(18).catch(...),  24 * 60 * 60 * 1000);
+setInterval(() => runVoiceCleanup(18).catch(...),   24 * 60 * 60 * 1000);
+setInterval(() => runOrphanCleanup().catch(...),  7 * 24 * 60 * 60 * 1000);
+Phase 13 — Missing Endpoints
+Add these during the route refactor (small additions, no new files needed):
+
+Endpoint	Where	Purpose
+POST /api/clinic/regenerate-join-code	clinic.routes.js	Doctor-only, generates new join_code
+PATCH /api/staff/:id	staff.routes.js	Doctor updates staff name/role
+DELETE /api/staff/:id	staff.routes.js	Doctor deactivates staff (sets status='inactive')
+GET /api/prescriptions?patientId=	prescriptions.routes.js	List prescriptions for patient
+PATCH /api/queue/:id/status	queue.routes.js	Explicit status-only endpoint (separate from full PATCH)
+Do NOT add: logout, token refresh, SMS provider — these are separate infrastructure decisions outside this scope.
+
+Phase 14 — Frontend Integration Update
+One file change handles ~95% of the frontend:
+
+dentai-app/lib/api/client.js
+Add response interceptor that unwraps the data envelope:
+
+client.interceptors.response.use(
+  response => {
+    // Unwrap { success: true, data: X } so services keep reading response.data.X unchanged
+    if (response.data?.success === true) {
+      response.data = response.data.data;
+    }
+    return response;
+  },
+  error => {
+    const res = error.response;
+    // Standardize error message reading from new { error: { code, message } } shape
+    if (res?.data?.error?.message) {
+      error.message = res.data.error.message;
+    }
+    if (res?.status === 401) {
+      // existing logout event logic unchanged
+    }
+    return Promise.reject(error);
+  }
+);
+AI endpoint changes — hooks that read warning field need to also check ai.status:
+
+dentai-app/lib/hooks/useTranscription.js — read response.data.ai?.warning instead of response.data.warning
+dentai-app/lib/hooks/useGenerateNote.js — add check for response.data.ai?.status === 'error' to show fallback warning to user
+Pagination — any hook that reads patient/visit/appointment lists needs to handle meta field if using pagination UI. Services that currently read data.patients or data || [] will continue to work — the interceptor unwraps data.data to data, so data.patients still resolves correctly.
+
+Scoped check: search for data.message or data.error in hooks/stores and update to data?.error?.message. The Explore agent found this in useTranscription.js:37 and useGenerateNote.js:43.
+
+Phase 15 — Cleanup
+jobs/cleanup.job.js — extend to also clean voice_recordings audio (same logic, different table/column)
+PATCH /treatment-plans/:id — add pending_amount recalculation when estimatedCost or collectedAmount updated
+POST /prescriptions — save follow_up to DB (add to INSERT after migration)
+POST /patients — add clinical_flags to INSERT (1-line fix, controllers/patients.controller.js:41)
+Remove getSitting_number join from treatment-plans (silent column miss is not a bug once columns exist via migration)
+GET /patients search — switch from .or(name.ilike.%q%, phone.ilike.%q%) to use textSearch or keep ILIKE but it now hits the trigram index
+Phase 16 — Integration Test Suite
+No unit tests for trivial helpers. Integration tests only — covering the critical user flows against a real Supabase test project.
+
+backend/tests/
+├── setup.js                    — test DB client, seed helpers, auth token factory
+├── auth/
+│   └── auth.test.js            — send-otp, verify-otp, create-clinic, join-clinic, me
+├── patients/
+│   └── patients.test.js        — CRUD, search, pagination, IDOR prevention
+├── queue/
+│   └── queue.test.js           — add to queue, update status, complete-consult, action-queue
+├── consultation/
+│   └── consultation.test.js    — complete-consult full flow: plan + visit + prescription + appointments created
+├── payments/
+│   └── payments.test.js        — record payment, pending_amount recalc, atomicity
+├── prescriptions/
+│   └── prescriptions.test.js   — create, PDF generation, follow_up persistence
+└── appointments/
+    └── appointments.test.js    — CRUD, booked-slots, no duplicate slot
+Critical flows to test (integration, not unit):
+Test	What it verifies
+IDOR prevention	Token from clinic A cannot read clinic B's visit UUID
+RBAC	Receptionist cannot call complete-consult; doctor can
+completeConsultation	Creates plan + visit + prescription + appointments in one call
+Payment atomicity	Two concurrent payments don't corrupt pending_amount
+Soft delete	Deleted patient not returned in list; can be fetched by ID with admin flag
+Pagination	GET /patients?limit=2 returns 2 records + correct meta.total
+Audit log	After patient update, audit_logs has a row with old/new values
+Response envelope	Every endpoint returns { success: true, data: ... } or { success: false, error: ... }
+Test tooling: Jest + supertest. Test Supabase project configured via TEST_SUPABASE_URL + TEST_SUPABASE_SERVICE_KEY env vars. Tests run against real DB — no mocking of Supabase.
+
+Add to package.json:
+
+"scripts": {
+  "test": "jest --runInBand tests/",
+  "test:watch": "jest --watch tests/"
+},
+"devDependencies": {
+  "jest": "^29",
+  "supertest": "^6"
+}
+Implementation Order (Sequential)
+Execute phases in this order. Each step leaves the app in a working state.
+
+── SECURITY PASS (do first — unblock everything else) ──────────────────
+ 1. package.json (add zod) + .env.example (fix vars)
+ 2. utils/response.js + utils/errors.js + utils/pagination.js
+ 3. middleware/requestId.js + utils/logger.js
+ 4. middleware/requireClinic.js + requireRole.js + validate.js
+ 5. middleware/errorHandler.js (new error envelope)
+ 6. DB migration 001 (missing columns — run on Supabase dashboard)
+ 7. DB migration 002 (indexes — concurrent, no downtime)
+ 8. DB migration 003 (soft_delete columns)
+ 9. DB migration 004 (audit_log table)
+10. DB migration 005 (pending_amount RPC)
+11. IDOR fixes: visits.controller getById + update, appointments.controller update
+12. Remove GET side effects: patients list/getById backfill, auth/me join_code
+13. Fix patients.create — add clinical_flags to INSERT
+14. Fix prescriptions — save follow_up to DB
+15. Fix treatment-plans PATCH — recalc pending_amount
+
+── RESPONSE + AUTH PASS ────────────────────────────────────────────────
+16. Wrap all controllers/routes with ok()/fail() response helpers
+17. Frontend: update dentai-app/lib/api/client.js interceptors
+18. Add Zod validators + validate() middleware to all POST/PUT/PATCH routes
+19. Add requireRole() to protected routes (complete-consult, clinic patch, etc.)
+20. Fix storage.service.js: readFileSync → createReadStream + content-type detection
+
+── ARCHITECTURE PASS ────────────────────────────────────────────────────
+21. BaseClinicRepository + all entity repositories
+22. transaction.service.js (completeConsultation, recordPayment, createClinic, joinClinic)
+23. Refactor controllers to use repositories (patients → visits → appointments → queue)
+24. Extract inline route handlers into controllers (queue, treatment-plans, visit-notes)
+25. Add audit logging via AuditLogRepository in transaction.service.js
+
+── QUALITY PASS ─────────────────────────────────────────────────────────
+26. Pagination on patients, visits, appointments, payments, prescriptions
+27. Fix action-queue N+1 (batch prescriptions query)
+28. AI layer error signaling + aiStatus field + medicine schema unification
+29. Job reorganization: split cleanup.job.js into audio/voice/orphan jobs
+30. Add missing endpoints: staff PATCH/DELETE, prescriptions list, clinic regen-join-code
+
+── TEST PASS ─────────────────────────────────────────────────────────────
+31. Integration test suite setup (Jest + supertest + test Supabase project)
+32. Auth tests + IDOR prevention tests
+33. Queue + consultation flow tests
+34. Payment atomicity tests
+35. Pagination + audit log tests
+Steps 1–15 = minimum viable security pass. App is safe. Steps 16–20 = API consistency pass. Frontend updated. Steps 21–30 = architecture pass. Clean internals. Steps 31–35 = test coverage. Confidence to ship.
+
+Files Changed Summary
+Backend — Modified (24 files)
+package.json (add zod, jest, supertest)
+.env.example
+src/server.js
+src/middleware/auth.js
+src/middleware/errorHandler.js
+src/controllers/auth.controller.js
+src/controllers/patients.controller.js
+src/controllers/visits.controller.js
+src/controllers/appointments.controller.js
+src/controllers/ai.controller.js
+src/routes/analytics.routes.js
+src/routes/treatment-plans.routes.js
+src/routes/visit-notes.routes.js
+src/routes/prescriptions.routes.js
+src/routes/xrays.routes.js
+src/routes/dataset.routes.js
+src/routes/queue.routes.js
+src/routes/staff.routes.js
+src/routes/clinic.routes.js
+src/routes/payments.routes.js
+src/services/ai.service.js
+src/services/storage.service.js
+src/jobs/cleanup.job.js (gutted — logic moved to audio-cleanup.job.js)
+Backend — New (42 files)
+Utils (4):
+
+src/utils/response.js
+src/utils/errors.js
+src/utils/pagination.js
+src/utils/logger.js
+Middleware (4):
+
+src/middleware/requestId.js
+src/middleware/requireClinic.js
+src/middleware/requireRole.js
+src/middleware/validate.js
+Validators (9):
+
+src/validators/auth.validator.js
+src/validators/patient.validator.js
+src/validators/visit.validator.js
+src/validators/appointment.validator.js
+src/validators/queue.validator.js
+src/validators/payment.validator.js
+src/validators/clinic.validator.js
+src/validators/staff.validator.js
+src/validators/xray.validator.js
+Repositories (12):
+
+src/repositories/base-clinic.repository.js
+src/repositories/patient.repository.js
+src/repositories/visit.repository.js
+src/repositories/appointment.repository.js
+src/repositories/queue.repository.js
+src/repositories/treatment-plan.repository.js
+src/repositories/prescription.repository.js
+src/repositories/payment.repository.js
+src/repositories/xray.repository.js
+src/repositories/staff.repository.js
+src/repositories/clinic.repository.js
+src/repositories/audit-log.repository.js
+Services (1):
+
+src/services/transaction.service.js
+Jobs (3):
+
+src/jobs/audio-cleanup.job.js
+src/jobs/voice-cleanup.job.js
+src/jobs/orphan-file-cleanup.job.js
+Migrations (5):
+
+src/migrations/001_missing_columns.sql
+src/migrations/002_indexes.sql
+src/migrations/003_soft_delete.sql
+src/migrations/004_audit_log.sql
+src/migrations/005_pending_amount_rpc.sql
+Tests (9):
+
+tests/setup.js
+tests/auth/auth.test.js
+tests/patients/patients.test.js
+tests/queue/queue.test.js
+tests/consultation/consultation.test.js
+tests/payments/payments.test.js
+tests/prescriptions/prescriptions.test.js
+tests/appointments/appointments.test.js
+Frontend — Modified (3 files)
+dentai-app/lib/api/client.js (response + error interceptors)
+dentai-app/lib/hooks/useTranscription.js (ai.warning → ai?.warning)
+dentai-app/lib/hooks/useGenerateNote.js (ai.status check + warning display)
+What is NOT Changing
+config/supabase.js — correct as-is
+services/pdf.service.js — solid, leave alone
+routes/auth.routes.js structure — multi-clinic onboarding flow is well-designed
+middleware/auth.js core JWT verification — correct
+All Gemini system prompts — detailed and appropriate for Indian dental context
+queue.routes.js reorder logic — sort_order swap is correct
+Verification Checklist
+After each phase:
+
+Phase 1-2 (Security):
+
+curl -H "Authorization: Bearer <clinic_a_token>" GET /api/visits/<clinic_b_visit_uuid>
+→ must return 404 (not the visit data)
+
+curl -H "Authorization: Bearer <receptionist_token>" POST /api/queue/123/complete-consult
+→ must return 403 FORBIDDEN
+Phase 5 (Response format):
+
+curl GET /api/patients → { "success": true, "data": { "patients": [...] } }
+curl GET /api/nonexistent → { "success": false, "error": { "code": "NOT_FOUND", "message": "..." } }
+Phase 6 (Validation):
+
+curl POST /api/patients -d '{"name":"test"}' → 400 VALIDATION_ERROR (phone missing)
+curl POST /api/patients -d '{"name":"test","phone":"abc"}' → 400 (phone not 10 digits)
+Phase 10 (Pagination):
+
+curl GET /api/patients?page=1&limit=5 → meta.total > 0, data.patients.length <= 5
+Phase 13 (Frontend):
+
+App boots, login works, patient list renders, queue loads
+Console: no data.data undefined errors
+AI transcription: shows warning badge when ai.status === 'error'
+Full regression:
+
+Login flow (OTP send → verify → create-clinic → see queue)
+Add patient → appears in list
+Add to queue → appears in queue
+Complete consult → treatment plan created
+PDF prescription → downloads
+X-ray upload → signed URL returns
+Phase 15 — Cleanup (absorb into Architecture Pass)
+Tasks previously listed separately; execute during Phase 21–30:
+
+Remove jobs/cleanup.job.js (replaced by three focused job files)
+Drop is_deleted column after soft-delete migration confirmed working (follow-up migration 006)
+Remove ANTHROPIC_API_KEY dead variable from any remaining references
+GET /patients search: ILIKE now hits trigram index — no code change needed
+What is NOT Changing
+config/supabase.js — correct as-is
+services/pdf.service.js — solid, leave alone
+routes/auth.routes.js route structure — multi-clinic onboarding flow is well-designed
+middleware/auth.js core JWT verification logic — correct
+All Gemini system prompts — multilingual, dental-specific, appropriate for Indian market
+Queue sort_order swap logic — correct
+Verification Checklist
+After security pass (steps 1–15):
+
+# IDOR test — must return 404, not the visit
+curl -H "Authorization: Bearer <clinic_a_token>" \
+  GET /api/visits/<clinic_b_visit_uuid>
+
+# RBAC test — must return 403
+curl -H "Authorization: Bearer <receptionist_token>" \
+  POST /api/queue/123/complete-consult -d '{"patientId":"...","procedure":"..."}'
+After response format pass (steps 16–17):
+
+curl GET /api/patients
+→ { "success": true, "data": { "patients": [...] } }
+
+curl GET /api/patients/nonexistent-uuid
+→ { "success": false, "error": { "code": "NOT_FOUND", "message": "Patient not found" } }
+After validation pass (step 18):
+
+curl POST /api/patients -d '{"name":"test"}'
+→ 400 { "success": false, "error": { "code": "VALIDATION_ERROR", "details": [{"field":"phone","message":"Required"}] } }
+After pagination (step 26):
+
+curl "GET /api/patients?page=1&limit=3"
+→ { "success": true, "data": { "patients": [...3 items] }, "meta": { "page":1,"limit":3,"total":47,"totalPages":16 } }
+Frontend smoke test (step 17):
+
+App boots, login completes, patient list renders
+Queue loads, add patient to queue works
+No Cannot read property of undefined errors in console
+AI transcription shows ⚠ AI fallback badge when ai.status !== 'success'
+Full regression (after step 35):
+
+npm test
+# All integration tests pass:
+# ✓ auth: OTP → verify → create-clinic (4 tests)
+# ✓ IDOR: clinic A cannot read clinic B records (3 tests)
+# ✓ RBAC: receptionist blocked from doctor routes (5 tests)
+# ✓ complete-consult: plan + visit + prescription created (1 test)
+# ✓ payment: pending_amount recalculated correctly (2 tests)
+# ✓ pagination: meta.total matches actual count (2 tests)
+# ✓ audit log: UPDATE creates audit record (2 tests)
+Remaining Technical Debt (Explicitly Out of Scope)
+SMS provider — auth.controller.js sendOtp stores OTP in DB but never sends it. Integrate MSG91/Twilio before production launch. No code scaffold needed here — a single await smsClient.send(phone, otp) call at line 48.
+Token invalidation / logout — 30-day JWTs with no denylist. Requires either a Redis-backed denylist or migrating to short-lived access + refresh tokens. Separate feature.
+Supabase Realtime on queue_entries — Must be enabled via Supabase Dashboard. Cannot be done from Node.js. Required for live queue sync between doctor + receptionist screens.
+Analytics clinic-level scope — GET /api/analytics/dashboard still uses dentist_id. Full per-clinic analytics is a separate design task.
+queue token number race condition — count + 1 approach has a race. Fix via Postgres sequence or SELECT MAX(token_number) + 1 FOR UPDATE. Low risk at current scale.
+Add Comment
+
+
+# DentAI — Architecture Review & Consolidated Recommendations
+
+**Cross-referencing:** Backend Audit · Architecture Plan · AI Layer Refinement · Product Context  
+**Date:** June 2026
+
+---
+
+## What This Document Is
+
+You have four documents: the audit (what is broken today), the architecture plan (what to build), the AI layer refinement (how to structure the AI stack), and the product context (why the product exists). This review cross-references all four, confirms what the architecture plan gets right, identifies what it misses or should change, and gives you a cleaner action sequence.
+
+---
+
+## Part 1 — Architecture Plan Assessment: What It Gets Right
+
+The architecture plan is solid. Most of the critical audit findings have a corresponding fix already mapped out. Specifically:
+
+The three IDOR vulnerabilities on visits and appointments are addressed in Phase 2. The body spread problem (`...req.body` into DB updates) is addressed with explicit field whitelists in the same phase. The GET side effects — the `clinic_id` backfill on every patient list call and the `join_code` generation in `GET /me` — are correctly removed in Phase 3. Role-based access control is properly introduced in Phase 4 before it's referenced by any route logic. The response envelope is standardized in Phase 5. The Zod validation layer in Phase 6 replaces all the ad-hoc `if (!field)` checks. The `readFileSync` → `createReadStream` fix in Phase 9 eliminates the memory spike. The N+1 fix in Phase 11 is the right approach (batch query replaces per-entry count). The five SQL migrations in Phase 12 cover all the missing columns the audit identified. The integration test structure in Phase 16 targets exactly the right flows.
+
+The implementation order is also correct in philosophy: security first, then API consistency, then architecture, then quality. This sequence ensures the app is safe at every stage.
+
+---
+
+## Part 2 — Gaps: What the Architecture Plan Misses or Should Change
+
+### Gap 1 — AI Folder Structure (Important for Long-Term)
+
+The architecture plan keeps `services/ai.service.js` as a flat file and mentions `controllers/ai.controller.js` as-is. Document 2 proposes a proper provider pattern, and it's the right call for DentAI's long-term plan. The product context is explicit: you intend to collect 50 clinics worth of recordings and fine-tune a Whisper model. If Sarvam is abstracted properly now, that migration is a one-file swap later.
+
+The architecture plan should be updated to replace `services/ai.service.js` with:
+
+```
+services/
+  ai/
+    ai.service.js              — orchestrates providers, used by controllers
+    providers/
+      sarvam.provider.js       — STT: audio → transcript
+      gemini.provider.js       — structuring: transcript → JSON
+      mock.provider.js         — dev/test only, never in production
+    prompts/
+      consultation.prompt.js   — generate-note system prompt
+      prescription.prompt.js   — extract-prescription system prompt
+      receptionist.prompt.js   — extract-complaint / extract-patient prompts
+    parsers/
+      medicine.parser.js       — unified medicine schema normalization
+```
+
+The `ai.controller.js` becomes a thin pass-through: it calls `aiService.transcribeAudio()`, `aiService.generateClinicalNote()`, `aiService.extractPrescription()` — it never touches Sarvam or Gemini directly. This is important because the current codebase has Gemini calls scattered across both `ai.controller.js` AND `ai.service.js`, and the two use different medicine field names (`dosage` vs `dose`). Moving prompts into dedicated files also fixes the invisible AI system prompt issue — right now if a prompt changes, it's buried inside a controller function.
+
+**The `medicine.parser.js` module solves a specific recurring problem.** The audit identified two incompatible medicine schemas. The architecture plan addresses this by unifying to a `strength`/`mealTiming` schema — but without a dedicated parser, the dual-schema problem will recur as soon as someone adds a third AI path. The parser module's job is simple: take any medicine object (however shaped) and return the canonical schema. Every path that reads or writes medicines goes through it.
+
+### Gap 2 — Gemini API Key in URL (Security, Missing from Plan)
+
+The audit flagged this as LOW-006: the Gemini API key is passed as a URL query parameter (`?key={GEMINI_API_KEY}`), which means it appears in server access logs, reverse proxy logs, and any WAF sitting in front of the API. The architecture plan never addresses this fix.
+
+The change is one line per call: replace the `?key=` query param with the `x-goog-api-key` request header. This should be added to the Phase 1 foundation work since it's a security issue and takes 10 minutes to fix across all six Gemini call sites.
+
+### Gap 3 — `clinical_flags` and `follow_up` Are Phase 15, Should Be Phase 1
+
+The plan puts both of these in the cleanup phase (step 30+ in the implementation order). This is wrong for two reasons.
+
+`clinical_flags` missing from patient create (audit CRITICAL from the queue perspective) means that any medical flag a receptionist records during patient registration is silently dropped. This is a data correctness issue that's been happening since the first patient was created. It's also a one-line fix: add `clinical_flags` to the INSERT in `patients.controller.js:41`.
+
+`follow_up` not being saved to prescriptions means every PDF generated has a blank follow-up field, which was explicitly designed in the product. This is also a one-line fix (add `follow_up` to the INSERT) and depends only on migration 001 adding the column.
+
+Both should move to the immediate fixes block, executed right after the schema migration runs.
+
+### Gap 4 — `complete-consult` Not Creating a Visit Record
+
+The audit (Part 9.2) explicitly notes: "No visit record created — today's consultation session is not recorded in `visits`." The architecture plan's Transaction Service description in Phase 7b does include creating a visit (step 2 of `completeConsultation`), which is correct. But the Phase 2 IDOR fixes section — which modifies `complete-consult` — doesn't mention adding the visit creation there. This means if someone implements Phase 2 before Phase 7 (which is the intended order), the visit creation gap persists until Phase 7.
+
+Recommendation: add a note to Phase 2 that `complete-consult` also needs a visit INSERT as a temporary fix, with a TODO marker for the full Transaction Service refactor in Phase 7.
+
+### Gap 5 — `is_deleted` → `deleted_at` Transition Is Incomplete
+
+Migration 003 adds `deleted_at` columns and backfills `is_deleted = true` rows. What it doesn't address is that all existing query code uses `.eq('is_deleted', false)`. When `deleted_at` columns are added, the existing queries still work because they still filter on `is_deleted`. But as soon as a soft-delete happens via the new `BaseClinicRepository.softDelete()` path (which sets `deleted_at` but not `is_deleted`), those old queries will start returning "deleted" records.
+
+The plan needs a transition rule: during the Architecture Pass (Phase 21-24), as each controller is migrated to use repositories, its queries must simultaneously switch from `.eq('is_deleted', false)` to `.is('deleted_at', null)`. Only after all query code is migrated should Migration 006 drop the `is_deleted` column. The current plan mentions dropping it but doesn't make the query migration explicit.
+
+### Gap 6 — Appointments Created by `complete-consult` Are `'scheduled'`, Should Be `'suggested'`
+
+This is a product design issue surfaced by the audit: auto-generated appointments are hardcoded to `10:00` and status `'scheduled'`. The product context (Document 4) describes the checkout flow: the receptionist confirms appointment details at checkout. If appointments are already `'scheduled'`, the receptionist has nothing to confirm — they're already set.
+
+The fix is to add a `'suggested'` status to appointments. `complete-consult` creates stubs with `status: 'suggested'` and no time set. During checkout, the receptionist sets the actual time and changes status to `'scheduled'`. This matches how the product context describes the receptionist's role.
+
+This requires adding `'suggested'` to the appointment status enum and a `PATCH /api/appointments/:id` that allows the status+time update (which already exists). The Zod validator in Phase 6 should include `'suggested'` in the status enum.
+
+### Gap 7 — Receptionist Prompt in the Wrong Place
+
+The audit notes `POST /api/ai/extract-complaint` and `POST /api/ai/extract-patient-info` are two overlapping endpoints with different output schemas doing the same thing. The architecture plan doesn't address this consolidation — it just adds a `queue.validator.js` that validates the `chiefComplaint` field on queue creation.
+
+When the AI folder is restructured (Gap 1), `receptionist.prompt.js` should contain a single unified extraction prompt that returns both the complaint and basic patient flags in one Gemini call. The two endpoints (`extract-complaint` and `extract-patient-info`) should be merged into one: `POST /api/ai/extract-queue-context`. The existing two endpoints remain as deprecated aliases pointing to the same handler until the frontend is updated.
+
+---
+
+## Part 3 — AI Layer: Integrating Document 2
+
+Document 2's most important insight is: **do not merge Sarvam and Gemini into one AI function**. The pipeline must stay explicit. The architecture plan's Phase 8 correctly separates them conceptually (Sarvam = STT, Gemini = structuring) but the flat file structure doesn't enforce this separation.
+
+With the provider pattern, the consultation flow becomes explicit and testable at each stage:
+
+```
+Doctor presses Record
+    → Voice File (.webm)
+    → StorageService.upload() → Supabase Storage
+    → SarvamProvider.transcribe(audioBuffer) → "Root canal tooth 26..."
+    → GeminiProvider.generateClinicalNote(transcript, consultationPrompt) → { diagnosis, medicines, ... }
+    → TransactionService.completeConsultation({ clinicId, patientId, structured, ... })
+    → Database
+```
+
+Each provider has a consistent interface:
+
+```js
+// sarvam.provider.js
+async transcribe(audioBuffer, options = {}) → { transcript: string, confidence?: number }
+
+// gemini.provider.js
+async generate(prompt, userContent, options = {}) → { data: object }
+
+// mock.provider.js
+async transcribe() → { transcript: mockTranscript }
+async generate(prompt) → { data: mockStructuredNote }
+```
+
+The mock provider should only activate when `NODE_ENV === 'development'` AND `GEMINI_API_KEY` is not set. In production, a missing API key should throw at startup, not silently fall back. The architecture plan correctly says "Mock data only in NODE_ENV === development" but doesn't make the production startup check explicit. Add a startup validation in `server.js` that throws if `GEMINI_API_KEY` or `SARVAM_API_KEY` is absent in production.
+
+---
+
+## Part 4 — Revised Implementation Sequence
+
+The architecture plan's 35-step order is correct in structure but some items are misplaced. Here is the corrected sequence with the gaps addressed:
+
+### Truly Immediate (< 2 hours, no migration needed)
+
+These are single-line or small fixes that can be deployed right now without touching anything architectural:
+
+1. Add `GEMINI_API_KEY` to `.env.example`
+2. Add `DEMO_PHONE`, `DEV_OTP_OTHER` to `.env.example`, remove `ANTHROPIC_API_KEY` and `USE_DEV_OTP`
+3. Fix `patients.controller.js:41` — add `clinical_flags` to INSERT
+4. Fix Gemini API key from URL query param to `x-goog-api-key` header (6 call sites)
+5. Fix `visits.controller.js:38` and `:47` — add `eq('dentist_id', req.dentistId)` filters (IDOR)
+6. Fix `appointments.controller.js:68` — add `eq('dentist_id', req.dentistId)` filter (IDOR)
+7. Fix `storage.service.js:6` — `readFileSync` → `createReadStream`
+
+Deploy these seven changes before anything else. The app is materially more secure and correct after this.
+
+### Security Pass (Week 1)
+
+8. Run DB migrations 001 and 002 on Supabase dashboard (missing columns + indexes)
+9. Add `follow_up` to prescriptions INSERT (migration 001 adds the column)
+10. Create `utils/response.js`, `utils/errors.js`, `utils/pagination.js`
+11. Create `middleware/requestId.js`, `utils/logger.js`
+12. Create `middleware/requireClinic.js`, `middleware/requireRole.js`, `middleware/validate.js`
+13. Update `errorHandler.js` to emit the new envelope
+14. Wrap all controllers/routes with `ok()`/`fail()` helpers
+15. Update `dentai-app/lib/api/client.js` interceptors for the new envelope
+16. Add Zod validators to all POST/PUT/PATCH routes (add `'suggested'` to appointment status enum)
+17. Add `requireRole()` to protected routes
+
+Run DB migrations 003, 004, 005 after the security pass is stable.
+
+### Remove GET Side Effects (Week 1, after security pass)
+
+18. Remove backfill block from `patients.controller.js list`
+19. Remove backfill from `patients.controller.js getById`
+20. Create `POST /api/internal/backfill-clinic-id` (dev-only)
+21. Remove `join_code` generation from `GET /me`, move to `POST /api/clinic/regenerate-join-code`
+
+### Architecture Pass (Week 2–3)
+
+22. Create `services/ai/` folder structure with providers, prompts, parsers (Document 2 pattern)
+23. Migrate `ai.controller.js` to call `aiService.*` methods, not Gemini/Sarvam directly
+24. Unify medicine schema via `medicine.parser.js`
+25. Create `repositories/base-clinic.repository.js` + all entity repositories
+26. Create `services/transaction.service.js`
+    - `completeConsultation` must include the visit INSERT (gap 3 from this review)
+27. Migrate controllers to use repositories: patients → visits → appointments → queue
+28. Add query transition: every migrated controller switches from `is_deleted` to `deleted_at` filter
+29. Add audit logging in `transaction.service.js`
+
+### Quality Pass (Week 4)
+
+30. Pagination on all list endpoints
+31. Fix N+1 in `action-queue` (batch prescriptions query)
+32. Add missing endpoints: staff PATCH/DELETE, prescriptions list, `regenerate-join-code`
+33. Reorganize background jobs into three focused files
+34. Add startup validation: throw if required API keys absent in production
+
+### Test Pass (Week 5+)
+
+35. Jest + supertest integration test suite
+36. IDOR prevention tests
+37. Consultation flow tests
+38. Payment atomicity tests
+39. Pagination + audit log tests
+
+---
+
+## Part 5 — Product Context Observations
+
+A few things from Document 4 that should inform technical decisions:
+
+**Treatment Plans are the central entity, not appointments.** The current `complete-consult` creates appointment stubs as an afterthought with hardcoded times. These should be `'suggested'` status records that the receptionist confirms at checkout. The data model change is minor; the conceptual alignment with how dentists think about multi-sitting treatment is significant.
+
+**The receptionist manages queue state, not the doctor.** The architecture plan correctly leaves `PATCH /api/queue/:id` open to both roles. Don't restrict it.
+
+**Consultation Mode is about focus.** When building the consultation context endpoint (`GET /api/queue/:id/context`), the response should be minimal and fast — chief complaint, last visit summary, active treatment plan, pending balance. The current implementation joins four tables; that's fine, but the field selection should be deliberately narrow.
+
+**AI does not diagnose.** This is stated explicitly in the product context. The Gemini prompts should not be changed to infer diagnoses — they only structure what the doctor already said. This is a constraint on prompt engineering, not on the tech stack.
+
+---
+
+## Part 6 — Things That Are Correct and Should Not Be Changed
+
+To be explicit about what to leave alone while doing all of the above:
+
+`config/supabase.js` — correct as-is. `services/pdf.service.js` — the `deriveSlots` fallback is a good touch; leave it. `middleware/auth.js` core JWT verification — correct. The Gemini system prompts themselves — they are detailed, multilingual, and contextually right for Indian dental practice. `routes/auth.routes.js` structure — the multi-clinic onboarding flow is well designed. Queue reorder logic — the `sort_order` swap is correct.
+
+---
+
+## Summary Table — Gaps vs. Architecture Plan Phases
+
+| Gap | Severity | Where It Should Be Fixed | Plan Has It? |
+|-----|----------|--------------------------|-------------|
+| Gemini key in URL query param | High | Phase 1 / Immediate | No |
+| `clinical_flags` not saved on patient create | High | Immediate | Misplaced (Phase 15) |
+| `follow_up` not saved to prescriptions | High | Phase 1 (after migration 001) | Misplaced (Phase 15) |
+| `complete-consult` not creating visit record | High | Phase 2 note + Phase 7b | Partial |
+| AI folder structure (provider pattern) | Medium | Phase 8 / Architecture Pass | No |
+| `medicine.parser.js` for schema unification | Medium | Phase 8 | No |
+| `is_deleted` → `deleted_at` transition plan | Medium | Phase 21–24 explicit rule | No |
+| Appointment status `'suggested'` | Medium | Phase 6 validator + Phase 7b | No |
+| Two overlapping AI extract endpoints | Low | Phase 8 / AI restructure | No |
+| Production startup key validation | Low | Phase 8 | No |
+
+
+You've reached the point where you should stop giving Claude multiple partial prompts and instead give it **one authoritative architecture specification**.
+
+Below is the kind of header I would put at the top of that document:
+
+> **This document supersedes all previous architecture discussions.**
+>
+> Read the existing codebase completely before making changes.
+>
+> The objective is to evolve the existing DentAI backend into the architecture described here while preserving existing working functionality wherever practical.
+>
+> This is a Modular Monolith. Do NOT introduce microservices, event buses, CQRS, Kafka, RabbitMQ, Redis workers, or distributed services.
+>
+> Optimize for:
+>
+> * Simplicity
+> * Maintainability
+> * Security
+> * Clinic-level isolation
+> * Production reliability
+>
+> Target scale:
+>
+> * 100+ clinics
+> * 1000+ staff
+> * 100,000+ patients
+
+---
+
+Then I would structure the document roughly like this:
+
+# 1. Product Context
+
+* Voice-first dental clinic operating system.
+* Reception → Doctor → Reception workflow.
+* AI structures information; it does not make clinical decisions.
+* Treatment Plans are the primary business entity.
+* Appointments are children of Treatment Plans.
+* Authorization is clinic-scoped.
+
+---
+
+# 2. High-Level Architecture
+
+```text
+Frontend
+
+↓
+
+Middleware
+
+↓
+
+Validation
+
+↓
+
+Controllers
+
+↓
+
+Transaction Services
+
+↓
+
+AI Service
+
+↓
+
+Repositories
+
+↓
+
+Supabase
+```
+
+Controllers never access Supabase directly.
+
+---
+
+# 3. Folder Structure
+
+```text
+src/
+
+config/
+
+middleware/
+
+controllers/
+
+routes/
+
+validators/
+
+services/
+
+    ai/
+
+        providers/
+
+            sarvam.provider.js
+
+            gemini.provider.js
+
+            mock.provider.js
+
+        prompts/
+
+            consultation.prompt.js
+
+            prescription.prompt.js
+
+            receptionist.prompt.js
+
+        parsers/
+
+            medicine.parser.js
+
+        schemas/
+
+            consultation.schema.js
+
+            prescription.schema.js
+
+            receptionist.schema.js
+
+        ai.service.js
+
+    transaction.service.js
+
+repositories/
+
+    base-clinic.repository.js
+
+    patient.repository.js
+
+    visit.repository.js
+
+    appointment.repository.js
+
+    queue.repository.js
+
+    treatment.repository.js
+
+    prescription.repository.js
+
+    payment.repository.js
+
+    clinic.repository.js
+
+    staff.repository.js
+
+    xray.repository.js
+
+    audit.repository.js
+
+jobs/
+
+utils/
+
+tests/
+```
+
+---
+
+# 4. Database Ownership Model
+
+```text
+Clinic
+
+├── Staff
+
+│     ├── Doctor
+
+│     └── Receptionist
+
+├── Patients
+
+├── Queue Entries
+
+├── Visits
+
+├── Treatment Plans
+
+├── Appointments
+
+├── Prescriptions
+
+├── Payments
+
+├── XRays
+
+└── Audit Logs
+```
+
+Everything belongs to a clinic.
+
+---
+
+# 5. Authorization Rules
+
+Never authorize using:
+
+```text
+dentist_id
+```
+
+Use:
+
+```text
+clinic_id
++
+role
+```
+
+Repository methods automatically scope by clinic.
+
+---
+
+# 6. AI Pipeline
+
+Doctor Flow:
+
+```text
+Audio
+
+↓
+
+SarvamProvider
+
+↓
+
+Transcript
+
+↓
+
+GeminiProvider
+
+↓
+
+consultation.schema
+
+↓
+
+medicine.parser
+
+↓
+
+TransactionService.completeConsultation()
+
+↓
+
+Database
+```
+
+Reception Flow:
+
+```text
+Audio
+
+↓
+
+SarvamProvider
+
+↓
+
+Transcript
+
+↓
+
+Queue Entry
+```
+
+No AI diagnosis.
+
+---
+
+# 7. Transaction Service
+
+Create orchestration methods:
+
+* createClinic()
+* joinClinic()
+* completeConsultation()
+* completeCheckout()
+* recordPayment()
+* createTreatmentPlan()
+
+Multi-table operations must happen here.
+
+---
+
+# 8. Repository Pattern
+
+Controllers:
+
+* validate
+* call service
+* return response
+
+Repositories:
+
+* own all Supabase access
+
+Example:
+
+```text
+findById(id, clinicId)
+
+findAll(clinicId)
+
+create(data)
+
+update(id, clinicId)
+
+softDelete(id, clinicId)
+```
+
+---
+
+# 9. Validation
+
+Use Zod.
+
+No:
+
+```javascript
+...req.body
+```
+
+Explicit field whitelisting only.
+
+---
+
+# 10. API Response Standard
+
+Success:
+
+```json
+{
+  "success": true,
+  "data": {}
+}
+```
+
+Failure:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "",
+    "message": "",
+    "details": {}
+  }
+}
+```
+
+No silent mock responses.
+
+---
+
+# 11. AI Provider Rules
+
+Providers:
+
+* Sarvam
+* Gemini
+* Mock
+
+Mock provider:
+
+Development only.
+
+Production startup should fail if API keys are missing.
+
+Validate:
+
+* GEMINI_API_KEY
+* SARVAM_API_KEY
+* SUPABASE_URL
+* SUPABASE_SERVICE_ROLE_KEY
+* JWT_SECRET
+
+---
+
+# 12. Medicine Schema
+
+Canonical schema:
+
+```json
+{
+  "name": "",
+  "strength": "",
+  "frequency": "",
+  "duration": "",
+  "mealTiming": "",
+  "instructions": ""
+}
+```
+
+All AI outputs pass through:
+
+```text
+medicine.parser.js
+```
+
+---
+
+# 13. Queue Flow
+
+```text
+Waiting
+
+↓
+
+Checked In
+
+↓
+
+In Consultation
+
+↓
+
+Ready For Checkout
+
+↓
+
+Completed
+```
+
+Reception owns queue state.
+
+Doctor never manually changes queue state.
+
+---
+
+# 14. Consultation Flow
+
+```text
+Doctor Save
+
+↓
+
+TransactionService.completeConsultation()
+
+├── Create Visit
+
+├── Create Treatment Plan
+
+├── Create Prescription
+
+├── Create Suggested Appointments
+
+├── Update Queue
+
+└── Audit Log
+```
+
+Appointments are created with:
+
+```text
+status = suggested
+```
+
+Reception confirms them later.
+
+---
+
+# 15. Payment Flow
+
+```text
+Reception
+
+↓
+
+recordPayment()
+
+↓
+
+Payment Transaction
+
+↓
+
+Update Treatment Plan Totals
+
+↓
+
+Audit Log
+```
+
+Use transactions.
+
+---
+
+# 16. Soft Delete
+
+Use:
+
+```text
+deleted_at
+
+deleted_by
+```
+
+Repositories automatically exclude deleted records.
+
+---
+
+# 17. Audit Logs
+
+Track:
+
+* CREATE
+* UPDATE
+* DELETE
+* PAYMENT
+* PRESCRIPTION
+* ROLE CHANGE
+* QUEUE REORDER
+
+Audit failure must never fail the business operation.
+
+---
+
+# 18. Logging
+
+Use:
+
+```text
+requestId
+
+clinicId
+
+staffId
+
+route
+
+duration
+```
+
+No scattered console.log.
+
+---
+
+# 19. Performance
+
+* Pagination everywhere
+* Batch queries
+* No N+1
+* Stream file uploads
+* Add indexes
+* Queue tokens via DB sequence
+
+---
+
+# 20. Testing
+
+Integration tests for:
+
+* Create Clinic
+* Join Clinic
+* Add Patient
+* Queue Patient
+* Complete Consultation
+* Generate Prescription
+* Record Payment
+* Schedule Follow-Up
+
+---
+
+# 21. Immediate Fixes
+
+Before architectural refactor:
+
+* Fix IDOR vulnerabilities
+* Add clinic ownership checks
+* Add missing env variables
+* Fix Gemini API key header
+* Save clinical_flags
+* Save follow_up
+* Replace readFileSync()
+* Add production startup validation
+
+---
+
+# 22. Final Constraint
+
+> Do not rewrite working systems.
+>
+> Do not introduce microservices.
+>
+> Do not over-abstract.
+>
+> Refactor incrementally.
+>
+> Preserve existing frontend compatibility wherever practical.
+>
+> The final result should be a clean, repository-driven, clinic-scoped modular monolith optimized for a real-world dental clinic workflow.
+
+I would actually stop here. I would **not** add more architectural ideas. This is already a strong production blueprint, and the next step should simply be implementation and clinic testing.
