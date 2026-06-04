@@ -26,17 +26,19 @@ function ConsultModeScreen() {
   const prescriptions = useClinicalStore(s => s.prescriptions);
 
   const fetchPatient = usePatientStore(s => s.fetchPatient);
+  const loadPatients = usePatientStore(s => s.loadPatients);
   const pById = id => patients.find(p => p.id === id);
   const current = queue.find(e => e.status === 'in_consultation');
   const waiting = queue.filter(e => e.status === 'waiting');
   const p = current && pById(current.patientId);
 
-  // If patient not in local store, fetch them
+  // If patient not in local store, fetch them; fall back to reloading all patients
   useEffect(() => {
-    if (current?.patientId && !p) {
-      fetchPatient(current.patientId).catch(() => {});
-    }
-  }, [current?.patientId, p]);
+    if (!current?.patientId || p) return;
+    fetchPatient(current.patientId).catch(() => {
+      loadPatients().catch(() => {});
+    });
+  }, [current?.patientId, !!p]);
 
   const lastVisit = p && visits.filter(v => v.patientId === p.id && v.status === 'done').sort((a, b) => b.date.localeCompare(a.date))[0];
   const activeProc = p && procedures.filter(x => x.patientId === p.id && (x.status === 'in_progress' || x.status === 'planned')).sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''))[0];
@@ -81,10 +83,10 @@ function ConsultModeScreen() {
           ) : <div style={{ textAlign: 'center', fontSize: 15, color: 'var(--text-tertiary)' }}>No one is waiting.</div>}
         </div>
       ) : !p ? (
-        <div className="scroll" style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: '0 24px 60px' }}>
-          <div style={{ textAlign: 'center', color: 'var(--text-tertiary)' }}>
-            <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--text-secondary)', marginTop: 12 }}>Loading patient…</div>
-          </div>
+        <div className="scroll" style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', padding: '0 24px 60px', gap: 16 }}>
+          <div style={{ width: 28, height: 28, borderRadius: '50%', border: '3px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin .7s linear infinite' }} />
+          <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-secondary)' }}>Loading patient…</div>
+          <button onClick={() => { loadQueue(); loadPatients(); }} style={{ fontSize: 14, color: 'var(--blue)', fontWeight: 600, marginTop: 4 }}>Tap to retry</button>
         </div>
       ) : (
         <div className="scroll" style={{ flex: 1 }}>

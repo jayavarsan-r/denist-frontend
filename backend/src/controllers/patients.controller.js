@@ -48,10 +48,13 @@ exports.create = async (req, res, next) => {
 exports.getById = async (req, res, next) => {
   try {
     let q = supabase.from('patients').select('*, visits(*), appointments(*)').eq('id', req.params.id);
-    if (req.clinicId) q = q.eq('clinic_id', req.clinicId);
-    else q = q.eq('dentist_id', req.dentistId);
+    q = scopeQuery(q, req);
     const { data: patient, error } = await q.single();
     if (error || !patient) return res.status(404).json({ error: 'Patient not found' });
+    // Stamp clinic_id if missing so future scope queries find this patient
+    if (req.clinicId && !patient.clinic_id) {
+      supabase.from('patients').update({ clinic_id: req.clinicId }).eq('id', req.params.id).then(() => {});
+    }
     res.json({ patient });
   } catch (e) { next(e); }
 };
