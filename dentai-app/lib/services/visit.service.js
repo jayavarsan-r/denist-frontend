@@ -1,7 +1,9 @@
 import { apiClient } from '../api/client';
 
 export async function listVisits(patientId) {
-  const { data } = await apiClient.get('/api/visits', { params: { patientId } });
+  const params = {};
+  if (patientId) params.patientId = patientId;
+  const { data } = await apiClient.get('/api/visits', { params });
   return data; // { visits: [...] }
 }
 

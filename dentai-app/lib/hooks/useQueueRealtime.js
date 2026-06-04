@@ -16,25 +16,20 @@ export function useQueueRealtime() {
 
   useEffect(() => {
     loadQueue();
+    if (!clinicId) return;
 
-    if (clinicId) {
-      subscribeToQueue(clinicId, (entry, eventType) => {
-        if (eventType === 'DELETE') {
-          // reload on delete since we don't have the deleted row's id reliably
-          loadQueue();
-        } else {
-          mergeEntry(entry);
-        }
-      }).then((unsub) => {
-        unsubRef.current = unsub;
-      });
-    }
+    let cancelled = false;
+    subscribeToQueue(clinicId, (entry, eventType) => {
+      if (eventType === 'DELETE') loadQueue();
+      else mergeEntry(entry);
+    }).then((unsub) => {
+      if (cancelled) { unsub(); return; } // React Strict Mode double-invoke guard
+      unsubRef.current = unsub;
+    });
 
     return () => {
-      if (unsubRef.current) {
-        unsubRef.current();
-        unsubRef.current = null;
-      }
+      cancelled = true;
+      if (unsubRef.current) { unsubRef.current(); unsubRef.current = null; }
     };
   }, [clinicId]);
 }

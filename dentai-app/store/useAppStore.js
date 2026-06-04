@@ -22,6 +22,15 @@ export const useAppStore = create((set, get) => ({
     slot: 30,
   },
 
+  // Prescription design (persisted in localStorage)
+  prescriptionDesign: {
+    doctorName: '',
+    qualification: '',
+    regNumber: '',
+    clinicPhone: '',
+    signatureDataUrl: null,
+  },
+
   // App flow state
   started: false,
   consultMode: false,
@@ -90,6 +99,25 @@ export const useAppStore = create((set, get) => ({
 
   /* ─── Clinic / setup ─── */
   saveClinic: (c) => set({ clinic: c, doctorSetupDone: true }),
+  updateClinicLocal: (patch) => set((s) => ({ clinic: { ...s.clinic, ...patch } })),
+
+  /* ─── Prescription design ─── */
+  setPrescriptionDesign: (patch) => {
+    const next = { ...get().prescriptionDesign, ...patch };
+    try {
+      const { signatureDataUrl, ...rest } = next;
+      localStorage.setItem('rx_design', JSON.stringify(rest));
+      if (signatureDataUrl !== undefined) localStorage.setItem('rx_sig', signatureDataUrl || '');
+    } catch {}
+    set({ prescriptionDesign: next });
+  },
+  hydratePrescriptionDesign: () => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('rx_design') || '{}');
+      const sig = localStorage.getItem('rx_sig') || null;
+      set((s) => ({ prescriptionDesign: { ...s.prescriptionDesign, ...saved, signatureDataUrl: sig || null } }));
+    } catch {}
+  },
 
   /* ─── Consultation mode ─── */
   enterConsult: () => set({ consultMode: true }),

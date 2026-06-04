@@ -8,6 +8,7 @@ import FlowGuard from '@/components/FlowGuard';
 import SheetHost from '@/components/SheetHost';
 import BottomNav from '@/components/ui/BottomNav';
 import Toast from '@/components/ui/Toast';
+import IOSFrame from '@/components/IOSFrame';
 import { useBootstrap } from '@/lib/hooks/useBootstrap';
 
 const HIDE_NAV_PATHS = [
@@ -68,7 +69,7 @@ function AppShell({ children }) {
   const showNav = !HIDE_NAV_PATHS.includes(normPath) && !isDetailPage;
 
   const navItems = role === 'receptionist' ? RECEPTION_NAV : DOCTOR_NAV;
-  const activeTab = ROUTE_TO_TAB[pathname] || 'home';
+  const activeTab = ROUTE_TO_TAB[normPath] || 'home';
 
   const onNav = (id) => {
     router.push(TAB_ROUTES[id] || '/');
@@ -107,6 +108,7 @@ function AppShell({ children }) {
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
+        background: 'var(--bg)',
         fontFamily: `'Plus Jakarta Sans', -apple-system, system-ui, sans-serif`,
       }}
     >
@@ -137,7 +139,9 @@ export default function RootLayout({ children }) {
         />
       </head>
       <body>
-        <AppShell>{children}</AppShell>
+        <IOSFrame>
+          <AppShell>{children}</AppShell>
+        </IOSFrame>
       </body>
     </html>
   );

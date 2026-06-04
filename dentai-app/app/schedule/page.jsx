@@ -10,7 +10,7 @@ import Icon from '@/components/icons';
 import { SectionHeader, Chip, StatusChip, Avatar, EmptyState, SelectPill, Segmented } from '@/components/ui';
 import { TODAY } from '@/lib/data/patients';
 import { getProcedureColor } from '@/lib/data/procedures';
-import { formatTime, parseDate, MONTHS, DAYS } from '@/lib/data/utils';
+import { formatTime, parseDate, MONTHS, DAYS, formatDate } from '@/lib/data/utils';
 
 /* DentWay — Schedule (week / day / month) */
 
@@ -177,6 +177,108 @@ function MonthView({ visits, procedures, setScheduleView }) {
   );
 }
 
+const STATUS_COLOR = { confirmed: 'var(--blue)', arrived: 'var(--orange)', done: 'var(--green)', completed: 'var(--green)', no_show: 'var(--red)', scheduled: 'var(--text-tertiary)' };
+const STATUS_LABEL = { confirmed: 'Confirmed', arrived: 'Arrived', done: 'Done', completed: 'Completed', no_show: 'No-show', scheduled: 'Scheduled' };
+
+function HistoryView({ visits, clinicalVisits, patients, procedures, openSheet }) {
+  const pById = (id) => patients.find(p => p.id === id);
+
+  // Combine appointments (all) and clinical consultation records
+  const allEntries = useMemo(() => {
+    const appts = visits.map(v => ({ ...v, _kind: 'appointment', _sortDate: v.date }));
+    const consults = clinicalVisits.map(cv => ({ ...cv, _kind: 'consultation', _sortDate: cv.date }));
+    return [...appts, ...consults].sort((a, b) => b._sortDate.localeCompare(a._sortDate) || (b.startTime || '').localeCompare(a.startTime || ''));
+  }, [visits, clinicalVisits]);
+
+  // Group by date
+  const byDate = useMemo(() => {
+    const map = {};
+    for (const e of allEntries) {
+      const d = e._sortDate || 'Unknown';
+      if (!map[d]) map[d] = [];
+      map[d].push(e);
+    }
+    return Object.entries(map).sort((a, b) => b[0].localeCompare(a[0]));
+  }, [allEntries]);
+
+  if (allEntries.length === 0) {
+    return (
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, color: 'var(--text-tertiary)' }}>
+        <Icon name="calendar" size={44} stroke={1.5} />
+        <div style={{ fontSize: 17, fontWeight: 600, color: 'var(--text-secondary)' }}>No history yet</div>
+        <div style={{ fontSize: 14 }}>Appointments and consultations will appear here</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="scroll" style={{ flex: 1, background: 'var(--surface)' }}>
+      <div style={{ padding: '8px 20px 40px' }}>
+        {byDate.map(([date, entries]) => {
+          const isPast = date < TODAY;
+          const isToday = date === TODAY;
+          return (
+            <div key={date} style={{ marginBottom: 24 }}>
+              {/* date header */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, paddingTop: 10 }}>
+                <span style={{ fontSize: 14, fontWeight: 700, color: isToday ? 'var(--accent)' : 'var(--text-secondary)', letterSpacing: '0.02em', textTransform: 'uppercase' }}>
+                  {isToday ? 'Today' : formatDate(date)}
+                </span>
+                <div style={{ flex: 1, height: 1, background: 'var(--border-light)' }} />
+                <span style={{ fontSize: 12, color: 'var(--text-tertiary)', fontWeight: 600 }}>{entries.length}</span>
+              </div>
+
+              <div className="card" style={{ overflow: 'hidden' }}>
+                {entries.map((e, i) => {
+                  const p = pById(e.patientId);
+                  const proc = e.procedureId && procedures.find(x => x.id === e.procedureId);
+                  const isConsult = e._kind === 'consultation';
+                  const title = isConsult ? (e.procedureName || 'Consultation') : (e.purpose || proc?.type || 'Appointment');
+                  const sub = isConsult
+                    ? [e.toothNumber && `Tooth ${e.toothNumber}`, e.notes && e.notes.slice(0, 60) + (e.notes.length > 60 ? '…' : '')].filter(Boolean).join(' · ')
+                    : [proc ? `${proc.type}${proc.tooth ? ' · Tooth ' + proc.tooth : ''}` : null, e.startTime && formatTime(e.startTime).label].filter(Boolean).join(' · ');
+
+                  return (
+                    <button
+                      key={e.id + e._kind}
+                      onClick={() => isConsult ? openSheet('visitRecord', { id: e.id }) : openSheet('apptPeek', { id: e.id })}
+                      className="rowtap"
+                      style={{ width: '100%', display: 'flex', alignItems: 'flex-start', gap: 12, padding: '13px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left', opacity: isPast && !isToday ? 0.85 : 1 }}
+                    >
+                      {/* kind badge */}
+                      <div style={{ width: 34, height: 34, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, background: isConsult ? 'rgba(59,130,246,0.1)' : 'rgba(34,197,94,0.1)', marginTop: 2 }}>
+                        <Icon name={isConsult ? 'stethoscope' : 'calendar'} size={18} color={isConsult ? 'var(--blue)' : 'var(--green)'} />
+                      </div>
+
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                          <div style={{ fontSize: 16, fontWeight: 700, lineHeight: 1.2 }}>{p ? p.name : 'Unknown Patient'}</div>
+                          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.03em', textTransform: 'uppercase', color: STATUS_COLOR[e.status] || 'var(--text-tertiary)', flexShrink: 0 }}>
+                            {STATUS_LABEL[e.status] || e.status || ''}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 13.5, fontWeight: 600, color: isConsult ? 'var(--blue)' : 'var(--green)', marginTop: 2 }}>{title}</div>
+                        {sub && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub}</div>}
+                        {isConsult && e.medications && e.medications.length > 0 && (
+                          <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 3 }}>
+                            <Icon name="pill" size={11} style={{ marginRight: 4 }} />
+                            {(typeof e.medications === 'string' ? (() => { try { return JSON.parse(e.medications); } catch { return []; } })() : e.medications).map(m => m.name || m).join(', ')}
+                          </div>
+                        )}
+                      </div>
+                      <Icon name="chevRight" size={16} color="var(--text-tertiary)" style={{ marginTop: 10, flexShrink: 0 }} />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function ScheduleScreen() {
   const router = useRouter();
   const openSheet = useAppStore((s) => s.openSheet);
@@ -184,26 +286,52 @@ function ScheduleScreen() {
   const setScheduleView = useAppStore((s) => s.setScheduleView);
   const patients = usePatientStore((s) => s.patients);
   const visits = useVisitStore((s) => s.visits);
-  const moveVisit = useVisitStore((s) => s.moveVisit);
+  const clinicalVisits = useVisitStore((s) => s.clinicalVisits);
+  const loading = useVisitStore((s) => s.loading);
+  const loadAppointments = useVisitStore((s) => s.loadAppointments);
+  const loadClinicalVisits = useVisitStore((s) => s.loadClinicalVisits);
   const procedures = useClinicalStore((s) => s.procedures);
 
+  useEffect(() => {
+    loadAppointments();
+    loadClinicalVisits();
+  }, []);
+
   const view = scheduleView;
-  const hasAny = visits.length > 0;
+  const isHistory = view === 'History';
+
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--surface)' }}>
       <div style={{ flexShrink: 0, background: 'var(--surface)', borderBottom: '1px solid var(--border-light)' }}>
         <div style={{ padding: '58px 20px 10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span className="t-page-title">Schedule</span>
-          <button onClick={() => openSheet('newVisit', {})} style={{ color: 'var(--accent)', display: 'flex' }}><Icon name="plus" size={26} stroke={2.4} /></button>
+          {!isHistory && (
+            <button onClick={() => openSheet('newVisit', {})} style={{ color: 'var(--accent)', display: 'flex' }}><Icon name="plus" size={26} stroke={2.4} /></button>
+          )}
         </div>
         <div style={{ padding: '0 20px 12px' }}>
-          <Segmented options={['Day', 'Week', 'Month']} value={view} onChange={setScheduleView} />
+          <Segmented options={['Day', 'Week', 'Month', 'History']} value={view} onChange={setScheduleView} />
         </div>
       </div>
-      {!hasAny ? <EmptyState title="No appointments" hint="Tap + to schedule" /> :
-        view === 'Week' ? <WeekView visits={visits} patients={patients} procedures={procedures} openSheet={openSheet} /> :
-        view === 'Day' ? <DayView visits={visits} patients={patients} procedures={procedures} openSheet={openSheet} /> :
-        <MonthView visits={visits} procedures={procedures} setScheduleView={setScheduleView} />}
+
+      {isHistory ? (
+        <HistoryView visits={visits} clinicalVisits={clinicalVisits} patients={patients} procedures={procedures} openSheet={openSheet} />
+      ) : loading && visits.length === 0 ? (
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+            <div style={{ width: 28, height: 28, borderRadius: '50%', border: '3px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin .7s linear infinite' }} />
+            <span style={{ fontSize: 14, color: 'var(--text-secondary)' }}>Loading appointments…</span>
+          </div>
+        </div>
+      ) : visits.length === 0 ? (
+        <EmptyState title="No appointments" hint="Tap + to schedule" />
+      ) : view === 'Week' ? (
+        <WeekView visits={visits} patients={patients} procedures={procedures} openSheet={openSheet} />
+      ) : view === 'Day' ? (
+        <DayView visits={visits} patients={patients} procedures={procedures} openSheet={openSheet} />
+      ) : (
+        <MonthView visits={visits} procedures={procedures} setScheduleView={setScheduleView} />
+      )}
     </div>
   );
 }

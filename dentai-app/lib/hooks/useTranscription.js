@@ -21,8 +21,10 @@ export function useTranscription() {
         setLoading(false);
         return { text: '', warning: 'Recording too short — please try again' };
       }
-      // Backend handles webm→ogg rename for Sarvam
-      const ext = blob.type.includes('ogg') ? 'ogg' : blob.type.includes('mp4') ? 'mp4' : 'webm';
+      const ext = blob.type.includes('ogg') ? 'ogg'
+        : blob.type.includes('mp4') || blob.type.includes('mpeg') ? 'm4a'
+        : blob.type.includes('wav') ? 'wav'
+        : 'webm';
       const data = await transcribeAudio(blob, `recording.${ext}`);
       setLoading(false);
       return { text: data.transcript || '', warning: data.warning || null };

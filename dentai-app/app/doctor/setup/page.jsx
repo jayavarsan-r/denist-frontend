@@ -28,7 +28,9 @@ function DoctorSetup({ clinic, onDone, saving = false }) {
   const [form, setForm] = React.useState({
     doctorName: clinic.doctorName || '', specialty: 'General Dentistry',
     clinicName: clinic.clinicName || '', city: clinic.city || '', address: '',
-    days: clinic.days || [1, 2, 3, 4, 5, 6], open: clinic.open || '09:00', close: clinic.close || '18:00', slot: clinic.slot || 30,
+    days: clinic.days || [1, 2, 3, 4, 5, 6],
+    sessions: clinic.sessions || [{ open: '09:00', close: '18:00' }],
+    slot: clinic.slot || 30,
   });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const toggleDay = (d) => setForm(f => ({ ...f, days: f.days.includes(d) ? f.days.filter(x => x !== d) : [...f.days, d] }));
@@ -80,21 +82,33 @@ function DoctorSetup({ clinic, onDone, saving = false }) {
                 return <button key={d.key} onClick={() => toggleDay(d.key)} className="tap" style={{ flex: 1, height: 46, borderRadius: 12, fontSize: 13, fontWeight: 700, background: on ? 'var(--accent)' : 'transparent', color: on ? 'var(--accent-ink)' : 'var(--text-tertiary)', border: on ? 'none' : '1px solid var(--border)' }}>{d.label[0]}</button>;
               })}
             </div>
-            <div style={{ display: 'flex', gap: 18, marginBottom: 30 }}>
-              <label style={{ flex: 1 }}>
-                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8 }}>Opens</div>
-                <input type="time" value={form.open} onChange={e => set('open', e.target.value)} style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 12, padding: '12px 14px', fontSize: 18, fontWeight: 600, outline: 'none', fontFamily: 'inherit', background: '#fff' }} />
-              </label>
-              <label style={{ flex: 1 }}>
-                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8 }}>Closes</div>
-                <input type="time" value={form.close} onChange={e => set('close', e.target.value)} style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 12, padding: '12px 14px', fontSize: 18, fontWeight: 600, outline: 'none', fontFamily: 'inherit', background: '#fff' }} />
-              </label>
-            </div>
-            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 12 }}>Appointment slot</div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              {[15, 30, 45, 60].map(m => (
-                <button key={m} onClick={() => set('slot', m)} className="tap" style={{ flex: 1, height: 44, borderRadius: 12, fontSize: 15, fontWeight: 600, background: form.slot === m ? 'var(--accent)' : 'transparent', color: form.slot === m ? 'var(--accent-ink)' : 'var(--text-secondary)', border: form.slot === m ? 'none' : '1px solid var(--border)' }}>{m}m</button>
+            <div style={{ marginBottom: 30 }}>
+              {form.sessions.map((sess, i) => (
+                <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginBottom: 12 }}>
+                  <label style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>
+                      {form.sessions.length > 1 ? `Session ${i + 1} · Opens` : 'Opens'}
+                    </div>
+                    <input type="time" value={sess.open} onChange={e => set('sessions', form.sessions.map((x, j) => j === i ? { ...x, open: e.target.value } : x))} style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 12, padding: '12px 14px', fontSize: 17, fontWeight: 600, outline: 'none', fontFamily: 'inherit', background: '#fff' }} />
+                  </label>
+                  <label style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>
+                      {form.sessions.length > 1 ? `Session ${i + 1} · Closes` : 'Closes'}
+                    </div>
+                    <input type="time" value={sess.close} onChange={e => set('sessions', form.sessions.map((x, j) => j === i ? { ...x, close: e.target.value } : x))} style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 12, padding: '12px 14px', fontSize: 17, fontWeight: 600, outline: 'none', fontFamily: 'inherit', background: '#fff' }} />
+                  </label>
+                  {form.sessions.length > 1 && (
+                    <button onClick={() => set('sessions', form.sessions.filter((_, j) => j !== i))} style={{ width: 44, height: 46, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 12, border: '1px solid var(--border)', background: '#fff', flexShrink: 0 }}>
+                      <Icon name="x" size={16} color="var(--text-tertiary)" />
+                    </button>
+                  )}
+                </div>
               ))}
+              {form.sessions.length < 3 && (
+                <button onClick={() => set('sessions', [...form.sessions, { open: '17:00', close: '20:00' }])} style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--blue)', fontSize: 14, fontWeight: 600, paddingTop: 4 }}>
+                  <Icon name="plus" size={16} color="var(--blue)" stroke={2.2} /> Add another session
+                </button>
+              )}
             </div>
           </>}
 
@@ -104,7 +118,7 @@ function DoctorSetup({ clinic, onDone, saving = false }) {
                 <div style={{ width: 56, height: 56, borderRadius: 18, background: 'var(--accent)', color: 'var(--accent-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="check" size={30} color="var(--accent-ink)" stroke={3} /></div>
                 <div><div style={{ fontSize: 19, fontWeight: 700 }}>{form.clinicName}</div><div className="t-meta">{form.city}</div></div>
               </div>
-              {[['Doctor', form.doctorName], ['Specialty', form.specialty], ['Open', `${form.days.length} days · ${formatTime(form.open).label}–${formatTime(form.close).label}`], ['Slot', form.slot + ' minutes']].map(([k, v]) => (
+              {[['Doctor', form.doctorName], ['Specialty', form.specialty], ['Open', `${form.days.length} days · ${form.sessions.map(s => `${formatTime(s.open).label}–${formatTime(s.close).label}`).join(', ')}`]].map(([k, v]) => (
                 <div key={k} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 0', borderTop: '1px solid var(--border-light)' }}>
                   <span style={{ fontSize: 15, color: 'var(--text-secondary)' }}>{k}</span>
                   <span style={{ fontSize: 15, fontWeight: 600, textAlign: 'right', maxWidth: 220 }}>{v}</span>
@@ -137,7 +151,9 @@ export default function DoctorSetupPage() {
       await createClinic(c.clinicName, c.city, c.doctorName);
       const me = await getAuthMe();
       hydrateAuth({ staff: me.staff, clinic: me.clinic });
-      saveClinic(c);
+      // derive open/close from first session for schedule grid
+      const firstSession = (c.sessions || [])[0] || { open: '09:00', close: '18:00' };
+      saveClinic({ ...c, open: firstSession.open, close: firstSession.close });
       router.replace('/');
     } catch (e) {
       showToast(e?.response?.data?.message || 'Could not create clinic. Try again.');

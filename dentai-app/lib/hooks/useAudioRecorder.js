@@ -29,8 +29,8 @@ export function useAudioRecorder() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-      // Pick a supported MIME type
-      const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg']
+      // Prefer OGG (Sarvam accepts it natively); fall back to webm which Sarvam v2 also handles
+      const mimeType = ['audio/ogg;codecs=opus', 'audio/ogg', 'audio/webm;codecs=opus', 'audio/webm']
         .find((t) => MediaRecorder.isTypeSupported(t)) || '';
 
       const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);

@@ -16,3 +16,13 @@ export async function extractComplaint(transcript) {
   const { data } = await apiClient.post('/api/ai/extract-complaint', { transcript });
   return data;
 }
+
+export async function extractPrescription(transcript) {
+  const { data } = await apiClient.post('/api/ai/extract-prescription', { transcript });
+  return data;
+}
+
+export async function extractPatientInfo(transcript) {
+  const { data } = await apiClient.post('/api/ai/extract-patient-info', { transcript });
+  return data;
+}

@@ -46,28 +46,33 @@ async function getSupabase() {
  * @returns {() => void} unsubscribe function
  */
 export async function subscribeToQueue(clinicId, onUpdate) {
-  const sb = await getSupabase();
-  if (!sb) return () => {};
+  try {
+    const sb = await getSupabase();
+    if (!sb) return () => {};
 
-  const channel = sb
-    .channel(`queue:${clinicId}`)
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'queue_entries',
-        filter: `clinic_id=eq.${clinicId}`,
-      },
-      (payload) => {
-        onUpdate(payload.new || payload.old, payload.eventType);
-      }
-    )
-    .subscribe();
+    const channel = sb
+      .channel(`queue:${clinicId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'queue_entries',
+          filter: `clinic_id=eq.${clinicId}`,
+        },
+        (payload) => {
+          try { onUpdate(payload.new || payload.old, payload.eventType); } catch {}
+        }
+      )
+      .subscribe((status, err) => {
+        if (err) console.warn('[Realtime] queue subscription error:', err.message);
+      });
 
-  return () => {
-    sb.removeChannel(channel);
-  };
+    return () => { try { sb.removeChannel(channel); } catch {} };
+  } catch (e) {
+    console.warn('[Realtime] subscribeToQueue failed (realtime may not be enabled):', e.message);
+    return () => {};
+  }
 }
 
 /**
@@ -78,26 +83,29 @@ export async function subscribeToQueue(clinicId, onUpdate) {
  * @returns {() => void} unsubscribe function
  */
 export async function subscribeToAppointments(clinicId, onUpdate) {
-  const sb = await getSupabase();
-  if (!sb) return () => {};
+  try {
+    const sb = await getSupabase();
+    if (!sb) return () => {};
 
-  const channel = sb
-    .channel(`appointments:${clinicId}`)
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'appointments',
-        filter: `clinic_id=eq.${clinicId}`,
-      },
-      () => {
-        onUpdate();
-      }
-    )
-    .subscribe();
+    const channel = sb
+      .channel(`appointments:${clinicId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'appointments',
+          filter: `clinic_id=eq.${clinicId}`,
+        },
+        () => { try { onUpdate(); } catch {} }
+      )
+      .subscribe((status, err) => {
+        if (err) console.warn('[Realtime] appointments subscription error:', err.message);
+      });
 
-  return () => {
-    sb.removeChannel(channel);
-  };
+    return () => { try { sb.removeChannel(channel); } catch {} };
+  } catch (e) {
+    console.warn('[Realtime] subscribeToAppointments failed (realtime may not be enabled):', e.message);
+    return () => {};
+  }
 }
