@@ -1,0 +1,44 @@
+services:
+  - type: web
+    name: dentai-backend
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      # Set these manually in the Render dashboard — never commit secrets
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: SARVAM_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: USE_DEV_OTP
+        value: "false"
+      - key: DEV_OTP
+        value: ""
+
+  - type: web
+    name: dentai-frontend
+    runtime: static
+    rootDir: dentai-app
+    buildCommand: npm install && NEXT_EXPORT=1 npm run build
+    staticPublishPath: out
+    envVars:
+      # Set this to your backend Render URL after the backend is deployed first
+      - key: NEXT_PUBLIC_API_URL
+        sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
