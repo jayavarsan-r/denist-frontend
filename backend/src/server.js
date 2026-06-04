@@ -8,7 +8,9 @@ const rateLimit = require('express-rate-limit');
 const app = express();
 
 app.use(helmet());
-app.use(cors({ origin: '*' }));
+// Allow all origins — Capacitor APK makes requests from capacitor://localhost
+// and the Authorization header handles security (not CORS)
+app.use(cors({ origin: true }));
 app.use(morgan('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));

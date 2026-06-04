@@ -3,7 +3,9 @@
   "appName": "DentWay",
   "webDir": "out",
   "server": {
-    "androidScheme": "https"
+    "androidScheme": "https",
+    "cleartext": false,
+    "hostname": "app"
   },
   "plugins": {
     "SplashScreen": {

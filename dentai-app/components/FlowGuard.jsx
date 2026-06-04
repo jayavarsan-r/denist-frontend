@@ -5,6 +5,15 @@ import { useAppStore } from '@/store/useAppStore';
 import { getToken } from '@/lib/api/client';
 import { getMe as getAuthMe } from '@/lib/services/auth.service';
 
+// Decode JWT payload without verification — for offline fallback only.
+// Security is still enforced server-side on every API call.
+function decodeJwt(token) {
+  try {
+    const payload = token.split('.')[1];
+    return JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+  } catch { return null; }
+}
+
 // Paths that do NOT require authentication
 const PUBLIC_PATHS = ['/login', '/onboarding'];
 
@@ -54,11 +63,23 @@ export default function FlowGuard() {
           hydrateAuth({ staff: res.staff, clinic: res.clinic });
           hydrating.current = false;
         })
-        .catch(() => {
-          // Token invalid or expired
-          signOut();
-          router.replace('/login');
+        .catch((err) => {
           hydrating.current = false;
+          if (err?.response?.status === 401) {
+            // Token explicitly rejected by server — must re-login
+            signOut();
+            router.replace('/login');
+          } else {
+            // Network/server error (offline, backend starting up) —
+            // decode JWT locally for a minimal offline session so the app stays usable
+            const decoded = decodeJwt(token);
+            if (decoded?.dentistId) {
+              hydrateAuth({
+                staff: { id: decoded.staffId || null, role: decoded.role || 'doctor', status: 'active' },
+                clinic: { id: decoded.clinicId || null, join_code: null },
+              });
+            }
+          }
         });
       return;
     }

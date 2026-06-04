@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const TOKEN_KEY = 'dentai_token';
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://denist-frontend.onrender.com';
 
 export function getToken() {
   if (typeof window === 'undefined') return null;

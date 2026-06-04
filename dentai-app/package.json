@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "npx serve@latest out",
-    "build:mobile": "next build && npx cap sync",
+    "build:mobile": "NEXT_PUBLIC_API_URL=https://denist-frontend.onrender.com NEXT_EXPORT=1 next build && npx cap sync",
     "open:ios": "npx cap open ios",
     "open:android": "npx cap open android"
   },
