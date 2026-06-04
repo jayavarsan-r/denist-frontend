@@ -13,7 +13,7 @@ import { TODAY } from '@/lib/data/patients';
 import { STAFF } from '@/lib/data/queue';
 import { formatCurrency, formatCurrencyK, formatDate, formatDateLong, formatTime, parseDate, getInitials, hasComplications, clinicianFlags, MONTHS, DAYS, DAYS_FULL } from '@/lib/data/utils';
 
-const APPT_DOT = { confirmed: 'var(--blue)', arrived: 'var(--orange)', done: 'var(--green)', no_show: 'var(--red)' };
+const APPT_DOT = { confirmed: 'var(--blue)', arrived: 'var(--yellow)', done: 'var(--green)', no_show: 'var(--red)', scheduled: 'var(--blue)', completed: 'var(--green)', cancelled: 'var(--red)' };
 const APPT_WORD = { confirmed: 'Confirmed', arrived: 'In chair', done: 'Done', no_show: 'No-show' };
 
 /* faint eyebrow label that sets a section without a box */
@@ -102,18 +102,18 @@ function HomeScreen() {
         <Eyebrow>Quick actions</Eyebrow>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           {[
-            { icon: 'personPlus', label: 'Add patient',  sub: 'New or walk-in', bg: '#2563EB', fn: () => openSheet('newPatient') },
-            { icon: 'pencil',     label: 'Prescription', sub: 'Write Rx',       bg: '#16A34A', fn: () => openSheet('rx', {}) },
-            { icon: 'flask',      label: 'Lab order',    sub: 'Send to lab',    bg: '#DC2626', fn: () => openSheet('newLab', {}) },
-            { icon: 'rupee',      label: 'Collect',      sub: 'Bill & payment', bg: '#D97706', fn: () => router.push('/finance') },
+            { icon: 'personPlus', label: 'Add patient',  sub: 'New or walk-in', bg: 'var(--green)',  ink: '#fff',      fn: () => openSheet('newPatient') },
+            { icon: 'pencil',     label: 'Prescription', sub: 'Write Rx',       bg: 'var(--blue)',   ink: '#fff',      fn: () => openSheet('rx', {}) },
+            { icon: 'flask',      label: 'Lab order',    sub: 'Send to lab',    bg: 'var(--red)',    ink: '#fff',      fn: () => openSheet('newLab', {}) },
+            { icon: 'rupee',      label: 'Collect',      sub: 'Bill & payment', bg: 'var(--yellow)', ink: '#1C1C1E',  fn: () => router.push('/finance') },
           ].map(a => (
             <button key={a.label} onClick={a.fn} className="tap" style={{ background: a.bg, borderRadius: 24, padding: '14px', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 10, textAlign: 'left' }}>
-              <div style={{ width: 40, height: 40, borderRadius: 12, background: 'rgba(255,255,255,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Icon name={a.icon} size={20} color="#fff" stroke={2} />
+              <div style={{ width: 40, height: 40, borderRadius: 12, background: 'rgba(255,255,255,0.22)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Icon name={a.icon} size={20} color={a.ink} stroke={2} />
               </div>
               <div>
-                <div style={{ fontSize: 15.5, fontWeight: 700, letterSpacing: '-0.01em', color: '#fff' }}>{a.label}</div>
-                <div style={{ fontSize: 12.5, color: 'rgba(255,255,255,0.7)', marginTop: 2 }}>{a.sub}</div>
+                <div style={{ fontSize: 15.5, fontWeight: 700, letterSpacing: '-0.01em', color: a.ink }}>{a.label}</div>
+                <div style={{ fontSize: 12.5, color: a.ink === '#fff' ? 'rgba(255,255,255,0.72)' : 'rgba(28,28,30,0.6)', marginTop: 2 }}>{a.sub}</div>
               </div>
             </button>
           ))}

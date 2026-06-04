@@ -65,7 +65,7 @@ function WeekView({ visits, patients, procedures, openSheet }) {
   const days = weekDays(TODAY);
   const pById = id => patients.find(p => p.id === id);
   const procById = id => procedures.find(p => p.id === id);
-  const dot = { confirmed: 'var(--blue)', arrived: 'var(--orange)', done: 'var(--green)', no_show: 'var(--red)' };
+  const dot = { confirmed: 'var(--blue)', arrived: 'var(--yellow)', done: 'var(--green)', no_show: 'var(--red)', scheduled: 'var(--blue)', completed: 'var(--green)' };
 
   const todayRef = React.useRef(null);
   React.useEffect(() => { if (todayRef.current) todayRef.current.parentNode.scrollTop = Math.max(0, todayRef.current.offsetTop - 8); }, []);
@@ -177,7 +177,7 @@ function MonthView({ visits, procedures, setScheduleView }) {
   );
 }
 
-const STATUS_COLOR = { confirmed: 'var(--blue)', arrived: 'var(--orange)', done: 'var(--green)', completed: 'var(--green)', no_show: 'var(--red)', scheduled: 'var(--text-tertiary)' };
+const STATUS_COLOR = { confirmed: 'var(--blue)', arrived: 'var(--yellow)', done: 'var(--green)', completed: 'var(--green)', no_show: 'var(--red)', scheduled: 'var(--blue)' };
 const STATUS_LABEL = { confirmed: 'Confirmed', arrived: 'Arrived', done: 'Done', completed: 'Completed', no_show: 'No-show', scheduled: 'Scheduled' };
 
 function HistoryView({ visits, clinicalVisits, patients, procedures, openSheet }) {
