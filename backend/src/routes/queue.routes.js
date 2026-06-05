@@ -5,6 +5,7 @@ const auth = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const v = require('../validators');
 const transaction = require('../services/transaction.service');
+const { parsePagination, pageMeta } = require('../utils/pagination');
 
 // GET /api/queue — today's queue for the clinic
 router.get('/', auth, async (req, res, next) => {
@@ -51,37 +52,47 @@ router.get('/action-queue', auth, async (req, res, next) => {
 
     if (error) throw error;
 
-    // Enrich with prescription_ready flag
     const entries = data || [];
-    const enriched = await Promise.all(entries.map(async (entry) => {
-      const patientId = entry.patient_id;
-      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 
-      const { count: rxCount } = await supabase
+    // Batch the prescription-ready lookup into ONE query (was N+1: one per entry).
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const patientIds = [...new Set(entries.map(e => e.patient_id).filter(Boolean))];
+    let recentRxPatients = new Set();
+    if (patientIds.length) {
+      const { data: rxRows } = await supabase
         .from('prescriptions')
-        .select('id', { count: 'exact', head: true })
-        .eq('patient_id', patientId)
+        .select('patient_id')
+        .in('patient_id', patientIds)
         .gte('created_at', oneHourAgo);
+      recentRxPatients = new Set((rxRows || []).map(r => r.patient_id));
+    }
 
-      const pendingBalance = entry.treatment_plans
-        ? parseFloat(entry.treatment_plans.pending_amount) || 0
-        : 0;
-
-      const needsAppointment = [
-        'follow_up_scheduled',
-        'additional_sitting_required',
-        'treatment_postponed',
-      ].includes(entry.consultation_outcome);
-
-      return {
-        ...entry,
-        prescription_ready: (rxCount || 0) > 0,
-        amount_due: pendingBalance,
-        needs_appointment: needsAppointment,
-      };
+    const NEEDS_APPT = ['follow_up_scheduled', 'additional_sitting_required', 'treatment_postponed'];
+    const enriched = entries.map((entry) => ({
+      ...entry,
+      prescription_ready: recentRxPatients.has(entry.patient_id),
+      amount_due: entry.treatment_plans ? parseFloat(entry.treatment_plans.pending_amount) || 0 : 0,
+      needs_appointment: NEEDS_APPT.includes(entry.consultation_outcome),
     }));
 
     res.json({ tasks: enriched });
+  } catch (e) { next(e); }
+});
+
+// GET /api/queue/history — past queue entries (paginated, optional ?fromDate&toDate)
+router.get('/history', auth, async (req, res, next) => {
+  try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
+    const { from, to, page, limit } = parsePagination(req.query);
+    let q = supabase.from('queue_entries')
+      .select('*, patients(id, name, phone)', { count: 'exact' })
+      .eq('clinic_id', req.clinicId);
+    if (req.query.fromDate) q = q.gte('queue_date', req.query.fromDate);
+    if (req.query.toDate) q = q.lte('queue_date', req.query.toDate);
+    q = q.order('queue_date', { ascending: false }).order('token_number', { ascending: true }).range(from, to);
+    const { data, error, count } = await q;
+    if (error) throw error;
+    res.json({ entries: data || [], pagination: pageMeta({ page, limit }, count) });
   } catch (e) { next(e); }
 });
 

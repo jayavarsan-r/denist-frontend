@@ -1,30 +1,6 @@
 const supabase = require('../config/supabase');
 const jwt = require('jsonwebtoken');
-
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-function makeJoinCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no O,0,I,1
-  let code = '';
-  for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
-  return code;
-}
-
-async function uniqueJoinCode() {
-  let code, exists = true;
-  while (exists) {
-    code = makeJoinCode();
-    const { data } = await supabase.from('clinics').select('id').eq('join_code', code).single();
-    exists = !!data;
-  }
-  return code;
-}
-
-function makeDisplayId(city) {
-  const prefix = city ? city.substring(0, 3).toUpperCase() : 'CLN';
-  const num = String(Math.floor(100 + Math.random() * 900));
-  return `DENT-${prefix}-${num}`;
-}
+const transaction = require('../services/transaction.service');
 
 function signToken(payload) {
   return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '30d' });
@@ -117,46 +93,17 @@ exports.verifyOtp = async (req, res, next) => {
 // ── create clinic (new user, first-time setup) ────────────────────────────────
 exports.createClinic = async (req, res, next) => {
   try {
-    const { clinicName, yourName, city } = req.body;
+    const { clinicName, yourName, city, phone } = req.body;
     if (!clinicName || !yourName) return res.status(400).json({ error: 'clinicName and yourName required' });
 
-    const joinCode = await uniqueJoinCode();
-    const displayId = makeDisplayId(city);
+    const { clinic, staff } = await transaction.createClinic({
+      dentistId: req.dentistId, requestId: req.id,
+      clinicName, yourName, city, phone: phone || '',
+    });
 
-    // Create clinic
-    const { data: clinic, error: ce } = await supabase.from('clinics').insert({
-      name: clinicName, city: city || null, join_code: joinCode, display_id: displayId,
-    }).select().single();
-    if (ce) throw ce;
-
-    // Create staff row
-    const { data: staffRow, error: se } = await supabase.from('staff').insert({
-      clinic_id: clinic.id,
-      dentist_id: req.dentistId,
-      phone: req.body.phone || '',
-      name: yourName,
-      role: 'doctor',
-      status: 'active',
-    }).select().single();
-    if (se) throw se;
-
-    // Update clinic owner
-    await supabase.from('clinics').update({ owner_staff_id: staffRow.id }).eq('id', clinic.id);
-
-    // Update dentist name/clinic if not set
-    await supabase.from('dentists').update({ name: yourName, clinic_name: clinicName }).eq('id', req.dentistId);
-
-    // Migrate existing patients/visits to this clinic
-    await supabase.from('patients').update({ clinic_id: clinic.id }).eq('dentist_id', req.dentistId).is('clinic_id', null);
-    await supabase.from('visits').update({ clinic_id: clinic.id }).eq('dentist_id', req.dentistId).is('clinic_id', null);
-    await supabase.from('appointments').update({ clinic_id: clinic.id }).eq('dentist_id', req.dentistId).is('clinic_id', null);
-    await supabase.from('treatment_plans').update({ clinic_id: clinic.id }).eq('dentist_id', req.dentistId).is('clinic_id', null);
-    await supabase.from('prescriptions').update({ clinic_id: clinic.id }).eq('dentist_id', req.dentistId).is('clinic_id', null);
-    await supabase.from('xrays').update({ clinic_id: clinic.id }).eq('dentist_id', req.dentistId).is('clinic_id', null);
-
-    const token = signToken({ dentistId: req.dentistId, staffId: staffRow.id, clinicId: clinic.id, role: 'doctor' });
+    const token = signToken({ dentistId: req.dentistId, staffId: staff.id, clinicId: clinic.id, role: 'doctor' });
     const { data: dentist } = await supabase.from('dentists').select('*').eq('id', req.dentistId).single();
-    res.json({ token, dentist, staff: staffRow, clinic: { ...clinic, owner_staff_id: staffRow.id } });
+    res.json({ token, dentist, staff, clinic });
   } catch (e) { next(e); }
 };
 
@@ -178,36 +125,12 @@ exports.joinClinic = async (req, res, next) => {
     if (!joinCode || !yourName || !role) return res.status(400).json({ error: 'joinCode, yourName, role required' });
     if (!['doctor', 'receptionist'].includes(role)) return res.status(400).json({ error: 'role must be doctor or receptionist' });
 
-    const { data: clinic } = await supabase.from('clinics')
-      .select('*').eq('join_code', joinCode.toUpperCase()).single();
-    if (!clinic) return res.status(404).json({ error: 'Invalid join code' });
+    const result = await transaction.joinClinic({ dentistId: req.dentistId, requestId: req.id, joinCode, yourName, role });
+    if (result.error === 'NOT_FOUND') return res.status(404).json({ error: 'Invalid join code' });
 
-    // Get phone from dentist record
-    const { data: dentist } = await supabase.from('dentists').select('*').eq('id', req.dentistId).single();
-
-    const { data: staffRow, error: se } = await supabase.from('staff').insert({
-      clinic_id: clinic.id,
-      dentist_id: req.dentistId,
-      phone: dentist?.phone || '',
-      name: yourName,
-      role,
-      status: 'active',
-    }).select().single();
-    if (se) {
-      // Already a member
-      if (se.code === '23505') {
-        const { data: existing } = await supabase.from('staff').select('*')
-          .eq('clinic_id', clinic.id).eq('dentist_id', req.dentistId).single();
-        const token = signToken({ dentistId: req.dentistId, staffId: existing.id, clinicId: clinic.id, role: existing.role });
-        return res.json({ token, dentist, staff: existing, clinic });
-      }
-      throw se;
-    }
-
-    await supabase.from('dentists').update({ name: yourName, clinic_name: clinic.name }).eq('id', req.dentistId);
-
-    const token = signToken({ dentistId: req.dentistId, staffId: staffRow.id, clinicId: clinic.id, role });
-    res.json({ token, dentist: { ...dentist, name: yourName }, staff: staffRow, clinic });
+    const { clinic, staff, dentist } = result;
+    const token = signToken({ dentistId: req.dentistId, staffId: staff.id, clinicId: clinic.id, role: staff.role });
+    res.json({ token, dentist, staff, clinic });
   } catch (e) { next(e); }
 };
 

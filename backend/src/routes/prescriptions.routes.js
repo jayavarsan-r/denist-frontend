@@ -4,6 +4,24 @@ const supabase = require('../config/supabase');
 const auth = require('../middleware/auth');
 const { extractPrescription } = require('../services/ai.service');
 const { generatePrescriptionPdf } = require('../services/pdf.service');
+const { parsePagination, pageMeta } = require('../utils/pagination');
+
+// GET /api/prescriptions — clinic-scoped list (paginated, optional ?patientId)
+router.get('/', auth, async (req, res, next) => {
+  try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
+    const { from, to, page, limit } = parsePagination(req.query);
+    let q = supabase.from('prescriptions')
+      .select('*, patients(name, phone)', { count: 'exact' })
+      .or(`clinic_id.eq.${req.clinicId},dentist_id.eq.${req.dentistId}`)
+      .is('deleted_at', null);
+    if (req.query.patientId) q = q.eq('patient_id', req.query.patientId);
+    q = q.order('created_at', { ascending: false }).range(from, to);
+    const { data, error, count } = await q;
+    if (error) throw error;
+    res.json({ prescriptions: data || [], pagination: pageMeta({ page, limit }, count) });
+  } catch (e) { next(e); }
+});
 
 router.post('/', auth, async (req, res, next) => {
   try {

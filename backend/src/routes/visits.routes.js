@@ -9,5 +9,6 @@ router.get('/', ctrl.list);
 router.post('/', validate(v.createVisit), ctrl.create);
 router.get('/:id', ctrl.getById);
 router.put('/:id', ctrl.update);
+router.delete('/:id', ctrl.remove); // soft delete (requires migration 004)
 
 module.exports = router;

@@ -149,6 +149,13 @@ const joinClinic = z.object({
 });
 const lookupClinic = z.object({ joinCode: z.string().trim().min(1, 'joinCode required') });
 
+// ── Staff ─────────────────────────────────────────────────────────────────
+const updateStaff = z.object({
+  name: z.string().trim().min(1).optional(),
+  role: z.enum(['doctor', 'receptionist']).optional(),
+  status: z.enum(['active', 'inactive']).optional(),
+});
+
 module.exports = {
   createPatient, updatePatient,
   createAppointment, updateAppointment,
@@ -158,5 +165,6 @@ module.exports = {
   createTreatmentPlan, updateTreatmentPlan,
   updateClinic,
   createClinic, joinClinic, lookupClinic,
+  updateStaff,
   APPOINTMENT_STATUS,
 };
