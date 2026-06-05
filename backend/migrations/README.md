@@ -17,10 +17,15 @@ Re-running a migration is safe.
 | `005_audit_logs.sql` | `audit_logs` table | Phase 5. |
 | `006_pending_amount_DECIDE.sql` | **Guidance, not auto-run.** Resolve generated-vs-plain `pending_amount`. | After reading 000 result. |
 
-## Order of operations for this Security Pass
+## Order of operations
 1. Run `000` and record the results (especially the `pending_amount` `is_generated` value).
-2. Run `001`, `002`, `003`.
-3. Deploy the Security Pass backend code.
-4. `004`/`005` can run now or alongside Phase 5; the code tolerates their absence
-   (soft-delete still uses `is_deleted`; audit writes are best-effort no-ops if the
-   table is missing).
+2. Run `001`, `002`, `003`, **`004`** (required — see below), `005`.
+3. Deploy the backend code.
+
+> **`004` is now REQUIRED before deploying this branch.** The repository layer filters
+> `deleted_at IS NULL` on visits/appointments/treatment_plans/prescriptions/xrays, so
+> those columns must exist or reads will error. `patients` keeps using `is_deleted`
+> (works pre-and-post 004; 004 backfills `deleted_at` from it).
+>
+> `005` (audit_logs) is recommended but not hard-required — audit writes are
+> best-effort and no-op if the table is missing.

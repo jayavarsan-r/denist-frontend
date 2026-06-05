@@ -34,7 +34,7 @@ export function useTranscription(recordingType = 'general') {
         audioFileSizeKb: data.audioFileSizeKb || null,
       };
     } catch (e) {
-      const msg = e?.response?.data?.error || e?.response?.data?.message || 'Transcription failed';
+      const msg = e?.apiError?.message || e?.message || 'Transcription failed';
       setError(msg);
       setLoading(false);
       return { text: '', warning: msg };

@@ -4,41 +4,36 @@ const supabase = require('../config/supabase');
 const auth = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const v = require('../validators');
+const transaction = require('../services/transaction.service');
+const { parsePagination, pageMeta } = require('../utils/pagination');
 
-// POST /api/payments — record a payment
+// POST /api/payments — record a payment (transaction service: insert + plan sync + audit)
 router.post('/', auth, validate(v.recordPayment), async (req, res, next) => {
   try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
     const { patientId, treatmentPlanId, queueEntryId, amount, paymentMethod, notes, paymentDate } = req.body;
-    if (!patientId || !amount) return res.status(400).json({ error: 'patientId and amount required' });
+    const payment = await transaction.recordPayment({
+      clinicId: req.clinicId, staffId: req.staffId, requestId: req.id,
+      patientId, treatmentPlanId, queueEntryId, amount, paymentMethod, notes, paymentDate,
+    });
+    res.status(201).json({ payment });
+  } catch (e) { next(e); }
+});
 
-    const { data, error } = await supabase.from('payments').insert({
-      clinic_id:         req.clinicId,
-      patient_id:        patientId,
-      treatment_plan_id: treatmentPlanId || null,
-      queue_entry_id:    queueEntryId || null,
-      received_by:       req.staffId || null,
-      amount:            parseFloat(amount),
-      payment_method:    paymentMethod || 'cash',
-      notes:             notes || null,
-      payment_date:      paymentDate || new Date().toISOString().split('T')[0],
-    }).select().single();
-
+// GET /api/payments — clinic-wide payments list (paginated, optional date range)
+router.get('/', auth, async (req, res, next) => {
+  try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
+    const { from, to, page, limit } = parsePagination(req.query);
+    let q = supabase.from('payments')
+      .select('*, received_by_staff:received_by(name, role), patients(name), treatment_plans(procedure_name)', { count: 'exact' })
+      .eq('clinic_id', req.clinicId);
+    if (req.query.fromDate) q = q.gte('payment_date', req.query.fromDate);
+    if (req.query.toDate) q = q.lte('payment_date', req.query.toDate);
+    q = q.order('payment_date', { ascending: false }).order('created_at', { ascending: false }).range(from, to);
+    const { data, error, count } = await q;
     if (error) throw error;
-
-    // Sync collected_amount and pending_amount on treatment plan
-    if (treatmentPlanId) {
-      const { data: plan } = await supabase.from('treatment_plans')
-        .select('collected_amount, estimated_cost').eq('id', treatmentPlanId).single();
-      if (plan) {
-        const newCollected = parseFloat(plan.collected_amount || 0) + parseFloat(amount);
-        const newPending = Math.max(0, parseFloat(plan.estimated_cost || 0) - newCollected);
-        await supabase.from('treatment_plans')
-          .update({ collected_amount: newCollected, pending_amount: newPending })
-          .eq('id', treatmentPlanId);
-      }
-    }
-
-    res.status(201).json({ payment: data });
+    res.json({ payments: data || [], pagination: pageMeta({ page, limit }, count) });
   } catch (e) { next(e); }
 });
 

@@ -4,7 +4,7 @@ const supabase = require('../config/supabase');
 const auth = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const v = require('../validators');
-const { extractPrescription } = require('../services/ai.service');
+const transaction = require('../services/transaction.service');
 
 // GET /api/queue — today's queue for the clinic
 router.get('/', auth, async (req, res, next) => {
@@ -196,127 +196,30 @@ router.patch('/:id/reorder', auth, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// POST /api/queue/:id/complete-consult — treatment plan + visit + appointments + prescription
+// POST /api/queue/:id/complete-consult — orchestrated by the transaction service:
+// treatment plan + visit + suggested appointments + prescription + queue link + audit.
 router.post('/:id/complete-consult', auth, validate(v.completeConsult), async (req, res, next) => {
   try {
-    const {
-      patientId,
-      procedure,
-      diagnosis,
-      toothNumber,
-      totalSittings,
-      estimatedCost,
-      transcript,
-      notes,
-    } = req.body;
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
+    const { patientId, procedure, diagnosis, toothNumber, totalSittings, estimatedCost, transcript, notes } = req.body;
+    const result = await transaction.completeConsultation({
+      clinicId: req.clinicId, dentistId: req.dentistId, staffId: req.staffId, requestId: req.id,
+      queueId: req.params.id,
+      patientId, procedure, diagnosis, toothNumber, totalSittings, estimatedCost, transcript, notes,
+    });
+    res.status(201).json(result);
+  } catch (e) { next(e); }
+});
 
-    if (!patientId || !procedure) {
-      return res.status(400).json({ error: 'patientId and procedure are required' });
-    }
-
-    const today = new Date().toISOString().split('T')[0];
-    const sittings = Math.max(1, parseInt(totalSittings) || 1);
-
-    // NOTE: This endpoint orchestrates 4 writes and is NOT yet transactional.
-    // TODO(Phase 5): move into TransactionService.completeConsultation() so plan +
-    // visit + appointments + prescription + queue update commit atomically.
-
-    // 1. Create treatment plan
-    const { data: plan, error: planErr } = await supabase.from('treatment_plans').insert({
-      patient_id:         patientId,
-      dentist_id:         req.dentistId,
-      clinic_id:          req.clinicId || null,
-      diagnosis:          diagnosis || null,
-      procedure_name:     procedure,
-      total_sittings:     sittings,
-      completed_sittings: 1,
-      estimated_cost:     estimatedCost ? parseFloat(estimatedCost) : 0,
-      collected_amount:   0,
-      status:             'active',
-      start_date:         today,
-    }).select().single();
-
-    if (planErr) throw planErr;
-
-    // 2. Record this consultation session as a visit (was previously missing —
-    //    today's session was never recorded in `visits`). Non-fatal.
-    let visit = null;
-    try {
-      const { data: v } = await supabase.from('visits').insert({
-        patient_id:     patientId,
-        dentist_id:     req.dentistId,
-        clinic_id:      req.clinicId || null,
-        visit_date:     today,
-        procedure_name: procedure,
-        tooth_number:   toothNumber || null,
-        status:         'completed',
-        raw_transcript: transcript || null,
-        notes:          notes || null,
-        sitting_number: 1,
-        cost:           estimatedCost ? parseFloat(estimatedCost) : null,
-      }).select().single();
-      visit = v;
-    } catch (visitErr) {
-      console.error('Visit record (non-fatal):', visitErr.message);
-    }
-
-    // 3. Auto-generate SUGGESTED appointment stubs (sessions 2..N). No time is set
-    //    and status is 'suggested' — the receptionist confirms date/time at checkout.
-    const appointments = [];
-    if (sittings > 1) {
-      const inserts = [];
-      for (let i = 2; i <= sittings; i++) {
-        const d = new Date();
-        d.setDate(d.getDate() + (i - 1) * 7);
-        inserts.push({
-          patient_id:       patientId,
-          dentist_id:       req.dentistId,
-          clinic_id:        req.clinicId || null,
-          appointment_date: d.toISOString().split('T')[0],
-          appointment_time: null,
-          sitting_number:   i,
-          purpose:          `${procedure} — Session ${i}`,
-          status:           'suggested',
-        });
-      }
-      const { data: apptData, error: apptErr } = await supabase
-        .from('appointments').insert(inserts).select();
-      if (apptErr) console.error('Auto-appointments (non-fatal):', apptErr.message);
-      if (apptData) appointments.push(...apptData);
-    }
-
-    // 4. Create prescription from transcript (non-fatal if it fails)
-    let prescription = null;
-    if (transcript) {
-      try {
-        const extracted = await extractPrescription(transcript);
-        const { data: rx } = await supabase.from('prescriptions').insert({
-          patient_id:    patientId,
-          dentist_id:    req.dentistId,
-          clinic_id:     req.clinicId || null,
-          visit_id:      visit?.id || null,
-          queue_entry_id: req.params.id,
-          raw_voice:     transcript,
-          medicines:     extracted.medicines || [],
-          instructions:  extracted.instructions || null,
-          follow_up:     extracted.followUp || null,
-        }).select('*, patients(name, age, gender, phone)').single();
-        prescription = rx;
-      } catch (rxErr) {
-        console.error('Prescription creation (non-fatal):', rxErr.message);
-      }
-    }
-
-    // 5. Link treatment plan + save notes on queue entry
-    const queueUpdates = { treatment_plan_id: plan.id, updated_at: new Date().toISOString() };
-    if (notes) queueUpdates.notes = notes;
-
-    await supabase.from('queue_entries')
-      .update(queueUpdates)
-      .eq('id', req.params.id)
-      .eq('clinic_id', req.clinicId);
-
-    res.status(201).json({ plan, visit, appointments, prescription });
+// POST /api/queue/:id/checkout — mark completed + optional payment (transaction service)
+router.post('/:id/checkout', auth, async (req, res, next) => {
+  try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
+    const result = await transaction.completeCheckout({
+      clinicId: req.clinicId, staffId: req.staffId, requestId: req.id,
+      queueId: req.params.id, payment: req.body?.payment || null,
+    });
+    res.json(result);
   } catch (e) { next(e); }
 });
 

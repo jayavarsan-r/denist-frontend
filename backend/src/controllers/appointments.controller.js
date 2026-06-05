@@ -1,20 +1,13 @@
-const supabase = require('../config/supabase');
+const repos = require('../repositories');
 
-// Scope appointments to the caller: clinic-wide when clinic context exists,
-// else fall back to owning dentist. OR covers legacy null-clinic rows.
-function scopeQuery(query, req) {
-  if (req.clinicId) {
-    return query.or(`clinic_id.eq.${req.clinicId},dentist_id.eq.${req.dentistId}`);
-  }
-  return query.eq('dentist_id', req.dentistId);
-}
+const SELECT = '*, patients(id, name, phone)';
+const scopeOf = (req) => ({ clinicId: req.clinicId, dentistId: req.dentistId });
+const today = () => new Date().toISOString().split('T')[0];
 
 exports.list = async (req, res, next) => {
   try {
     const { date } = req.query;
-    let query = supabase.from('appointments')
-      .select('*, patients(id, name, phone)')
-      .eq('dentist_id', req.dentistId).order('appointment_time');
+    let query = repos.appointments.query(scopeOf(req), SELECT).order('appointment_time');
     if (date) query = query.eq('appointment_date', date);
     const { data, error } = await query;
     if (error) throw error;
@@ -24,10 +17,8 @@ exports.list = async (req, res, next) => {
 
 exports.today = async (req, res, next) => {
   try {
-    const today = new Date().toISOString().split('T')[0];
-    const { data, error } = await supabase.from('appointments')
-      .select('*, patients(id, name, phone)')
-      .eq('dentist_id', req.dentistId).eq('appointment_date', today).order('appointment_time');
+    const { data, error } = await repos.appointments.query(scopeOf(req), SELECT)
+      .eq('appointment_date', today()).order('appointment_time');
     if (error) throw error;
     res.json({ appointments: data });
   } catch (e) { next(e); }
@@ -35,12 +26,9 @@ exports.today = async (req, res, next) => {
 
 exports.upcoming = async (req, res, next) => {
   try {
-    const today = new Date().toISOString().split('T')[0];
     const nextWeek = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    const { data, error } = await supabase.from('appointments')
-      .select('*, patients(id, name, phone)')
-      .eq('dentist_id', req.dentistId)
-      .gte('appointment_date', today).lte('appointment_date', nextWeek)
+    const { data, error } = await repos.appointments.query(scopeOf(req), SELECT)
+      .gte('appointment_date', today()).lte('appointment_date', nextWeek)
       .order('appointment_date').order('appointment_time');
     if (error) throw error;
     res.json({ appointments: data });
@@ -50,18 +38,18 @@ exports.upcoming = async (req, res, next) => {
 exports.bookedSlots = async (req, res, next) => {
   try {
     const { date } = req.query;
-    const { data, error } = await supabase.from('appointments')
-      .select('appointment_time')
-      .eq('dentist_id', req.dentistId).eq('appointment_date', date).neq('status', 'cancelled');
+    if (!date) return res.status(400).json({ error: 'date query param required' });
+    const { data, error } = await repos.appointments.query(scopeOf(req), 'appointment_time')
+      .eq('appointment_date', date).neq('status', 'cancelled');
     if (error) throw error;
-    res.json({ bookedSlots: data.map(a => a.appointment_time) });
+    res.json({ bookedSlots: (data || []).map(a => a.appointment_time).filter(Boolean) });
   } catch (e) { next(e); }
 };
 
 exports.create = async (req, res, next) => {
   try {
     const { patientId, appointmentDate, appointmentTime, purpose, toothNumber } = req.body;
-    const { data: appointment, error } = await supabase.from('appointments').insert({
+    const appointment = await repos.appointments.create({
       patient_id: patientId,
       dentist_id: req.dentistId,
       clinic_id: req.clinicId || null,
@@ -69,26 +57,20 @@ exports.create = async (req, res, next) => {
       appointment_time: appointmentTime,
       purpose,
       tooth_number: toothNumber || null,
-    }).select().single();
-    if (error) throw error;
+    });
     res.status(201).json({ appointment });
   } catch (e) { next(e); }
 };
 
 exports.update = async (req, res, next) => {
   try {
-    // Whitelist updatable fields — never spread req.body (prevents overwriting
-    // dentist_id/clinic_id/patient_id and other ownership columns).
     const fieldMap = {
       appointmentDate: 'appointment_date',
       appointmentTime: 'appointment_time',
       toothNumber: 'tooth_number',
       sittingNumber: 'sitting_number',
     };
-    const allowed = new Set([
-      'appointment_date', 'appointment_time', 'purpose', 'tooth_number',
-      'sitting_number', 'status', 'notes',
-    ]);
+    const allowed = new Set(['appointment_date', 'appointment_time', 'purpose', 'tooth_number', 'sitting_number', 'status', 'notes']);
     const updates = {};
     for (const [k, v] of Object.entries(req.body)) {
       const col = fieldMap[k] || k;
@@ -96,10 +78,8 @@ exports.update = async (req, res, next) => {
     }
     updates.updated_at = new Date().toISOString();
 
-    let uq = supabase.from('appointments').update(updates).eq('id', req.params.id);
-    uq = scopeQuery(uq, req);
-    const { data: appointment, error } = await uq.select().single();
-    if (error || !appointment) return res.status(404).json({ error: 'Appointment not found' });
+    const appointment = await repos.appointments.update(req.params.id, scopeOf(req), updates);
+    if (!appointment) return res.status(404).json({ error: 'Appointment not found' });
     res.json({ appointment });
   } catch (e) { next(e); }
 };

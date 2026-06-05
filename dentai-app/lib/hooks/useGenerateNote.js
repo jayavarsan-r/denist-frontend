@@ -40,7 +40,7 @@ export function useGenerateNote() {
       setLoading(false);
       return mapped;
     } catch (e) {
-      const msg = e?.response?.data?.message || 'Failed to generate note';
+      const msg = e?.apiError?.message || e?.message || 'Failed to generate note';
       setError(msg);
       setLoading(false);
       throw new Error(msg);
@@ -75,7 +75,7 @@ export function useExtractComplaint() {
       setLoading(false);
       return text;
     } catch (e) {
-      const msg = e?.response?.data?.message || 'Extraction failed';
+      const msg = e?.apiError?.message || e?.message || 'Extraction failed';
       setError(msg);
       setLoading(false);
       // Fall back to raw transcript
