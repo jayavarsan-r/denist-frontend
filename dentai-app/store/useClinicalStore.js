@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { getTreatmentPlan, createTreatmentPlan, updateTreatmentPlan } from '@/lib/services/treatment-plan.service';
 import { createPrescription, getPrescription } from '@/lib/services/prescription.service';
 import { recordPayment, getPatientPayments } from '@/lib/services/payment.service';
+import { getLabOrders, getPatientLabOrders, createLabOrder, updateLabOrder } from '@/lib/services/lab.service';
 import { apiClient } from '@/lib/api/client';
 
 /**
@@ -103,23 +104,80 @@ export const useClinicalStore = create((set, get) => ({
 
   addProcedure: (p) => set((s) => ({ procedures: [p, ...s.procedures] })),
 
-  /* ─── Lab orders (local-only until backend endpoint exists) ─── */
-  markLabReceived: (id) =>
+  /* ─── Lab orders (API-backed) ─── */
+  // Clinic-wide list for the finance/lab screen.
+  loadLabOrders: async () => {
+    try {
+      const orders = await getLabOrders();
+      set({ labOrders: orders });
+    } catch (e) {
+      console.warn('[ClinicalStore] loadLabOrders failed', e?.response?.status);
+    }
+  },
+
+  // Patient-scoped: merge this patient's lab orders into the store.
+  loadPatientLabOrders: async (patientId) => {
+    try {
+      const orders = await getPatientLabOrders(patientId);
+      set((s) => ({
+        labOrders: [
+          ...s.labOrders.filter((l) => l.patientId !== patientId),
+          ...orders,
+        ],
+      }));
+    } catch (e) {
+      console.warn('[ClinicalStore] loadPatientLabOrders failed', e?.response?.status);
+    }
+  },
+
+  markLabReceived: async (id) => {
+    // Optimistic, then persist.
     set((s) => ({
       labOrders: s.labOrders.map((l) =>
         l.id === id ? { ...l, status: 'received', actualReturnDate: new Date().toISOString().slice(0, 10) } : l
       ),
-    })),
+    }));
+    try {
+      const updated = await updateLabOrder(id, { status: 'received' });
+      set((s) => ({ labOrders: s.labOrders.map((l) => (l.id === id ? updated : l)) }));
+    } catch (e) {
+      console.warn('[ClinicalStore] markLabReceived failed', e?.response?.status);
+    }
+  },
+
+  updateLabStatus: async (id, status) => {
+    try {
+      const updated = await updateLabOrder(id, { status });
+      set((s) => ({ labOrders: s.labOrders.map((l) => (l.id === id ? updated : l)) }));
+      return updated;
+    } catch (e) {
+      console.warn('[ClinicalStore] updateLabStatus failed', e?.response?.status);
+    }
+  },
 
   addLabOrder: async (l) => {
-    // Try API first (endpoint may not exist yet)
     try {
-      const { data } = await apiClient.post('/api/lab-orders', l);
-      const order = data.lab_order || data;
+      const order = await createLabOrder({
+        patientId: l.patientId,
+        treatmentPlanId: l.treatmentPlanId || null,
+        procedureType: l.procedureType || null,
+        toothNumber: l.toothNumber != null ? String(l.toothNumber) : null,
+        labName: l.labName,
+        workDescription: l.workDescription || null,
+        shade: l.shade || null,
+        impressionType: l.impressionType || null,
+        sentDate: l.sentDate || null,
+        expectedReturnDate: l.expectedReturnDate || null,
+        costToClinic: l.costToClinic || 0,
+        chargedToPatient: l.chargedToPatient || 0,
+        status: l.status || 'sent',
+        notes: l.notes || null,
+      });
       set((s) => ({ labOrders: [order, ...s.labOrders] }));
       return order;
-    } catch {
-      // Fallback to local
+    } catch (e) {
+      console.warn('[ClinicalStore] addLabOrder failed', e?.response?.status);
+      // Local fallback so the UI still reflects the action.
       const local = { ...l, id: l.id || 'lab_' + Date.now() };
       set((s) => ({ labOrders: [local, ...s.labOrders] }));
       return local;

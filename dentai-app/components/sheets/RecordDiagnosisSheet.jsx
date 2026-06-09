@@ -5,10 +5,11 @@ import { usePatientStore } from '@/store/usePatientStore';
 import { useQueueStore } from '@/store/useQueueStore';
 import Icon from '@/components/icons';
 import { SheetHeader, SectionHeader, Avatar, PrimaryButton } from '@/components/ui';
-import { formatCurrency } from '@/lib/data/utils';
+import { formatCurrency, formatDate } from '@/lib/data/utils';
 import { useAudioRecorder } from '@/lib/hooks/useAudioRecorder';
 import { useTranscription } from '@/lib/hooks/useTranscription';
 import { useGenerateNote } from '@/lib/hooks/useGenerateNote';
+import { extractPrescription } from '@/lib/services/ai.service';
 
 function Waveform({ bars = 22, color = 'var(--accent)' }) {
   return (
@@ -32,6 +33,23 @@ function MealTiming({ slots }) {
   );
 }
 
+// Mirror the backend: sessions 2..N are auto-scheduled one week apart.
+function buildAppointmentPreview(totalSittings, procedure) {
+  const n = Math.max(1, parseInt(totalSittings, 10) || 1);
+  if (n <= 1) return [];
+  const out = [];
+  for (let i = 2; i <= n; i++) {
+    const d = new Date();
+    d.setDate(d.getDate() + (i - 1) * 7);
+    out.push({
+      session: i,
+      date: d.toISOString().split('T')[0],
+      purpose: `${procedure || 'Treatment'} — Session ${i}`,
+    });
+  }
+  return out;
+}
+
 export default function RecordDiagnosisSheet({ params, onClose }) {
   const showToast = useAppStore((s) => s.showToast);
   const queue = useQueueStore((s) => s.queue);
@@ -43,6 +61,7 @@ export default function RecordDiagnosisSheet({ params, onClose }) {
   const [phase, setPhase] = useState('idle'); // idle | recording | processing | review | done
   const [extraction, setExtraction] = useState(null);
   const [aiError, setAiError] = useState(null);
+  const [fixPhase, setFixPhase] = useState('idle'); // idle | recording | processing (correction-by-voice)
 
   const recorder = useAudioRecorder();
   const { transcribe, loading: transcribing } = useTranscription('diagnosis');
@@ -71,13 +90,66 @@ export default function RecordDiagnosisSheet({ params, onClose }) {
         return;
       }
       const note = await generateFromTranscript(transcript);
-      setExtraction({ ...note, transcript });
+
+      // generate-note returns medications as free text, not structured — so also
+      // run prescription extraction to populate the medicines preview.
+      let medicines = note.medicines || [];
+      try {
+        const rx = await extractPrescription(transcript);
+        if (Array.isArray(rx.medicines) && rx.medicines.length) {
+          medicines = rx.medicines.map((m) => ({
+            name: m.name || '',
+            dose: m.dose || m.dosage || '',
+            frequency: m.frequency || '',
+            duration: m.duration || '',
+            slots: m.meal_timing_slots || m.slots,
+            uncertain: m.uncertain || false,
+          }));
+        }
+      } catch { /* prescription is optional — keep going */ }
+
+      // Preview the auto-scheduled future sittings (sessions 2..N, weekly),
+      // mirroring the backend so the doctor sees them before saving.
+      const appointments = buildAppointmentPreview(note.totalSittings, note.procedure);
+
+      setExtraction({ ...note, medicines, appointments, transcript });
       setPhase('review');
     } catch (e) {
       setAiError(e.message || 'AI processing failed. Please try again.');
       setPhase('idle');
       showToast('Recording failed — check your connection');
     }
+  };
+
+  // Fix by voice: dictate a correction; Gemini merges it onto the current note,
+  // changing only the fields mentioned and keeping everything else.
+  const handleFixByVoice = async () => {
+    if (fixPhase === 'recording') {
+      setFixPhase('processing');
+      setAiError(null);
+      try {
+        const blob = await recorder.stopRecording();
+        const { text: transcript, warning } = await transcribe(blob);
+        if (!transcript) { setAiError(warning || "Couldn't hear the correction — try again"); setFixPhase('idle'); return; }
+        const merged = await generateFromTranscript(transcript, extraction?._raw || null);
+        const appointments = buildAppointmentPreview(merged.totalSittings, merged.procedure);
+        setExtraction((prev) => ({
+          ...merged,
+          medicines: prev?.medicines?.length ? prev.medicines : (merged.medicines || []),
+          appointments,
+          transcript: prev?.transcript || transcript,
+        }));
+        setFixPhase('idle');
+        showToast('Correction applied');
+      } catch (e) {
+        setAiError(e.message || 'Could not apply correction');
+        setFixPhase('idle');
+      }
+      return;
+    }
+    setAiError(null);
+    try { await recorder.startRecording(); setFixPhase('recording'); }
+    catch (e) { showToast(e.message || 'Could not start recording'); }
   };
 
   const handleCreate = () => {
@@ -188,14 +260,48 @@ export default function RecordDiagnosisSheet({ params, onClose }) {
         <>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
             <span style={{ fontSize: 16, fontWeight: 700 }}>Here's what I understood</span>
-            <button onClick={() => { setPhase('idle'); setExtraction(null); }} style={{ color: 'var(--blue)', fontSize: 14, fontWeight: 500 }}>Re-record</button>
+            <button onClick={() => { setPhase('idle'); setExtraction(null); setFixPhase('idle'); }} style={{ color: 'var(--blue)', fontSize: 14, fontWeight: 500 }}>Re-record</button>
           </div>
+
+          {/* Fix by voice — dictate a correction; only the mentioned fields change */}
+          <button
+            onClick={handleFixByVoice}
+            disabled={fixPhase === 'processing'}
+            style={{
+              width: '100%', marginBottom: 12, borderRadius: 14, padding: '12px 16px',
+              display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left',
+              background: fixPhase === 'recording' ? '#C0392B' : 'rgba(60,60,67,0.06)',
+              color: fixPhase === 'recording' ? '#fff' : 'var(--text-primary)',
+              border: fixPhase === 'recording' ? 'none' : '1px solid var(--border)',
+              cursor: fixPhase === 'processing' ? 'default' : 'pointer',
+            }}
+          >
+            <div style={{ width: 34, height: 34, borderRadius: '50%', background: fixPhase === 'recording' ? 'rgba(255,255,255,0.2)' : 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              {fixPhase === 'processing'
+                ? <div style={{ width: 16, height: 16, borderRadius: '50%', border: '2.5px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', animation: 'spin .7s linear infinite' }} />
+                : <Icon name="mic" size={18} color={fixPhase === 'recording' ? '#fff' : 'var(--accent-ink)'} />}
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 14.5, fontWeight: 700 }}>
+                {fixPhase === 'recording' ? 'Tap to apply correction' : fixPhase === 'processing' ? 'Applying…' : 'Fix by voice'}
+              </div>
+              <div style={{ fontSize: 12.5, opacity: 0.8 }}>
+                {fixPhase === 'recording' ? `${recorder.seconds}s · speak the change` : 'Say just the change — e.g. "3 sittings, ₹4500"'}
+              </div>
+            </div>
+          </button>
           <div className="card" style={{ overflow: 'hidden', marginBottom: 12 }}>
             {[
               ['Diagnosis', ex.diagnosis],
-              ['Procedure', ex.procedure + (ex.tooth ? ' · Tooth ' + ex.tooth : '')],
+              ['Procedure', ex.procedure + (
+                ex.teeth && ex.teeth.length > 1 ? ' · Teeth ' + ex.teeth.join(', ')
+                : ex.tooth ? ' · Tooth ' + ex.tooth : ''
+              )],
               ['Sittings', ex.totalSittings + ' visits'],
               ['Est. cost', formatCurrency(ex.estimatedCost)],
+              ...(ex.followUp
+                ? [['Next visit', /^\d{4}-\d{2}-\d{2}/.test(ex.followUp) ? formatDate(ex.followUp) : ex.followUp]]
+                : []),
             ].map(([k, v], i) => (
               <div key={k} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', minHeight: 46, padding: '8px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none' }}>
                 <span className="t-meta">{k}</span>
@@ -219,6 +325,19 @@ export default function RecordDiagnosisSheet({ params, onClose }) {
               </div>
             ))}
           </div>
+          {(ex.appointments || []).length > 0 && (
+            <>
+              <SectionHeader>Upcoming visits · {ex.appointments.length}</SectionHeader>
+              <div className="card" style={{ overflow: 'hidden', marginBottom: 18 }}>
+                {ex.appointments.map((a, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', minHeight: 46, padding: '8px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none' }}>
+                    <span style={{ fontSize: 15, fontWeight: 500 }}>{a.purpose}</span>
+                    <span className="t-meta">{/^\d{4}-\d{2}-\d{2}/.test(a.date) ? formatDate(a.date) : a.date}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
           <PrimaryButton onClick={handleCreate}>Create plan & prescription</PrimaryButton>
           <div style={{ fontSize: 12, color: 'var(--text-tertiary)', textAlign: 'center', marginTop: 10 }}>
             Amber dot = please double-check before saving

@@ -26,9 +26,20 @@ exports.transcribe = async (req, res, next) => {
   }
   const recordingType = req.body?.recordingType || 'general';
   try {
-    const { transcript } = await aiService.transcribeAudio(req.file.path, {
+    logger.info('[transcribe] input', {
+      sizeKb: Math.round((req.file.size || 0) / 1024),
+      mimetype: req.file.mimetype,
+      originalname: req.file.originalname,
+    });
+    try { fs.copyFileSync(req.file.path, '/tmp/last_audio_upload'); } catch {} // DIAG: inspect real browser audio
+    const { transcript, raw } = await aiService.transcribeAudio(req.file.path, {
       originalname: req.file.originalname,
       mimetype: req.file.mimetype,
+    });
+    logger.info('[transcribe] output', {
+      transcriptLen: (transcript || '').length,
+      preview: (transcript || '').slice(0, 60),
+      raw,
     });
 
     // Upload audio to Supabase Storage for dataset collection (non-fatal).
@@ -73,10 +84,21 @@ exports.transcribe = async (req, res, next) => {
 // POST /api/ai/generate-note — Gemini structuring of a doctor's transcript.
 exports.generateNote = async (req, res, next) => {
   try {
-    const { transcript } = req.body;
+    const { transcript, current } = req.body;
     if (!transcript) return res.status(400).json({ error: 'Transcript required' });
-    const structured = await aiService.generateClinicalNote(transcript);
+    // `current` (optional): an existing structured note → merge the transcript as a correction.
+    const structured = await aiService.generateClinicalNote(transcript, current || null);
     res.json({ structured });
+  } catch (e) { next(e); }
+};
+
+// POST /api/ai/parse-schedule — natural language → structured scheduling intent ONLY.
+// No booking, no availability, no slot choice (the deterministic engine handles those).
+exports.parseSchedule = async (req, res, next) => {
+  try {
+    const { transcript } = req.body;
+    if (!transcript) return res.status(400).json({ error: 'transcript required' });
+    res.json({ intent: await aiService.parseScheduleIntent(transcript) });
   } catch (e) { next(e); }
 };
 

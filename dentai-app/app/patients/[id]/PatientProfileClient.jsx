@@ -8,7 +8,6 @@ import { useClinicalStore } from '@/store/useClinicalStore';
 import Icon from '@/components/icons';
 import { Avatar, Chip, StatusChip, SectionHeader, PillToggle, StageDots, ToothChip, EmptyState, PrimaryButton, NavBar } from '@/components/ui';
 import Odontogram from '@/components/odontogram/Odontogram';
-import { treatmentPlans } from '@/lib/data/procedures';
 import { TODAY } from '@/lib/data/patients';
 import { formatCurrency, formatDate, formatTime, clinicianFlags, hasComplications, parseDate, MONTHS, formatCurrencyK } from '@/lib/data/utils';
 import { getProcedureColor, TOOTH_STATE_STYLE } from '@/lib/data/procedures';
@@ -62,70 +61,144 @@ function ProcedureCard({ proc, onClick, showLab, labOrders }) {
 }
 
 /* ---- tabs ---- */
-function OverviewTab({ p, procedures, visits, labOrders, openSheet, router }) {
-  const procs = procedures.filter(pr => pr.patientId === p.id);
-  const active = procs.filter(pr => pr.status === 'in_progress' || pr.status === 'planned');
-  const upcoming = visits.filter(v => v.patientId === p.id && v.date >= TODAY && v.status !== 'done').sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
-  const history = visits.filter(v => v.patientId === p.id && v.status === 'done').sort((a, b) => b.date.localeCompare(a.date));
-  const procById = id => procedures.find(x => x.id === id);
+// OverviewTab — the treatment control center. Answers "what's happening with this
+// patient right now, and what do I do next?" Driven entirely by the live case sheet.
+function OverviewTab({ p, caseSheet, toothHistory, teeth, activePlan, activeTeeth, openSheet, router, setTab }) {
+  const plan = activePlan;
+  const total = plan?.total_sittings || 1;
+  const done = plan?.completed_sittings || 0;
+  const remaining = Math.max(0, total - done);
+  const pending = caseSheet?.summary?.pendingAmount || 0;
+  const nextAppt = (caseSheet?.upcomingAppointments || [])[0];
+  const recent = (caseSheet?.visits || []).slice(0, 3);
+  const ongoing = !!plan && remaining > 0 && plan.status === 'active';
+
+  const PLAN_TONE = { active: '#1E8E3E', completed: '#9CA3AF', cancelled: '#EF4444' };
+  const nextLabel = ongoing ? 'Continue treatment' : 'Record findings';
+  const nextSub = ongoing
+    ? `${plan.procedure_name || 'Treatment'} · ${remaining} sitting${remaining > 1 ? 's' : ''} left`
+    : 'Speak findings — plan, Rx & next visit auto-fill';
 
   return (
     <div>
-      <SectionHeader>Diagnosis</SectionHeader>
-      <div className="card" style={{ padding: 16, marginBottom: 22, display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-        <span style={{ fontSize: 16, lineHeight: 1.4 }}>{p.chiefComplaint ? 'Irreversible pulpitis, tooth 36. ' + (p.clinicalNotes || '') : 'No diagnosis recorded yet'}</span>
-        <button style={{ color: 'var(--blue)', fontSize: 14, fontWeight: 500, flexShrink: 0 }}>Edit</button>
-      </div>
-
-      {active.length > 0 && <>
-        <SectionHeader>Current treatment</SectionHeader>
-        <div style={{ marginBottom: 12 }}>
-          {active.map(pr => <ProcedureCard key={pr.id} proc={pr} labOrders={labOrders} showLab onClick={() => openSheet('procedure', { id: pr.id })} />)}
+      {/* ── NEXT ACTION — the single strongest, operational CTA ── */}
+      <button onClick={() => openSheet('voice', { scope: 'patient', patientId: p.id })} className="tap" style={{
+        width: '100%', display: 'flex', alignItems: 'center', gap: 14, background: '#1C1C1E', color: '#fff',
+        borderRadius: 18, padding: '18px 20px', textAlign: 'left', marginBottom: 18, boxShadow: 'var(--elevation-2)',
+      }}>
+        <div style={{ width: 48, height: 48, borderRadius: 14, background: 'rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <Icon name="mic" size={24} color="#fff" />
         </div>
-      </>}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: '-0.02em' }}>{nextLabel}</div>
+          <div style={{ fontSize: 13.5, color: 'rgba(255,255,255,0.7)', marginTop: 2 }}>{nextSub}</div>
+        </div>
+        <Icon name="arrowRight" size={20} color="rgba(255,255,255,0.85)" />
+      </button>
 
-      <SectionHeader>Upcoming visits</SectionHeader>
-      {upcoming.length === 0 ? <div className="card" style={{ marginBottom: 22 }}><EmptyState title="No upcoming visits" hint="Schedule the next appointment" /></div> : (
-        <div className="card" style={{ overflow: 'hidden', marginBottom: 22 }}>
-          {upcoming.map((v, i) => {
-            const d = parseDate(v.date); const proc = procById(v.procedureId);
-            return (
-              <button key={v.id} onClick={() => router.push('/appointments/' + v.id)} className="rowtap" style={{ width: '100%', minHeight: 52, display: 'flex', alignItems: 'center', gap: 12, padding: '8px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left' }}>
-                <div style={{ width: 38, textAlign: 'center', flexShrink: 0 }}>
-                  <div style={{ fontSize: 10, color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>{MONTHS[d.getMonth()]}</div>
-                  <div className="tnum" style={{ fontSize: 22, fontWeight: 600, lineHeight: 1 }}>{d.getDate()}</div>
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 15, fontWeight: 600 }}>{proc ? proc.type : 'Consultation'}</div>
-                  <div className="t-meta">{formatTime(v.startTime).label}</div>
-                </div>
-                <StatusChip status={v.status} />
-              </button>
-            );
-          })}
+      {/* ── CURRENT TREATMENT ── */}
+      <SectionHeader>Current treatment</SectionHeader>
+      {plan ? (
+        <div className="card" style={{ padding: 16, marginBottom: 18 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
+            <span style={{ fontSize: 17, fontWeight: 700, letterSpacing: '-0.01em' }}>{plan.procedure_name || 'Treatment plan'}</span>
+            <span style={{ fontSize: 12, fontWeight: 700, textTransform: 'capitalize', color: PLAN_TONE[plan.status] || 'var(--text-secondary)', flexShrink: 0 }}>{plan.status || 'active'}</span>
+          </div>
+          {plan.diagnosis && <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 10 }}>{plan.diagnosis}</div>}
+          {activeTeeth.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+              {activeTeeth.map(t => <ToothChip key={t} tooth={t} />)}
+            </div>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, marginBottom: 6 }}>
+            <span style={{ color: 'var(--text-secondary)' }}>Sittings</span>
+            <span style={{ fontWeight: 700 }}>{done} of {total} done · {remaining} more</span>
+          </div>
+          <div style={{ height: 6, borderRadius: 99, background: 'rgba(60,60,67,0.1)', overflow: 'hidden', marginBottom: 12 }}>
+            <div style={{ height: '100%', width: `${Math.min(100, (done / total) * 100)}%`, background: 'var(--accent)', borderRadius: 99 }} />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 10, borderTop: '1px solid var(--border-light)' }}>
+            <span style={{ fontSize: 14, color: 'var(--text-secondary)' }}>{formatCurrency(plan.estimated_cost || 0)} estimated</span>
+            {pending > 0 && <span style={{ fontSize: 14, fontWeight: 700, color: '#C77700' }}>{formatCurrency(pending)} pending</span>}
+          </div>
+        </div>
+      ) : (
+        <div className="card" style={{ padding: '22px 16px', marginBottom: 18, textAlign: 'center' }}>
+          <Icon name="stethoscope" size={30} color="var(--text-tertiary)" stroke={1.6} />
+          <div style={{ fontSize: 15.5, fontWeight: 600, marginTop: 10 }}>No active treatment</div>
+          <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', marginTop: 3 }}>Record findings above to start a treatment plan.</div>
         </div>
       )}
 
-      <SectionHeader>Treatment history</SectionHeader>
-      {history.length === 0 ? <div className="card"><EmptyState icon="doc" title="No history yet" /></div> : history.map(v => {
-        const proc = procById(v.procedureId);
-        return (
-          <div key={v.id} className="card" style={{ padding: 16, marginBottom: 10, borderLeft: v.status === 'arrived' ? '3px solid var(--amber)' : 'none' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-              <span style={{ fontSize: 16, fontWeight: 600 }}>{proc ? proc.type : 'Visit'}</span>
-              {proc && proc.tooth && <ToothChip tooth={proc.tooth} />}
-              <span className="t-meta" style={{ marginLeft: 'auto' }}>{formatDate(v.date)}</span>
+      {/* ── AFFECTED TEETH — the chart, central and alive ── */}
+      <SectionHeader action={<button onClick={() => setTab('Tooth Map')} style={{ fontSize: 13, fontWeight: 600, color: 'var(--blue)' }}>Open map</button>}>Affected teeth</SectionHeader>
+      <div className="card" style={{ padding: '10px 8px 12px', marginBottom: 18 }}>
+        <Odontogram
+          teeth={teeth}
+          onTooth={(n) => {
+            const td = toothHistory?.toothMap?.find(t => t.toothNumber === String(n));
+            openSheet('tooth', { tooth: n, state: teeth[n] || 'healthy', patientId: p.id, toothData: td });
+          }}
+        />
+        <div style={{ textAlign: 'center', fontSize: 12.5, color: 'var(--text-tertiary)', marginTop: 4 }}>Tap a tooth to view or chart its treatment</div>
+      </div>
+
+      {/* ── NEXT VISIT ── */}
+      {nextAppt && (
+        <>
+          <SectionHeader>Next visit</SectionHeader>
+          <div className="card" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 16px', marginBottom: 18 }}>
+            {(() => { const d = parseDate(nextAppt.appointment_date); return (
+              <div style={{ width: 40, textAlign: 'center', flexShrink: 0 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-secondary)', fontWeight: 700, textTransform: 'uppercase' }}>{MONTHS[d.getMonth()]}</div>
+                <div className="tnum" style={{ fontSize: 22, fontWeight: 700, lineHeight: 1 }}>{d.getDate()}</div>
+              </div>
+            ); })()}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 15.5, fontWeight: 600 }}>{nextAppt.purpose || 'Appointment'}</div>
+              <div className="t-meta">{nextAppt.appointment_time ? formatTime(nextAppt.appointment_time).label : 'Time not set'}{nextAppt.sitting_number ? ` · Sitting ${nextAppt.sitting_number}` : ''}</div>
             </div>
-            {v.proceduresDone && <><div className="t-section" style={{ marginBottom: 3 }}>Notes</div><div style={{ fontSize: 14, lineHeight: 1.45, color: 'var(--text-primary)', marginBottom: v.nextSteps ? 10 : 0 }}>{v.clinicalNotes}</div></>}
-            {v.nextSteps && <><div className="t-section" style={{ marginBottom: 3 }}>Next steps</div><div style={{ fontSize: 14, lineHeight: 1.45, color: 'var(--text-secondary)' }}>{v.nextSteps}</div></>}
           </div>
-        );
-      })}
+        </>
+      )}
+
+      {/* ── PREVIOUS WORK ── */}
+      <SectionHeader>Previous work</SectionHeader>
+      {recent.length === 0 ? (
+        <div className="card" style={{ padding: '20px 16px', marginBottom: 18, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>No visits recorded yet</div>
+      ) : (
+        <div className="card" style={{ overflow: 'hidden', marginBottom: 18 }}>
+          {recent.map((v, i) => (
+            <div key={v.id || i} style={{ padding: '12px 16px', borderTop: i ? '1px solid var(--border-light)' : 'none' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 15, fontWeight: 600 }}>{v.procedure_name || 'Visit'}</span>
+                {v.tooth_number && <ToothChip tooth={v.tooth_number} />}
+                <span className="t-meta" style={{ marginLeft: 'auto' }}>{v.visit_date ? formatDate(v.visit_date) : ''}</span>
+              </div>
+              {v.notes && <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', marginTop: 4, lineHeight: 1.45 }}>{v.notes}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── SECONDARY tools for this patient ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+        {[
+          { icon: 'pencil', label: 'Prescribe', tint: '#1E8E3E', soft: 'rgba(48,209,88,0.12)', fn: () => openSheet('rx', { patientId: p.id }) },
+          { icon: 'calendar', label: 'Schedule', tint: '#2F6FB3', soft: 'rgba(0,122,255,0.10)', fn: () => openSheet('newVisit', { patientId: p.id }) },
+          { icon: 'rupee', label: 'Collect', tint: '#B07D2B', soft: 'rgba(255,159,10,0.14)', fn: () => openSheet('bill', { patientId: p.id }) },
+        ].map(a => (
+          <button key={a.label} onClick={a.fn} className="tap" style={{ background: a.soft, borderRadius: 14, padding: '14px 10px', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 10, textAlign: 'left' }}>
+            <Icon name={a.icon} size={20} color={a.tint} stroke={2} />
+            <span style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)' }}>{a.label}</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
 
-function CasesTab({ p, procedures, labOrders, openSheet, patientTreatmentPlans }) {
+function CasesTab({ p, procedures, labOrders, openSheet }) {
   const [apiPlans, setApiPlans] = React.useState(null);
   const [loadingPlans, setLoadingPlans] = React.useState(true);
 
@@ -134,14 +207,21 @@ function CasesTab({ p, procedures, labOrders, openSheet, patientTreatmentPlans }
     setLoadingPlans(true);
     import('@/lib/services/patient.service').then(({ getPatientTreatmentPlans }) =>
       getPatientTreatmentPlans(p.id)
-        .then(data => setApiPlans(data?.treatment_plans || data?.treatmentPlans || data || []))
+        .then(data => {
+          // Backend returns { plans: [...] }; tolerate a few shapes and always
+          // store an array (a bare object here breaks plans.map downstream).
+          const list = Array.isArray(data)
+            ? data
+            : data?.plans || data?.treatment_plans || data?.treatmentPlans || [];
+          setApiPlans(Array.isArray(list) ? list : []);
+        })
         .catch(() => setApiPlans([]))
         .finally(() => setLoadingPlans(false))
     );
   }, [p?.id]);
 
-  const localPlans = patientTreatmentPlans.filter(t => t.patientId === p.id);
-  const plans = apiPlans !== null ? apiPlans : localPlans;
+  // Real treatment plans from the API only — no mock fallback.
+  const plans = apiPlans || [];
 
   if (loadingPlans) {
     return (
@@ -259,14 +339,18 @@ function ToothMapTab({ p, bills, openSheet, toothHistory, toothLoading }) {
   const billed = bills.filter(b => b.patientId === p.id).reduce((s, b) => s + b.total, 0);
   const STATE_LABEL = { rct: 'Root canal', crown: 'Crown', filling: 'Filling', implant: 'Implant', extraction: 'Extraction', infection: 'Infection', scheduled: 'Scheduled' };
 
+  // Legend shows ONLY the states actually present on this patient — no generic decoder.
+  const presentStates = [...new Set(treated.map(([, st]) => st))];
+
   return (
     <div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-        <Chip label={`${treatedCount} treated`} tone="blueOutline" size="lg" />
-        <Chip label={`${scheduledCount} scheduled`} tone="amber" size="lg" />
-        <Chip label={`${formatCurrencyK(billed)} billed`} tone="green" size="lg" />
-      </div>
-      <div className="card" style={{ padding: '8px 6px', marginBottom: 22 }}>
+      {treated.length > 0 && (
+        <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 12 }}>
+          <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{treatedCount}</span> treated
+          {scheduledCount > 0 && <> · <span style={{ fontWeight: 700, color: '#C77700' }}>{scheduledCount}</span> pending</>}
+        </div>
+      )}
+      <div className="card" style={{ padding: '12px 8px 8px', marginBottom: 10 }}>
         <Odontogram
           teeth={p.teeth}
           onTooth={(n) => {
@@ -274,9 +358,24 @@ function ToothMapTab({ p, bills, openSheet, toothHistory, toothLoading }) {
             openSheet('tooth', { tooth: n, state: p.teeth[n] || 'healthy', patientId: p.id, toothData });
           }}
         />
+        <div style={{ textAlign: 'center', fontSize: 12.5, color: 'var(--text-tertiary)', marginTop: 2 }}>Tap a tooth to view or chart its treatment</div>
       </div>
+      {/* Contextual legend — only what's on this mouth */}
+      {presentStates.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px', padding: '0 4px', marginBottom: 22 }}>
+          {presentStates.map((st) => {
+            const c = TOOTH_STATE_STYLE[st] || TOOTH_STATE_STYLE.healthy;
+            return (
+              <span key={st} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ width: 12, height: 12, borderRadius: 4, background: c.fill === '#ffffff' ? '#fff' : c.fill, border: `1.5px solid ${c.stroke}`, flexShrink: 0 }} />
+                <span style={{ fontSize: 12, color: 'var(--text-tertiary)', fontWeight: 500 }}>{STATE_LABEL[st] || st}</span>
+              </span>
+            );
+          })}
+        </div>
+      )}
       <SectionHeader>Treated teeth</SectionHeader>
-      {treated.length === 0 ? <div className="card"><EmptyState icon="tooth" title="No teeth charted" hint="Tap any tooth above to record work" /></div> : (
+      {treated.length === 0 ? <div className="card"><EmptyState icon="tooth" title="Nothing charted yet" hint="Tap a tooth on the chart above to begin charting treatment" /></div> : (
         <div className="card" style={{ overflow: 'hidden' }}>
           {treated.map(([num, st], i) => {
             const c = TOOTH_STATE_STYLE[st] || TOOTH_STATE_STYLE.healthy;
@@ -504,7 +603,7 @@ function MediaTab({ p, openSheet }) {
     setLoading(true);
     getPatientXrays(p.id)
       .then(data => {
-        const all = data?.xrays || data || [];
+        const all = Array.isArray(data) ? data : (data?.xrays || []);
         const normalised = all.map(x => ({
           id: x.id,
           url: x.url || x.file_url || x.imageUrl,
@@ -798,8 +897,10 @@ function buildTeethMap(toothHistory) {
 function PatientProfile({ patientId, initialTab }) {
   const router = useRouter();
   const openSheet = useAppStore(s => s.openSheet);
+  const showToast = useAppStore(s => s.showToast);
   const patients = usePatientStore(s => s.patients);
   const fetchPatient = usePatientStore(s => s.fetchPatient);
+  const deletePatient = usePatientStore(s => s.deletePatient);
   const updateToothState = usePatientStore(s => s.updateToothState);
   const visits = useVisitStore(s => s.visits);
   const procedures = useClinicalStore(s => s.procedures);
@@ -831,6 +932,21 @@ function PatientProfile({ patientId, initialTab }) {
       .finally(() => setToothLoading(false));
   }, [patientId]);
 
+  // Load this patient's lab orders (powers Lab + Billing tabs) and prescriptions.
+  const loadPatientLabOrders = useClinicalStore(s => s.loadPatientLabOrders);
+  React.useEffect(() => {
+    if (!patientId) return;
+    loadPatientLabOrders(patientId);
+  }, [patientId]);
+
+  // Case sheet — the live clinical state that drives the control center (active plan,
+  // upcoming visit, recent work, balances). One read; backend is the source of truth.
+  const [caseSheet, setCaseSheet] = React.useState(null);
+  React.useEffect(() => {
+    if (!patientId) return;
+    getPatientCaseSheet(patientId).then(setCaseSheet).catch(() => {});
+  }, [patientId]);
+
   if (!p) return null;
 
   // Merge: API tooth history overrides local p.teeth
@@ -842,8 +958,13 @@ function PatientProfile({ patientId, initialTab }) {
   const outstanding = bills.filter(b => b.patientId === p.id).reduce((s, b) => s + b.outstanding, 0);
   const statusPill = p.status === 'current' ? <Chip label="Current patient" tone="dark" size="lg" /> : p.status === 'new' ? <Chip label="New patient" tone="blueOutline" size="lg" /> : <Chip label="Completed" tone="neutral" size="lg" />;
 
-  // treatmentPlans from data (static seed)
-  const patientTreatmentPlans = (treatmentPlans || []);
+  // Active treatment = the live case context driving the header + control center.
+  const activePlan = (caseSheet?.activeTreatmentPlans || [])[0] || (caseSheet?.allTreatmentPlans || []).find(pl => pl.status === 'active') || null;
+  const activeTeeth = activePlan ? ((toothHistory?.treatmentPlans || []).find(tp => tp.id === activePlan.id)?.teeth || []) : [];
+  const stageLine = activePlan
+    ? `${activePlan.procedure_name || 'Treatment'}${activeTeeth.length ? ` · ${activeTeeth.length > 1 ? 'Teeth ' + activeTeeth.join(', ') : 'Tooth ' + activeTeeth[0]}` : ''} · Sitting ${(activePlan.completed_sittings || 0)} of ${activePlan.total_sittings || 1}`
+    : null;
+
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
@@ -856,7 +977,12 @@ function PatientProfile({ patientId, initialTab }) {
             <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-0.02em' }}>{p.name}</div>
             <a href={'tel:' + p.phone.replace(/\s/g, '')} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--blue)', fontSize: 15, textDecoration: 'none', margin: '2px 0' }}><Icon name="phone" size={14} color="var(--blue)" />{p.phone}</a>
             <div className="t-meta" style={{ marginBottom: 8 }}>{p.age} · {p.gender} · {p.bloodGroup}</div>
-            {statusPill}
+            {stageLine ? (
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: 'rgba(48,209,88,0.10)', borderRadius: 99, padding: '5px 12px' }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#1E8E3E' }} />
+                <span style={{ fontSize: 13, fontWeight: 700, color: '#15702F' }}>{stageLine}</span>
+              </div>
+            ) : statusPill}
           </div>
         </div>
 
@@ -889,13 +1015,30 @@ function PatientProfile({ patientId, initialTab }) {
         </div>
 
         <div style={{ padding: '18px 20px 24px' }}>
-          {tab === 'Overview' && <OverviewTab p={p} procedures={procedures} visits={visits} labOrders={labOrders} openSheet={openSheet} router={router} />}
-          {tab === 'Cases' && <CasesTab p={p} procedures={procedures} labOrders={labOrders} openSheet={openSheet} patientTreatmentPlans={patientTreatmentPlans} />}
+          {tab === 'Overview' && <OverviewTab p={p} caseSheet={caseSheet} toothHistory={toothHistory} teeth={mergedTeeth} activePlan={activePlan} activeTeeth={activeTeeth} openSheet={openSheet} router={router} setTab={setTab} />}
+          {tab === 'Cases' && <CasesTab p={p} procedures={procedures} labOrders={labOrders} openSheet={openSheet} />}
           {tab === 'Tooth Map' && <ToothMapTab p={{ ...p, teeth: mergedTeeth }} bills={bills} openSheet={openSheet} toothHistory={toothHistory} toothLoading={toothLoading} />}
           {tab === 'Media' && <MediaTab p={p} openSheet={openSheet} />}
           {tab === 'Case Sheet' && <CaseSheetTab p={p} visits={visits} procedures={procedures} openSheet={openSheet} />}
           {tab === 'Lab' && <LabTab p={p} labOrders={labOrders} openSheet={openSheet} markLabReceived={markLabReceived} />}
           {tab === 'Billing' && <BillingTab p={p} bills={bills} prescriptions={prescriptions} labOrders={labOrders} visits={visits} procedures={procedures} openSheet={openSheet} toothHistory={toothHistory} />}
+
+          {/* Danger zone — delete patient (available to doctor and receptionist) */}
+          <button
+            onClick={async () => {
+              if (typeof window !== 'undefined' && !window.confirm(`Delete ${p.name}? They'll be removed from your lists. This is recoverable in the database.`)) return;
+              try {
+                await deletePatient(p.id);
+                showToast('Patient deleted');
+                router.replace('/patients');
+              } catch {
+                showToast('Could not delete patient');
+              }
+            }}
+            style={{ width: '100%', marginTop: 28, height: 48, borderRadius: 14, border: '1px solid rgba(255,59,48,0.35)', background: 'rgba(255,59,48,0.06)', color: '#FF3B30', fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+          >
+            <Icon name="alert" size={18} color="#FF3B30" /> Delete patient
+          </button>
         </div>
       </div>
       <VoiceToolbar onClick={() => openSheet('voice', { scope: 'patient', patientId: p.id })} />

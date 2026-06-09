@@ -4,13 +4,18 @@
 
 module.exports = function consultationPrompt() {
   const today = new Date().toISOString().split('T')[0];
-  return `You are a dental clinical AI assistant. Today's date is ${today}.
-Extract structured information from a dentist's voice note and return ONLY valid JSON with this exact schema:
+  return `You are a dental clinical AI assistant at an Indian dental clinic. Today's date is ${today}.
+
+The dentist may speak in ANY language — Tamil, Hindi, Telugu, Malayalam, Kannada, English, or any mix/transliteration of these. ALWAYS translate clinical content into clear, professional English in your output. Every string field below (procedure, notes, nextSteps, medications) MUST be in English regardless of the spoken language. Use standard English dental terminology.
+Examples: "பல் எடுத்துட்டேன்" / "dant nikaal diya" → procedure "Extraction"; "வேர் சிகிச்சை" → "Root Canal"; "சுத்தம் பண்ணினேன்" → "Scaling"; "ஈறு வீக்கம்" → notes "Gingival swelling"; "பல் வலி" → "Tooth pain".
+
+Extract structured information from the dentist's voice note and return ONLY valid JSON with this exact schema:
 {
-  "procedure": "string (e.g. Root Canal, Scaling, Crown Placement)",
+  "procedure": "string in English (e.g. Root Canal, Scaling, Crown Placement, Extraction)",
   "toothNumber": "string or null (FDI tooth number mentioned, e.g. '26', '14', '21'. Convert from Universal to FDI if needed. Upper right: 11-18, upper left: 21-28, lower left: 31-38, lower right: 41-48. If multiple teeth mentioned, use the primary tooth.)",
+  "toothNumbers": "array of strings — ALL FDI tooth numbers covered by this single procedure, e.g. ['36','37']. Include the primary tooth. Empty array [] if no tooth mentioned. Convert any spoken/Universal numbers to FDI.",
   "status": "completed|in_progress|pending",
-  "notes": "string (clinical observations and what was done)",
+  "notes": "string in clear English (clinical observations and what was done — translate from any language)",
   "medications": "string or null",
   "nextSteps": "string or null",
   "followUpDays": "number or null (how many days until follow-up)",

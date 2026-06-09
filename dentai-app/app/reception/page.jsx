@@ -9,7 +9,7 @@ import { useClinicalStore } from '@/store/useClinicalStore';
 import Icon from '@/components/icons';
 import { SectionHeader, Chip, StatusChip, Avatar, EmptyState, SelectPill, Segmented } from '@/components/ui';
 import { TODAY } from '@/lib/data/patients';
-import { STAFF, CLINIC, minutesAgo, waitLabel } from '@/lib/data/queue';
+import { minutesAgo, waitLabel } from '@/lib/data/queue';
 import { formatCurrency, formatTime, parseDate, hasComplications, MONTHS, DAYS_FULL, getGreeting } from '@/lib/data/utils';
 import { useQueueRealtime } from '@/lib/hooks/useQueueRealtime';
 
@@ -78,32 +78,37 @@ function ReceptionScreen() {
       </div>
 
       <div className="scroll" style={{ flex: 1, padding: '16px 20px 24px' }}>
-        {/* quick actions grid */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 22 }}>
+        {/* ── PRIMARY: check in — the front desk's core intake action ── */}
+        <button onClick={() => openSheet('checkin')} className="tap" style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: 16, marginBottom: 22,
+          background: '#1C1C1E', color: '#fff', borderRadius: 20, padding: '20px 22px', textAlign: 'left',
+          boxShadow: 'var(--elevation-2)',
+        }}>
+          <div style={{ width: 52, height: 52, borderRadius: 16, background: 'rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <Icon name="personPlus" size={26} color="#fff" />
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: '-0.02em' }}>Check in patient</div>
+            <div style={{ fontSize: 14, color: 'rgba(255,255,255,0.7)', marginTop: 2 }}>{waiting.length > 0 ? `${waiting.length} waiting in the queue` : 'Add a patient to the queue'}</div>
+          </div>
+          <Icon name="arrowRight" size={22} color="rgba(255,255,255,0.85)" />
+        </button>
+
+        {/* ── Quick tools — full soft-tinted tiles, above the live queue ── */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 24 }}>
           {[
-            { icon: 'personPlus', label: 'Check in',     sub: 'Add to queue',      bg: 'var(--green)',  ink: '#fff',     fn: () => openSheet('checkin') },
-            { icon: 'calendar',   label: 'Appointment',  sub: 'Book a slot',        bg: 'var(--blue)',   ink: '#fff',     fn: () => openSheet('newVisit', {}) },
-            { icon: 'rupee',      label: 'Collect',      sub: 'Bill & payment',     bg: 'var(--yellow)', ink: '#1C1C1E', fn: () => router.push('/finance') },
-            { icon: 'person',     label: 'Patients',     sub: 'Search & records',   bg: 'var(--red)',    ink: '#fff',     fn: () => router.push('/patients') },
-          ].map(a => {
-            const dark = a.ink !== '#fff';
-            return (
-              <button key={a.label} onClick={a.fn} className="tap" style={{
-                background: a.bg, borderRadius: 22, padding: '16px',
-                display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
-                textAlign: 'left', minHeight: 136, position: 'relative', overflow: 'hidden',
-                boxShadow: dark ? 'inset 0 1px 0 rgba(255,255,255,0.35), 0 4px 12px rgba(0,0,0,0.14)' : 'inset 0 1px 0 rgba(255,255,255,0.28), 0 4px 12px rgba(0,0,0,0.18)',
-              }}>
-                <div style={{ width: 46, height: 46, borderRadius: 14, background: dark ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.22)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 'auto' }}>
-                  <Icon name={a.icon} size={22} color={a.ink} stroke={2} />
-                </div>
-                <div style={{ marginTop: 14 }}>
-                  <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: '-0.025em', color: a.ink, lineHeight: 1.15 }}>{a.label}</div>
-                  <div style={{ fontSize: 12, fontWeight: 500, color: dark ? 'rgba(28,28,30,0.52)' : 'rgba(255,255,255,0.72)', marginTop: 3 }}>{a.sub}</div>
-                </div>
-              </button>
-            );
-          })}
+            { icon: 'calendar', label: 'Appointment', tint: '#2F6FB3', soft: 'rgba(0,122,255,0.10)',  fn: () => openSheet('newVisit', {}) },
+            { icon: 'rupee',    label: 'Collect',     tint: '#B07D2B', soft: 'rgba(255,159,10,0.14)', fn: () => router.push('/finance') },
+            { icon: 'person',   label: 'Patients',    tint: '#5B6470', soft: 'rgba(60,60,67,0.07)',   fn: () => router.push('/patients') },
+          ].map((a) => (
+            <button key={a.label} onClick={a.fn} className="tap" style={{
+              background: a.soft, borderRadius: 16, padding: '14px 12px', minHeight: 92,
+              display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 12, textAlign: 'left',
+            }}>
+              <Icon name={a.icon} size={22} color={a.tint} stroke={2} />
+              <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.01em', lineHeight: 1.15 }}>{a.label}</span>
+            </button>
+          ))}
         </div>
 
         {/* ready for checkout */}
@@ -137,7 +142,7 @@ function ReceptionScreen() {
                   <TokenBadge n={e.tokenNumber} tone="amber" />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 16, fontWeight: 600 }}>{p.name}</div>
-                    <div className="t-meta" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>With {STAFF.doctor.name} · since {formatTime(e.calledInAt).label}</div>
+                    <div className="t-meta" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.assignedDoctorRole === 'doctor' && e.assignedDoctorName ? `With ${e.assignedDoctorName}` : 'In consultation'}{e.calledInAt ? ` · since ${formatTime(e.calledInAt).label}` : ''}</div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#C77700' }}>
                     <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#FF9F0A', animation: 'donePulse 1.4s infinite' }} />
@@ -205,6 +210,7 @@ function ReceptionScreen() {
             </div>
           </div>
         )}
+
       </div>
     </div>
   );

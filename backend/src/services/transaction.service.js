@@ -32,9 +32,19 @@ function makeDisplayId(city) {
 // ── completeConsultation ──────────────────────────────────────────────────
 async function completeConsultation(ctx) {
   const { clinicId, dentistId, staffId, requestId, queueId,
-    patientId, procedure, diagnosis, toothNumber, totalSittings, estimatedCost, transcript, notes } = ctx;
+    patientId, procedure, diagnosis, toothNumber, toothNumbers, totalSittings, estimatedCost, transcript, notes, followUp } = ctx;
   const todayStr = new Date().toISOString().split('T')[0];
   const sittings = Math.max(1, parseInt(totalSittings) || 1);
+  // A follow-up like "2026-06-14" becomes a recommended appointment; free text is kept as a note only.
+  const followUpDate = /^\d{4}-\d{2}-\d{2}$/.test(String(followUp || '').trim()) ? String(followUp).trim() : null;
+
+  // Normalise the set of teeth covered by this procedure (multi-tooth). Falls back
+  // to the single primary tooth. De-duplicated, strings only.
+  const teeth = [...new Set(
+    [...(Array.isArray(toothNumbers) ? toothNumbers : []), toothNumber]
+      .filter((t) => t != null && String(t).trim() !== '')
+      .map((t) => String(t).trim())
+  )];
 
   // 1. Treatment plan (critical — propagate failure)
   const plan = await repos.treatmentPlans.create({
@@ -59,23 +69,49 @@ async function completeConsultation(ctx) {
       visit_date: todayStr, procedure_name: procedure, tooth_number: toothNumber || null,
       status: 'completed', raw_transcript: transcript || null, notes: notes || null,
       sitting_number: 1, cost: estimatedCost ? parseFloat(estimatedCost) : null,
+      follow_up_date: followUpDate,
     });
   } catch (e) { /* non-fatal — logged by caller via audit metadata */ }
 
-  // 3. Suggested appointment stubs (sessions 2..N), no time set (non-fatal)
+  // 2b. Multi-tooth links — one row per tooth covered by this procedure, tied to
+  //     both the plan and this sitting's visit. Powers per-tooth history + odontogram.
+  //     Non-fatal: a missing treatment_teeth table (migration 007 not yet run) must
+  //     not break consult completion.
+  if (teeth.length) {
+    try {
+      await supabase.from('treatment_teeth').insert(
+        teeth.map((t) => ({
+          clinic_id: clinicId || null, patient_id: patientId,
+          treatment_plan_id: plan.id, visit_id: visit?.id || null, tooth_number: t,
+        }))
+      );
+    } catch (e) { /* non-fatal — table may not exist pre-migration */ }
+  }
+
+  // 3. Recommended appointments (non-fatal):
+  //    - multi-sitting → one suggested stub per remaining session (weekly)
+  //    - single-sitting with a follow-up date → one follow-up appointment
   const appointments = [];
+  const apptInserts = [];
   if (sittings > 1) {
-    const inserts = [];
     for (let i = 2; i <= sittings; i++) {
       const d = new Date();
       d.setDate(d.getDate() + (i - 1) * 7);
-      inserts.push({
+      apptInserts.push({
         patient_id: patientId, dentist_id: dentistId, clinic_id: clinicId || null,
         appointment_date: d.toISOString().split('T')[0], appointment_time: null,
         sitting_number: i, purpose: `${procedure} — Session ${i}`, status: 'suggested',
       });
     }
-    const { data: apptData } = await supabase.from('appointments').insert(inserts).select();
+  } else if (followUpDate) {
+    apptInserts.push({
+      patient_id: patientId, dentist_id: dentistId, clinic_id: clinicId || null,
+      appointment_date: followUpDate, appointment_time: null,
+      sitting_number: 2, purpose: `${procedure} — Follow-up`, status: 'suggested',
+    });
+  }
+  if (apptInserts.length) {
+    const { data: apptData } = await supabase.from('appointments').insert(apptInserts).select();
     if (apptData) appointments.push(...apptData);
   }
 
@@ -93,9 +129,16 @@ async function completeConsultation(ctx) {
     } catch (e) { /* non-fatal */ }
   }
 
-  // 5. Link plan + notes on queue entry
+  // 5. Link plan + notes on queue entry AND move it to checkout. Without the status
+  //    change the patient never appears in the receptionist's "Ready for checkout"
+  //    list (the frontend's optimistic status gets overwritten on the next reload).
   if (queueId) {
-    const updates = { treatment_plan_id: plan.id, updated_at: new Date().toISOString() };
+    const updates = {
+      treatment_plan_id: plan.id,
+      status: 'ready_for_checkout',
+      consultation_outcome: 'treatment_done',
+      updated_at: new Date().toISOString(),
+    };
     if (notes) updates.notes = notes;
     await supabase.from('queue_entries').update(updates).eq('id', queueId).eq('clinic_id', clinicId);
   }

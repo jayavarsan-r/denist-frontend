@@ -14,6 +14,7 @@ module.exports = {
   payments:       new Base('payments',        { defaultOrder: { column: 'payment_date', ascending: false } }),
   queue:          new Base('queue_entries',   { defaultOrder: { column: 'sort_order', ascending: true } }),
   xrays:          new Base('xrays',           { softDeleteColumn: 'deleted_at', defaultOrder: { column: 'date_taken', ascending: false } }),
+  labOrders:      new Base('lab_orders',      { softDeleteColumn: 'deleted_at', defaultOrder: { column: 'created_at', ascending: false } }),
   staff:          new Base('staff',           {}),
   clinics:        new Base('clinics',         {}),
   auditLogs:      new Base('audit_logs',      { defaultOrder: { column: 'created_at', ascending: false } }),

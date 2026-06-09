@@ -7,6 +7,7 @@ function normaliseForApi(data) {
     appointmentTime: data.appointmentTime || data.appointment_time || data.startTime,
     purpose:         data.purpose || data.type || data.procedureName || data.procedure || '',
     toothNumber:     data.toothNumber || data.tooth_number || data.tooth || null,
+    durationMinutes: data.durationMinutes || data.duration_minutes || undefined,
     status:          data.status || undefined,
   };
 }

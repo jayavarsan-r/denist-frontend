@@ -23,7 +23,7 @@ export default function WalkInSheet({ onClose }) {
   };
   return (
     <div style={{ padding: '0 20px 28px' }}>
-      <SheetHeader title="Walk-in patient" onClose={onClose} />
+      <SheetHeader title="Consultation patient" onClose={onClose} />
       <SectionHeader right={<button onClick={() => { onClose(); openSheet('newPatient'); }} style={{ color: 'var(--blue)', fontSize: 13, fontWeight: 500 }}>Or create new →</button>}>Patient</SectionHeader>
       <div className="card" style={{ overflow: 'hidden', marginBottom: 18 }}>
         {patients.map((p, i) => (

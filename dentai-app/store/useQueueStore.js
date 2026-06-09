@@ -85,6 +85,9 @@ export const useQueueStore = create((set, get) => ({
         procedure:     consult?.procedure || '',
         diagnosis:     consult?.diagnosis || '',
         toothNumber:   consult?.tooth ? String(consult.tooth) : null,
+        toothNumbers:  Array.isArray(consult?.teeth) && consult.teeth.length
+          ? consult.teeth.map(String)
+          : (consult?.tooth ? [String(consult.tooth)] : []),
         totalSittings: consult?.totalSittings || 1,
         estimatedCost: consult?.estimatedCost || 0,
         transcript:    consult?.transcript || '',
@@ -156,6 +159,9 @@ function normaliseEntry(e) {
     calledInAt: e.called_in_at ?? e.calledInAt ?? null,
     readyAt: e.ready_at ?? e.readyAt ?? null,
     assignedDoctor: e.assigned_doctor ?? e.assignedDoctor ?? null,
+    assignedDoctorName: e.assigned_doctor_staff?.name ?? e.assignedDoctorName ?? null,
+    assignedDoctorRole: e.assigned_doctor_staff?.role ?? e.assignedDoctorRole ?? null,
+    patientName: e.patients?.name ?? e.patientName ?? null,
     xrays: e.xrays || [],
     outcome: e.consultation_outcome ?? e.outcome ?? null,
     consult: e.outcome_metadata ?? e.consult ?? null,

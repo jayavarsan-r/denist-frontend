@@ -40,15 +40,14 @@ export default function ApptPeekSheet({ params, onClose }) {
   const openSheet = useAppStore((s) => s.openSheet);
   const visits = useVisitStore((s) => s.visits);
   const patients = usePatientStore((s) => s.patients);
-  const procedures = useClinicalStore((s) => s.procedures);
   const v = visits.find(x => x.id === params.id);
   const p = v && patients.find(x => x.id === v.patientId);
-  const proc = v && procedures.find(x => x.id === v.procedureId);
   if (!v || !p) return null;
+  const purpose = v.purpose || 'Consultation';
   return (
     <div style={{ padding: '0 20px 28px' }}>
       <SheetHeader title={p.name} onClose={onClose} />
-      <div className="t-meta" style={{ marginTop: -6, marginBottom: 14 }}>{proc ? `${proc.type}${proc.tooth ? ' · Tooth ' + proc.tooth : ''}` : 'Consultation'} · {formatTime(v.startTime).label}</div>
+      <div className="t-meta" style={{ marginTop: -6, marginBottom: 14 }}>{purpose}{v.tooth ? ' · Tooth ' + v.tooth : ''} · {formatTime(v.startTime).label}</div>
       <div className="card" style={{ padding: '16px 12px', marginBottom: 16 }}><StatusStepper status={v.status} /></div>
       <button onClick={() => { onClose(); openSheet('endVisit', { id: v.id }); }} style={{ color: 'var(--blue)', fontSize: 15, fontWeight: 500 }}>Open full page →</button>
     </div>

@@ -25,6 +25,7 @@ import VisitRecordSheet from '@/components/sheets/VisitRecordSheet';
 import PrescriptionDesignSheet from '@/components/sheets/PrescriptionDesignSheet';
 import PhotoViewerSheet from '@/components/sheets/PhotoViewerSheet';
 import TreatmentPlanSheet from '@/components/sheets/TreatmentPlanSheet';
+import PatientPickerSheet from '@/components/sheets/PatientPickerSheet';
 
 const SHEETS = {
   account: AccountSettingsSheet,
@@ -51,6 +52,7 @@ const SHEETS = {
   prescriptionDesign: PrescriptionDesignSheet,
   photoViewer: PhotoViewerSheet,
   treatmentPlan: TreatmentPlanSheet,
+  patientPicker: PatientPickerSheet,
 };
 
 export default function SheetHost() {

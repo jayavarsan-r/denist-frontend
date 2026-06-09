@@ -101,3 +101,9 @@ export async function getToothHistory(id) {
   const { data } = await apiClient.get(`/api/patients/${id}/tooth-history`);
   return data; // { patientId, toothMap: [...], generalVisits: [...], totalBilled: number }
 }
+
+// Soft delete — backend marks the patient deleted (recoverable in DB) and hides them.
+export async function deletePatient(id) {
+  await apiClient.delete(`/api/patients/${id}`);
+  return true;
+}

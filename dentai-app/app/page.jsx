@@ -10,7 +10,6 @@ import { apiClient } from '@/lib/api/client';
 import Icon from '@/components/icons';
 import { SectionHeader, Chip, StatusChip, Avatar, EmptyState, SelectPill, Segmented } from '@/components/ui';
 import { TODAY } from '@/lib/data/patients';
-import { STAFF } from '@/lib/data/queue';
 import { formatCurrency, formatCurrencyK, formatDate, formatDateLong, formatTime, parseDate, getInitials, hasComplications, clinicianFlags, MONTHS, DAYS, DAYS_FULL, getGreeting } from '@/lib/data/utils';
 
 const APPT_DOT = { confirmed: 'var(--blue)', arrived: 'var(--yellow)', done: 'var(--green)', no_show: 'var(--red)', scheduled: 'var(--blue)', completed: 'var(--green)', cancelled: 'var(--red)' };
@@ -86,62 +85,42 @@ function HomeScreen() {
         </button>
       </div>
 
-      {/* start consultation */}
-      <div style={{ padding: '12px 20px 0' }}>
-        <button onClick={() => router.push('/consultation')} className="tap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14, background: 'var(--accent)', color: 'var(--accent-ink)', borderRadius: 99, padding: '16px 22px', textAlign: 'left' }}>
-          <Icon name="stethoscope" size={24} color="var(--accent-ink)" />
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 17, fontWeight: 700 }}>Start consultation</div>
-            <div style={{ fontSize: 13.5, opacity: 0.85 }}>{queueCount > 0 ? `${queueCount} in the queue${inChair ? ' · 1 in chair' : ''}` : 'Queue is clear'}</div>
+      {/* ── PRIMARY: consultation — the clinic's core workflow, strongest emphasis ── */}
+      <div style={{ padding: '14px 20px 0' }}>
+        <button onClick={() => router.push('/consultation')} className="tap" style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: 16,
+          background: '#1C1C1E', color: '#fff', borderRadius: 20, padding: '20px 22px',
+          textAlign: 'left', boxShadow: 'var(--elevation-2)',
+        }}>
+          <div style={{ width: 52, height: 52, borderRadius: 16, background: 'rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <Icon name="stethoscope" size={26} color="#fff" />
           </div>
-          <Icon name="arrowRight" size={20} color="var(--accent-ink)" />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: '-0.02em' }}>{inChair ? 'Continue consultation' : 'Start consultation'}</div>
+            <div style={{ fontSize: 14, color: 'rgba(255,255,255,0.7)', marginTop: 2 }}>{queueCount > 0 ? `${queueCount} in the queue${inChair ? ' · 1 in chair' : ''}` : 'Queue is clear'}</div>
+          </div>
+          <Icon name="arrowRight" size={22} color="rgba(255,255,255,0.85)" />
         </button>
       </div>
 
-      {/* four main actions */}
-      <div style={{ padding: '14px 20px 0' }}>
-        <Eyebrow>Quick actions</Eyebrow>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+      {/* ── Quick tools — full soft-tinted tiles, above the live queue ── */}
+      <div style={{ padding: '16px 20px 0' }}>
+        <Eyebrow>Quick tools</Eyebrow>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           {[
-            { icon: 'personPlus', label: 'Add patient',  sub: 'New or walk-in', bg: 'var(--green)',  ink: '#fff',     fn: () => openSheet('newPatient') },
-            { icon: 'pencil',     label: 'Prescription', sub: 'Write Rx',       bg: 'var(--blue)',   ink: '#fff',     fn: () => openSheet('rx', {}) },
-            { icon: 'flask',      label: 'Lab order',    sub: 'Send to lab',    bg: 'var(--red)',    ink: '#fff',     fn: () => openSheet('newLab', {}) },
-            { icon: 'rupee',      label: 'Collect',      sub: 'Bill & payment', bg: 'var(--yellow)', ink: '#1C1C1E', fn: () => router.push('/finance') },
-          ].map(a => {
-            const dark = a.ink !== '#fff';
-            return (
-              <button key={a.label} onClick={a.fn} className="tap" style={{
-                background: a.bg,
-                borderRadius: 22,
-                padding: '16px',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'flex-start',
-                textAlign: 'left',
-                minHeight: 136,
-                position: 'relative',
-                overflow: 'hidden',
-                boxShadow: dark
-                  ? 'inset 0 1px 0 rgba(255,255,255,0.35), 0 4px 12px rgba(0,0,0,0.14)'
-                  : 'inset 0 1px 0 rgba(255,255,255,0.28), 0 4px 12px rgba(0,0,0,0.18)',
-              }}>
-                {/* icon */}
-                <div style={{
-                  width: 46, height: 46, borderRadius: 14,
-                  background: dark ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.22)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  marginBottom: 'auto',
-                }}>
-                  <Icon name={a.icon} size={22} color={a.ink} stroke={2} />
-                </div>
-                {/* label + sub */}
-                <div style={{ marginTop: 14 }}>
-                  <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: '-0.025em', color: a.ink, lineHeight: 1.15 }}>{a.label}</div>
-                  <div style={{ fontSize: 12, fontWeight: 500, color: dark ? 'rgba(28,28,30,0.52)' : 'rgba(255,255,255,0.72)', marginTop: 3 }}>{a.sub}</div>
-                </div>
-              </button>
-            );
-          })}
+            { icon: 'personPlus', label: 'New patient',  tint: '#2F6FB3', soft: 'rgba(0,122,255,0.10)',  fn: () => openSheet('newPatient') },
+            { icon: 'calendar',   label: 'Appointment',  tint: '#159AAE', soft: 'rgba(48,176,199,0.12)', fn: () => openSheet('newVisit', {}) },
+            { icon: 'pencil',     label: 'Prescription', tint: '#1E8E3E', soft: 'rgba(48,209,88,0.12)',  fn: () => openSheet('patientPicker', { next: 'rx',   title: 'Prescription for…' }) },
+            { icon: 'rupee',      label: 'Collect',      tint: '#B07D2B', soft: 'rgba(255,159,10,0.14)', fn: () => openSheet('patientPicker', { next: 'bill', title: 'Collect payment from…' }) },
+          ].map((a) => (
+            <button key={a.label} onClick={a.fn} className="tap" style={{
+              background: a.soft, borderRadius: 16, padding: '14px 12px', minHeight: 92,
+              display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 12, textAlign: 'left',
+            }}>
+              <Icon name={a.icon} size={22} color={a.tint} stroke={2} />
+              <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.01em', lineHeight: 1.15 }}>{a.label}</span>
+            </button>
+          ))}
         </div>
       </div>
 

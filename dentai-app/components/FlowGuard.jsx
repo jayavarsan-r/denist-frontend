@@ -20,6 +20,9 @@ const PUBLIC_PATHS = ['/login', '/onboarding'];
 // Paths that require auth but skip other flow checks
 const AUTH_ONLY_PATHS = ['/doctor/setup', '/roles'];
 
+// Doctor-only routes — receptionists are redirected to their queue view instead.
+const DOCTOR_ONLY_PATHS = ['/', '/consultation'];
+
 export default function FlowGuard() {
   const router = useRouter();
   const pathname = usePathname();
@@ -97,6 +100,12 @@ export default function FlowGuard() {
 
     if (role === 'doctor' && !doctorSetupDone) {
       router.replace('/doctor/setup');
+      return;
+    }
+
+    // Receptionists have no doctor home or consultation flow — keep them on the queue.
+    if (role === 'receptionist' && DOCTOR_ONLY_PATHS.includes(normPath)) {
+      router.replace('/reception');
       return;
     }
   }, [started, role, doctorSetupDone, pathname]);

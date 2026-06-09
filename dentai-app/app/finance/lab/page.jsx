@@ -97,7 +97,10 @@ function LabScreen() {
   const openSheet = useAppStore((s) => s.openSheet);
   const labOrders = useClinicalStore((s) => s.labOrders);
   const markLabReceived = useClinicalStore((s) => s.markLabReceived);
+  const loadLabOrders = useClinicalStore((s) => s.loadLabOrders);
   const [filter, setFilter] = React.useState('All');
+
+  React.useEffect(() => { loadLabOrders(); }, []);
 
   const orders = labOrders.filter(o => filter === 'All' || o.status === filter);
   const activeCount = labOrders.filter(o => o.status === 'sent' || o.status === 'pending').length;

@@ -10,6 +10,7 @@ import { formatCurrency, clinicianFlags, hasComplications, formatTime, parseDate
 import { CONSULT_OUTCOMES } from '@/lib/data/queue';
 import { recordPayment } from '@/lib/services/payment.service';
 import { getPrescriptionPdfUrl } from '@/lib/services/prescription.service';
+import { getCheckoutSummary } from '@/lib/services/queue.service';
 
 function MealTiming({ slots }) {
   const cells = [['B', slots.breakfast], ['L', slots.lunch], ['D', slots.dinner]];
@@ -30,16 +31,71 @@ function CheckoutScreen({ entryId }) {
   const queue = useQueueStore(s => s.queue);
   const checkout = useQueueStore(s => s.checkout);
   const patients = usePatientStore(s => s.patients);
+  const fetchPatient = usePatientStore(s => s.fetchPatient);
 
   const entry = queue.find(e => e.id === entryId);
-  const p = entry && patients.find(x => x.id === entry.patientId);
-  const c = entry && entry.consult;
-  const [sittings, setSittings] = React.useState(c ? c.totalSittings : 1);
-  const [cost, setCost] = React.useState(c ? c.estimatedCost : 0);
+  const [summary, setSummary] = React.useState(null);
+  const [loadErr, setLoadErr] = React.useState(false);
+  const [sittings, setSittings] = React.useState(1);
+  const [cost, setCost] = React.useState(0);
   const [editingCost, setEditingCost] = React.useState(false);
   const [collected, setCollected] = React.useState('');
   const [method, setMethod] = React.useState('UPI');
-  if (!entry || !p || !c) return null;
+
+  // Source of truth: persisted consultation summary from the backend (works for the
+  // receptionist / any session). Falls back to the doctor's same-session consult data.
+  React.useEffect(() => {
+    let alive = true;
+    setLoadErr(false);
+    getCheckoutSummary(entryId)
+      .then(s => { if (alive) setSummary(s); })
+      .catch(() => { if (alive) setLoadErr(true); });
+    return () => { alive = false; };
+  }, [entryId]);
+
+  const c = summary || (entry && entry.consult) || null;
+  const patientId = entry?.patientId || summary?.patient?.id;
+  let p = patients.find(x => x.id === patientId);
+  if (!p && summary?.patient) {
+    // Minimal safe fallback until the normalised patient loads (avoid raw-shape crashes).
+    p = { ...summary.patient, allergies: Array.isArray(summary.patient.allergies) ? summary.patient.allergies : [] };
+  }
+
+  // Ensure the patient is cached (receptionist may not have loaded them).
+  React.useEffect(() => {
+    if (patientId && !patients.find(x => x.id === patientId)) fetchPatient(patientId).catch(() => {});
+  }, [patientId]);
+
+  // Sync the editable cost/sittings once the consult data arrives.
+  React.useEffect(() => {
+    if (c) { setSittings(c.totalSittings || 1); setCost(c.estimatedCost || 0); }
+  }, [c?.treatmentPlanId, c?.procedure, c?.estimatedCost]);
+
+  // Loading / error states — never render blank.
+  if (!c && !loadErr) {
+    return (
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
+        <NavBar title="Checkout" onBack={() => router.back()} />
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
+          <div style={{ width: 26, height: 26, borderRadius: '50%', border: '3px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin .7s linear infinite' }} />
+          <div style={{ fontSize: 15, color: 'var(--text-secondary)' }}>Loading checkout…</div>
+        </div>
+      </div>
+    );
+  }
+  if (!c || !p) {
+    return (
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
+        <NavBar title="Checkout" onBack={() => router.back()} />
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '0 32px', textAlign: 'center' }}>
+          <Icon name="alert" size={32} color="var(--text-tertiary)" />
+          <div style={{ fontSize: 16, fontWeight: 600 }}>Consultation not found</div>
+          <div style={{ fontSize: 14, color: 'var(--text-secondary)' }}>This visit has no recorded consultation yet, or it couldn't be loaded.</div>
+          <button onClick={() => router.push('/reception')} style={{ marginTop: 8, color: 'var(--blue)', fontSize: 15, fontWeight: 600 }}>Back to queue</button>
+        </div>
+      </div>
+    );
+  }
 
   const paid = parseInt(collected) || 0;
   const balance = Math.max(0, cost - paid);
@@ -47,20 +103,25 @@ function CheckoutScreen({ entryId }) {
   const statusColor = status === 'paid' ? '#1E8E3E' : status === 'partial' ? 'var(--orange)' : 'var(--red)';
 
   const complete = async () => {
-    try {
-      await recordPayment({
-        patientId: entry.patientId,
-        amount: paid,
-        paymentMethod: method.toLowerCase(),
-        notes: '',
-      });
-    } catch(e) {
-      showToast(e?.response?.data?.message || 'Payment record failed');
-      return;
+    // Only record a payment when money is actually collected (the API rejects ₹0).
+    if (paid > 0) {
+      try {
+        await recordPayment({
+          patientId,
+          treatmentPlanId: c.treatmentPlanId || null,
+          queueEntryId: entryId,
+          amount: paid,
+          paymentMethod: method.toLowerCase(),
+          notes: '',
+        });
+      } catch (e) {
+        showToast(e?.response?.data?.message || e?.apiError?.message || 'Payment record failed');
+        return;
+      }
     }
-    const summary = { patientName: p.name, procedure: `${c.procedure}${c.tooth ? ' · Tooth ' + c.tooth : ''}`, amount: paid };
-    checkout(entry.id, summary);
-    showToast('Checked out · ' + formatCurrency(paid) + ' collected');
+    const summ = { patientName: p.name, procedure: `${c.procedure}${c.tooth ? ' · Tooth ' + c.tooth : ''}`, amount: paid };
+    checkout(entryId, summ);
+    showToast(paid > 0 ? 'Checked out · ' + formatCurrency(paid) + ' collected' : 'Checked out');
     router.push('/reception');
   };
 
@@ -88,7 +149,7 @@ function CheckoutScreen({ entryId }) {
           <Avatar name={p.name} size={50} ring dot={hasComplications(p)} />
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-0.02em' }}>{p.name}</div>
-            <div className="t-meta">Token #{entry.tokenNumber} · {p.age} · {p.gender}</div>
+            <div className="t-meta">{(c.tokenNumber ?? entry?.tokenNumber) ? `Token #${c.tokenNumber ?? entry?.tokenNumber} · ` : ''}{p.age} · {p.gender}</div>
           </div>
           <button onClick={() => router.push('/patients/' + p.id)} style={{ color: 'var(--blue)', fontSize: 14, fontWeight: 500 }}>Profile</button>
         </div>
@@ -105,7 +166,7 @@ function CheckoutScreen({ entryId }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
             <span style={{ fontSize: 18, fontWeight: 700 }}>{c.procedure}</span>
             {c.tooth && <ToothChip tooth={c.tooth} />}
-            <div style={{ marginLeft: 'auto' }}>{(() => { const o = CONSULT_OUTCOMES.find(x => x.id === entry.outcome); return o ? <Chip label={o.label} tone={o.tone} /> : null; })()}</div>
+            <div style={{ marginLeft: 'auto' }}>{(() => { const o = CONSULT_OUTCOMES.find(x => x.id === (c.outcome ?? entry?.outcome)); return o ? <Chip label={o.label} tone={o.tone} /> : null; })()}</div>
           </div>
           <div style={{ fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.45, marginBottom: 14 }}>{c.diagnosis}</div>
           {/* sittings stepper */}

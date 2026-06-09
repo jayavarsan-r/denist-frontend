@@ -6,9 +6,13 @@ const today = () => new Date().toISOString().split('T')[0];
 
 exports.list = async (req, res, next) => {
   try {
-    const { date } = req.query;
-    let query = repos.appointments.query(scopeOf(req), SELECT).order('appointment_time');
+    const { date, from, to } = req.query;
+    let query = repos.appointments.query(scopeOf(req), SELECT)
+      .neq('status', 'cancelled')                 // cancelled appts don't belong on the calendar
+      .order('appointment_date').order('appointment_time');
     if (date) query = query.eq('appointment_date', date);
+    if (from) query = query.gte('appointment_date', from);   // optional date-range (scales the calendar)
+    if (to) query = query.lte('appointment_date', to);
     const { data, error } = await query;
     if (error) throw error;
     res.json({ appointments: data });
@@ -48,8 +52,8 @@ exports.bookedSlots = async (req, res, next) => {
 
 exports.create = async (req, res, next) => {
   try {
-    const { patientId, appointmentDate, appointmentTime, purpose, toothNumber } = req.body;
-    const appointment = await repos.appointments.create({
+    const { patientId, appointmentDate, appointmentTime, purpose, toothNumber, durationMinutes } = req.body;
+    const base = {
       patient_id: patientId,
       dentist_id: req.dentistId,
       clinic_id: req.clinicId || null,
@@ -57,7 +61,14 @@ exports.create = async (req, res, next) => {
       appointment_time: appointmentTime,
       purpose,
       tooth_number: toothNumber || null,
-    });
+    };
+    let appointment;
+    try {
+      // Prefer storing duration; fall back if migration 008 (duration_minutes) isn't applied yet.
+      appointment = await repos.appointments.create({ ...base, duration_minutes: durationMinutes || 30 });
+    } catch (e) {
+      appointment = await repos.appointments.create(base);
+    }
     res.status(201).json({ appointment });
   } catch (e) { next(e); }
 };
@@ -69,8 +80,9 @@ exports.update = async (req, res, next) => {
       appointmentTime: 'appointment_time',
       toothNumber: 'tooth_number',
       sittingNumber: 'sitting_number',
+      durationMinutes: 'duration_minutes',
     };
-    const allowed = new Set(['appointment_date', 'appointment_time', 'purpose', 'tooth_number', 'sitting_number', 'status', 'notes']);
+    const allowed = new Set(['appointment_date', 'appointment_time', 'purpose', 'tooth_number', 'sitting_number', 'duration_minutes', 'status', 'notes']);
     const updates = {};
     for (const [k, v] of Object.entries(req.body)) {
       const col = fieldMap[k] || k;

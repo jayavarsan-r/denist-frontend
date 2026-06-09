@@ -207,16 +207,72 @@ router.patch('/:id/reorder', auth, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// GET /api/queue/:id/checkout-summary — persisted consultation data for the checkout
+// screen (works for ANY user/session, unlike the doctor's ephemeral client state).
+// Pulls the linked treatment plan, its teeth, the prescription, and upcoming appointments.
+router.get('/:id/checkout-summary', auth, async (req, res, next) => {
+  try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
+    const { id } = req.params;
+    const { data: entry, error } = await supabase.from('queue_entries')
+      .select('*, patients(id, name, phone, age, gender, allergies, clinical_flags), treatment_plans(*)')
+      .eq('id', id).eq('clinic_id', req.clinicId).maybeSingle();
+    if (error) throw error;
+    if (!entry) return res.status(404).json({ error: 'Queue entry not found' });
+
+    const plan = entry.treatment_plans || null;
+    const planId = plan?.id || entry.treatment_plan_id || null;
+    const today = new Date().toISOString().split('T')[0];
+    const safe = async (p) => { try { const { data } = await p; return data || []; } catch { return []; } };
+
+    const [teethRows, prescRows, appts] = await Promise.all([
+      planId ? safe(supabase.from('treatment_teeth').select('tooth_number').eq('treatment_plan_id', planId)) : Promise.resolve([]),
+      safe(supabase.from('prescriptions').select('*').eq('queue_entry_id', id).order('created_at', { ascending: false })),
+      safe(supabase.from('appointments').select('*').eq('patient_id', entry.patient_id).eq('dentist_id', req.dentistId).gte('appointment_date', today).neq('status', 'cancelled').order('appointment_date')),
+    ]);
+
+    const teeth = [...new Set(teethRows.map(t => t.tooth_number).filter(Boolean))];
+    const presc = prescRows[0] || null;
+
+    res.json({
+      summary: {
+        queueEntryId: id,
+        patient: entry.patients || null,
+        tokenNumber: entry.token_number,
+        outcome: entry.consultation_outcome || null,
+        treatmentPlanId: planId,
+        procedure: plan?.procedure_name || '',
+        diagnosis: plan?.diagnosis || '',
+        tooth: teeth[0] || null,
+        teeth,
+        totalSittings: plan?.total_sittings || 1,
+        sittingDone: plan?.completed_sittings || 1,
+        estimatedCost: plan?.estimated_cost != null ? parseFloat(plan.estimated_cost) : 0,
+        collectedAmount: plan?.collected_amount != null ? parseFloat(plan.collected_amount) : 0,
+        pendingAmount: plan?.pending_amount != null ? parseFloat(plan.pending_amount) : 0,
+        appointments: appts.map(a => ({ date: a.appointment_date, time: a.appointment_time, purpose: a.purpose, status: a.status, sittingNumber: a.sitting_number })),
+        medicines: Array.isArray(presc?.medicines) ? presc.medicines.map(m => ({
+          name: m.name || '', dose: m.dose || m.dosage || '', frequency: m.frequency || '',
+          duration: m.duration || '', timing: m.timing || '',
+          slots: m.meal_timing_slots || m.slots || { breakfast: false, lunch: false, dinner: false },
+        })) : [],
+        instructions: presc?.instructions || '',
+        prescriptionId: presc?.id || null,
+      },
+    });
+  } catch (e) { next(e); }
+});
+
 // POST /api/queue/:id/complete-consult — orchestrated by the transaction service:
 // treatment plan + visit + suggested appointments + prescription + queue link + audit.
 router.post('/:id/complete-consult', auth, validate(v.completeConsult), async (req, res, next) => {
   try {
     if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
-    const { patientId, procedure, diagnosis, toothNumber, totalSittings, estimatedCost, transcript, notes } = req.body;
+    const { patientId, procedure, diagnosis, toothNumber, toothNumbers, totalSittings, estimatedCost, transcript, notes, followUp } = req.body;
     const result = await transaction.completeConsultation({
       clinicId: req.clinicId, dentistId: req.dentistId, staffId: req.staffId, requestId: req.id,
       queueId: req.params.id,
-      patientId, procedure, diagnosis, toothNumber, totalSittings, estimatedCost, transcript, notes,
+      patientId, procedure, diagnosis, toothNumber, toothNumbers, totalSittings, estimatedCost, transcript, notes, followUp,
     });
     res.status(201).json(result);
   } catch (e) { next(e); }

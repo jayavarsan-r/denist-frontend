@@ -37,6 +37,7 @@ const createAppointment = z.object({
   appointmentTime: z.string().optional().nullable(),
   purpose: optStr,
   toothNumber: optStr,
+  durationMinutes: z.coerce.number().int().positive().optional().nullable(),
 });
 const updateAppointment = z.object({
   appointmentDate: z.string().optional(),
@@ -44,6 +45,7 @@ const updateAppointment = z.object({
   purpose: optStr,
   toothNumber: optStr,
   sittingNumber: z.coerce.number().int().optional().nullable(),
+  durationMinutes: z.coerce.number().int().positive().optional().nullable(),
   status: z.enum(APPOINTMENT_STATUS).optional(),
   notes: optStr,
 });
@@ -88,10 +90,12 @@ const completeConsult = z.object({
   procedure: z.string().trim().min(1, 'procedure required'),
   diagnosis: optStr,
   toothNumber: optStr,
+  toothNumbers: z.array(z.string().trim()).optional().nullable(), // multi-tooth procedure
   totalSittings: z.coerce.number().int().min(1).optional().nullable(),
   estimatedCost: z.coerce.number().optional().nullable(),
   transcript: optStr,
   notes: optStr,
+  followUp: optStr, // doctor's recommended follow-up (date YYYY-MM-DD or free text)
 });
 
 // ── Payments ──────────────────────────────────────────────────────────────
@@ -149,6 +153,40 @@ const joinClinic = z.object({
 });
 const lookupClinic = z.object({ joinCode: z.string().trim().min(1, 'joinCode required') });
 
+// ── Lab orders ────────────────────────────────────────────────────────────
+const LAB_STATUS = ['pending', 'sent', 'received', 'completed'];
+const createLabOrder = z.object({
+  patientId: uuid,
+  treatmentPlanId: uuid.optional().nullable(),
+  procedureType: optStr,
+  toothNumber: optStr,
+  labName: z.string().trim().min(1, 'labName required'),
+  workDescription: optStr,
+  shade: optStr,
+  impressionType: optStr,
+  sentDate: z.string().optional().nullable(),
+  expectedReturnDate: z.string().optional().nullable(),
+  costToClinic: z.coerce.number().optional().nullable(),
+  chargedToPatient: z.coerce.number().optional().nullable(),
+  status: z.enum(LAB_STATUS).optional(),
+  notes: optStr,
+});
+const updateLabOrder = z.object({
+  status: z.enum(LAB_STATUS).optional(),
+  actualReturnDate: z.string().optional().nullable(),
+  reportUrl: optStr,
+  labName: z.string().trim().min(1).optional(),
+  procedureType: optStr,
+  toothNumber: optStr,
+  workDescription: optStr,
+  shade: optStr,
+  impressionType: optStr,
+  expectedReturnDate: z.string().optional().nullable(),
+  costToClinic: z.coerce.number().optional().nullable(),
+  chargedToPatient: z.coerce.number().optional().nullable(),
+  notes: optStr,
+});
+
 // ── Staff ─────────────────────────────────────────────────────────────────
 const updateStaff = z.object({
   name: z.string().trim().min(1).optional(),
@@ -166,5 +204,6 @@ module.exports = {
   updateClinic,
   createClinic, joinClinic, lookupClinic,
   updateStaff,
-  APPOINTMENT_STATUS,
+  createLabOrder, updateLabOrder,
+  APPOINTMENT_STATUS, LAB_STATUS,
 };

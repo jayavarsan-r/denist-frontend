@@ -86,17 +86,21 @@ export default function PrescriptionSheet({ params, onClose }) {
             .filter(m => !existing.has((m.name || '').toLowerCase()))
             .map(m => ({
               name: m.name || '',
-              dosage: m.dosage || '1 tab',
+              dosage: m.dosage || m.dose || '1 tab',
               frequency: m.frequency || 'BD',
               duration: m.duration || '5 days',
-              notes: m.notes || '',
+              notes: m.notes || m.instructions || '',
               uncertain: m.uncertain || false,
             }));
           return [...prev, ...newMeds];
         });
       }
       if (result.instructions) setInstructions(result.instructions);
-      if (result.followUpDays) setFollowUp(result.followUpDays);
+      // Backend returns `followUp` as a free-text instruction (e.g. "follow up in
+      // 7 days"); the stepper needs a day count, so pull the first number out.
+      const fuDays = result.followUpDays
+        || parseInt(String(result.followUp || '').match(/\d+/)?.[0], 10);
+      if (fuDays && !Number.isNaN(fuDays)) setFollowUp(fuDays);
       if (result.warning) showToast(result.warning);
       setPhase('done');
       setTimeout(() => setPhase('idle'), 2000);

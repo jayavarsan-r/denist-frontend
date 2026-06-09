@@ -4,6 +4,7 @@ import {
   getPatient,
   createPatient,
   updatePatient as apiUpdatePatient,
+  deletePatient as apiDeletePatient,
 } from '@/lib/services/patient.service';
 
 // Map DB values (lowercase) → display values
@@ -84,6 +85,19 @@ export const usePatientStore = create((set, get) => ({
       return patient;
     } catch (err) {
       set({ error: err?.message ?? 'Failed to create patient', loading: false });
+      throw err;
+    }
+  },
+
+  deletePatient: async (id) => {
+    // Optimistic removal, then persist the soft delete.
+    const prev = get().patients;
+    set((s) => ({ patients: s.patients.filter((p) => p.id !== id) }));
+    try {
+      await apiDeletePatient(id);
+      return true;
+    } catch (err) {
+      set({ patients: prev }); // revert on failure
       throw err;
     }
   },

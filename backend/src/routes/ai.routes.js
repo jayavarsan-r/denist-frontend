@@ -10,5 +10,6 @@ router.post('/extract-patient', auth, ctrl.extractPatient);
 router.post('/extract-queue-context', auth, ctrl.extractQueueContext);
 router.post('/extract-patient-info', auth, ctrl.extractPatientInfo);
 router.post('/extract-complaint', auth, ctrl.extractComplaint);
+router.post('/parse-schedule', auth, ctrl.parseSchedule);
 
 module.exports = router;

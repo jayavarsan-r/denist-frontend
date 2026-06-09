@@ -11,6 +11,7 @@ import { Chip, StageDots, StatusChip } from '@/components/ui';
 import { formatDate, clinicianFlags } from '@/lib/data/utils';
 import { minutesAgo, waitLabel } from '@/lib/data/queue';
 import { useQueueRealtime } from '@/lib/hooks/useQueueRealtime';
+import PatientContext from '@/components/consultation/PatientContext';
 
 function ConsultModeScreen() {
   useQueueRealtime(); // load + subscribe on mount
@@ -141,6 +142,9 @@ function ConsultModeScreen() {
               </div>
             </button>
           </div>
+
+          {/* Rich patient context — treatment plan, sittings, this-visit, x-rays, lab */}
+          <PatientContext patientId={p.id} />
 
           {/* THE dominant action */}
           <div style={{ padding: '26px 24px 0' }}>

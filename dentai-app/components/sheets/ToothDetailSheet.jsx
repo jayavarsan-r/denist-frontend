@@ -42,7 +42,37 @@ export default function ToothDetailSheet({ params, onClose }) {
                   )}
                 </div>
                 <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>{proc.date ? formatDate(proc.date) : ''}</div>
+                {/* Other teeth covered in this same procedure (multi-tooth) */}
+                {Array.isArray(proc.teeth) && proc.teeth.filter(t => String(t) !== String(params.tooth)).length > 0 && (
+                  <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)', marginTop: 4 }}>
+                    Same procedure also on: {proc.teeth.filter(t => String(t) !== String(params.tooth)).join(', ')}
+                  </div>
+                )}
                 {proc.notes && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4, fontStyle: 'italic' }}>{proc.notes}</div>}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {toothData && toothData.labOrders?.length > 0 && (
+        <>
+          <SectionHeader>Lab work</SectionHeader>
+          <div className="card" style={{ overflow: 'hidden', marginBottom: 16 }}>
+            {toothData.labOrders.map((lo, i) => (
+              <div key={lo.id || i} style={{ padding: '12px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div style={{ fontSize: 15, fontWeight: 600 }}>{lo.procedureType || lo.workDescription || 'Lab work'}</div>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'capitalize', flexShrink: 0, marginLeft: 8 }}>{lo.status}</span>
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>
+                  {[lo.labName, lo.shade && `Shade ${lo.shade}`, lo.chargedToPatient != null && `₹${Math.round(lo.chargedToPatient).toLocaleString('en-IN')}`].filter(Boolean).join(' · ')}
+                </div>
+                {(lo.sentDate || lo.expectedReturnDate) && (
+                  <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)', marginTop: 4 }}>
+                    {lo.sentDate ? `Sent ${formatDate(lo.sentDate)}` : ''}{lo.expectedReturnDate ? ` · Expected ${formatDate(lo.expectedReturnDate)}` : ''}
+                  </div>
+                )}
               </div>
             ))}
           </div>
