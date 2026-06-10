@@ -61,10 +61,11 @@ exports.create = async (req, res, next) => {
     // Conflict detection: same clinic + date, overlapping [time, time+duration).
     // Date-only suggestions (no time) never conflict. `allowDoubleBook` bypasses.
     if (appointmentTime && !allowDoubleBook && req.clinicId) {
-      const { data: sameDay } = await supabase.from('appointments')
+      const { data: sameDay, error: sameDayErr } = await supabase.from('appointments')
         .select('id, appointment_time, duration_minutes, purpose, patients(name)')
         .eq('clinic_id', req.clinicId).eq('appointment_date', appointmentDate)
         .neq('status', 'cancelled');
+      if (sameDayErr) throw sameDayErr;
       const clash = (sameDay || []).find(a => overlaps(appointmentTime, dur, a.appointment_time, a.duration_minutes || 30));
       if (clash) {
         throw conflict('Time slot already booked', {
