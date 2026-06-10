@@ -47,8 +47,9 @@ router.get('/:id', auth, async (req, res, next) => {
 
     let paid = parseFloat(plan.advance_paid || 0);
     if (plan.treatment_plan_id) {
-      const { data: pays } = await supabase.from('payments')
+      const { data: pays, error: payErr } = await supabase.from('payments')
         .select('amount').eq('treatment_plan_id', plan.treatment_plan_id).eq('clinic_id', req.clinicId);
+      if (payErr) throw payErr;
       paid += (pays || []).reduce((s, p) => s + parseFloat(p.amount || 0), 0);
     }
     const schedule = buildSchedule(plan.created_at.slice(0, 10), plan.emi_frequency, plan.installments_total, plan.emi_amount);
