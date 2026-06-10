@@ -1,7 +1,24 @@
 const express = require('express');
 const router = express.Router();
-const supabase = require('../config/supabase');
 const auth = require('../middleware/auth');
+<<<<<<< HEAD
+const validate = require('../middleware/validate');
+const v = require('../validators');
+const repos = require('../repositories');
+const transaction = require('../services/transaction.service');
+
+const scopeOf = (req) => ({ clinicId: req.clinicId, dentistId: req.dentistId });
+
+router.post('/', auth, validate(v.createTreatmentPlan), async (req, res, next) => {
+  try {
+    const { patientId, diagnosis, procedureName, totalSittings, estimatedCost, notes, startDate, expectedEndDate } = req.body;
+    const plan = await transaction.createTreatmentPlan({
+      clinicId: req.clinicId, dentistId: req.dentistId, staffId: req.staffId, requestId: req.id,
+      patientId, diagnosis, procedureName, totalSittings, estimatedCost, notes, startDate, expectedEndDate,
+      metadata: req.body.metadata,
+    });
+    res.status(201).json({ plan });
+=======
 const requireRole = require('../middleware/requireRole');
 const { ok, okCreated, fail } = require('../utils/response');
 
@@ -30,11 +47,24 @@ router.post('/', auth, requireRole(['doctor']), async (req, res, next) => {
 
     if (error) throw error;
     return okCreated(res, { plan: data });
+>>>>>>> origin/main
   } catch (err) { next(err); }
 });
 
 router.get('/:id', auth, async (req, res, next) => {
   try {
+<<<<<<< HEAD
+    const select = '*, visits(id, visit_date, sitting_number, status, procedure_name, cost), appointments(id, appointment_date, appointment_time, sitting_number, status, purpose)';
+    const plan = await repos.treatmentPlans.findById(req.params.id, scopeOf(req), select);
+    if (!plan) return res.status(404).json({ error: 'Plan not found' });
+    res.json({ plan });
+  } catch (err) { next(err); }
+});
+
+router.patch('/:id', auth, validate(v.updateTreatmentPlan), async (req, res, next) => {
+  try {
+    const scope = scopeOf(req);
+=======
     const { data, error } = await supabase
       .from('treatment_plans')
       .select(`*, visits(id, visit_date, status, procedure_name, cost), appointments(id, appointment_date, appointment_time, status, purpose)`)
@@ -49,10 +79,14 @@ router.get('/:id', auth, async (req, res, next) => {
 
 router.patch('/:id', auth, requireRole(['doctor']), async (req, res, next) => {
   try {
+>>>>>>> origin/main
     const updates = { updated_at: new Date().toISOString() };
     if (req.body.completedSittings !== undefined) updates.completed_sittings = req.body.completedSittings;
     if (req.body.status) updates.status = req.body.status;
     if (req.body.notes) updates.notes = req.body.notes;
+<<<<<<< HEAD
+    if (req.body.metadata !== undefined) updates.metadata = req.body.metadata;
+=======
 
     // pending_amount is a generated column — Postgres recomputes it automatically
     // when estimated_cost or collected_amount changes. Never set it manually.
@@ -62,15 +96,41 @@ router.patch('/:id', auth, requireRole(['doctor']), async (req, res, next) => {
     if (req.body.collectedAmount !== undefined) {
       updates.collected_amount = parseFloat(req.body.collectedAmount);
     }
+>>>>>>> origin/main
 
-    const { data, error } = await supabase.from('treatment_plans')
-      .update(updates)
-      .eq('id', req.params.id)
-      .eq('dentist_id', req.dentistId)
-      .select().single();
+    // Recalculate pending_amount when cost or collected changes (audit rec #4).
+    if (updates.estimated_cost !== undefined || updates.collected_amount !== undefined) {
+      const cur = await repos.treatmentPlans.findById(req.params.id, scope, 'estimated_cost, collected_amount');
+      if (cur) {
+        const est = updates.estimated_cost ?? parseFloat(cur.estimated_cost || 0);
+        const col = updates.collected_amount ?? parseFloat(cur.collected_amount || 0);
+        updates.pending_amount = Math.max(0, est - col);
+      }
+    }
 
+<<<<<<< HEAD
+    let plan;
+    try {
+      plan = await repos.treatmentPlans.update(req.params.id, scope, updates);
+    } catch (e) {
+      // pending_amount may be a GENERATED column on the live DB — retry without it.
+      delete updates.pending_amount;
+      plan = await repos.treatmentPlans.update(req.params.id, scope, updates);
+    }
+    if (!plan) return res.status(404).json({ error: 'Plan not found' });
+    res.json({ plan });
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/treatment-plans/:id — soft delete (requires migration 004)
+router.delete('/:id', auth, async (req, res, next) => {
+  try {
+    await repos.treatmentPlans.softDelete(req.params.id, scopeOf(req), req.staffId);
+    res.json({ success: true });
+=======
     if (error) throw error;
     return ok(res, { plan: data });
+>>>>>>> origin/main
   } catch (err) { next(err); }
 });
 

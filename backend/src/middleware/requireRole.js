@@ -1,13 +1,14 @@
-const { fail } = require('../utils/response');
+const { AppError } = require('../utils/errors');
 
-// Factory: requireRole(['doctor']) — restrict route to specific roles
-// Usage: router.post('/...', auth, requireRole(['doctor']), handler)
-module.exports = function requireRole(allowedRoles) {
-  return (req, res, next) => {
-    if (!req.role || !allowedRoles.includes(req.role)) {
-      return fail(res, 403, 'FORBIDDEN',
-        `This action requires one of the following roles: ${allowedRoles.join(', ')}`);
-    }
-    next();
-  };
+// Role gate factory. Authorization model is clinic_id + role.
+// Usage: router.patch('/', auth, requireRole('doctor'), handler)
+// Requires clinic context (role only means something inside a clinic).
+module.exports = (...allowed) => (req, res, next) => {
+  if (!req.clinicId) {
+    return next(new AppError('FORBIDDEN', 'No clinic context for this account'));
+  }
+  if (!allowed.includes(req.role)) {
+    return next(new AppError('FORBIDDEN', `Requires role: ${allowed.join(' or ')}`));
+  }
+  next();
 };

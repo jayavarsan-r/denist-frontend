@@ -39,8 +39,8 @@ function toISO(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padSta
 
 function ApptBlock({ v, patients, procedures, colW, onDragMove, onOpen, dragging }) {
   const p = patients.find(x => x.id === v.patientId);
-  const proc = procedures.find(x => x.id === v.procedureId);
-  const col = getProcedureColor(proc ? proc.type : 'Other');
+  const purpose = v.purpose || 'Consultation';
+  const col = getProcedureColor(purpose);
   const top = timeToTop(v.startTime);
   const h = (v.durationMinutes / 30) * SLOT_PX;
   return (
@@ -55,8 +55,8 @@ function ApptBlock({ v, patients, procedures, colW, onDragMove, onOpen, dragging
         opacity: dragging ? 0.85 : 1, zIndex: dragging ? 50 : 1, transition: dragging ? 'none' : 'box-shadow .15s',
       }}>
       <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.2 }}>{p ? p.name.split(' ')[0] : 'Patient'}</div>
-      {h > 50 && <div style={{ fontSize: 10, color: 'var(--text-secondary)', overflow: 'hidden', whiteSpace: 'nowrap' }}>{proc ? proc.type : 'Consult'}</div>}
-      {h > 66 && proc && proc.tooth && <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>Tooth {proc.tooth}</div>}
+      {h > 50 && <div style={{ fontSize: 10, color: 'var(--text-secondary)', overflow: 'hidden', whiteSpace: 'nowrap' }}>{purpose}</div>}
+      {h > 66 && v.tooth && <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>Tooth {v.tooth}</div>}
     </div>
   );
 }
@@ -87,21 +87,21 @@ function WeekView({ visits, patients, procedures, openSheet }) {
                 {dayVisits.length > 0 && <span className="tnum" style={{ marginLeft: 'auto', fontSize: 13, color: 'var(--text-tertiary)', fontWeight: 600 }}>{dayVisits.length}</span>}
               </div>
               {dayVisits.length === 0 ? (
-                <div style={{ fontSize: 14, color: 'var(--text-tertiary)', paddingBottom: 4 }}>No appointments</div>
+                <div style={{ fontSize: 13.5, color: 'var(--text-tertiary)', paddingBottom: 4 }}>Nothing planned</div>
               ) : (
                 <div>
                   {dayVisits.map((v, i) => {
-                    const p = pById(v.patientId); const proc = procById(v.procedureId); const t = formatTime(v.startTime);
+                    const p = pById(v.patientId); const purpose = v.purpose || 'Consultation'; const t = formatTime(v.startTime);
                     return (
                       <button key={v.id} onClick={() => openSheet('apptPeek', { id: v.id })} className="rowtap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '11px 0', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left', opacity: isPast ? 0.62 : 1 }}>
                         <div style={{ width: 58, flexShrink: 0 }}>
                           <div className="tnum" style={{ fontSize: 15, fontWeight: 700, lineHeight: 1.05 }}>{t.h12}:{String(t.m).padStart(2, '0')}</div>
                           <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', fontWeight: 600 }}>{t.ampm}</div>
                         </div>
-                        <div style={{ width: 3, alignSelf: 'stretch', minHeight: 30, borderRadius: 2, background: getProcedureColor(proc ? proc.type : 'Other').border, flexShrink: 0 }} />
+                        <div style={{ width: 3, alignSelf: 'stretch', minHeight: 30, borderRadius: 2, background: getProcedureColor(purpose).border, flexShrink: 0 }} />
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: 16, fontWeight: 600 }}>{p ? p.name : 'Patient'}</div>
-                          <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{proc ? `${proc.type}${proc.tooth ? ' · Tooth ' + proc.tooth : ''}` : 'Consultation'}</div>
+                          <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{purpose}{v.tooth ? ' · Tooth ' + v.tooth : ''}</div>
                         </div>
                         <span style={{ width: 7, height: 7, borderRadius: '50%', background: dot[v.status] || 'var(--text-tertiary)', flexShrink: 0 }} />
                       </button>
@@ -117,15 +117,30 @@ function WeekView({ visits, patients, procedures, openSheet }) {
   );
 }
 
-function DayView({ visits, patients, procedures, openSheet }) {
-  const iso = TODAY;
+function DayView({ visits, patients, procedures, openSheet, date, setDate }) {
+  const iso = date || TODAY;
+  const isToday = iso === TODAY;
   const dayVisits = visits.filter(v => v.date === iso).sort((a, b) => a.startTime.localeCompare(b.startTime));
   const colW = 402 - TIME_COL - 16;
   const slots = (GRID_END - GRID_START) * 2;
-  const nowFrac = (() => { const n = new Date(); const mins = n.getHours() * 60 + n.getMinutes(); if (mins < GRID_START * 60 || mins > GRID_END * 60) return null; return (mins - GRID_START * 60) / 30 * SLOT_PX; })();
+  const nowFrac = isToday ? (() => { const n = new Date(); const mins = n.getHours() * 60 + n.getMinutes(); if (mins < GRID_START * 60 || mins > GRID_END * 60) return null; return (mins - GRID_START * 60) / 30 * SLOT_PX; })() : null;
+  const shift = (n) => { const d = parseDate(iso); d.setDate(d.getDate() + n); setDate && setDate(toISO(d)); };
+  const d = parseDate(iso);
   return (
     <div className="scroll" style={{ flex: 1, position: 'relative' }}>
-      <div style={{ position: 'relative', height: slots * SLOT_PX, marginLeft: TIME_COL, marginRight: 8 }}>
+      {/* day navigation */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 14px 10px', borderBottom: '1px solid var(--border-light)' }}>
+        <button onClick={() => shift(-1)} style={{ width: 34, height: 34, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(60,60,67,0.06)' }}><Icon name="chevLeft" size={18} /></button>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: 15.5, fontWeight: 700, color: isToday ? 'var(--accent)' : 'var(--text-primary)' }}>{isToday ? 'Today' : DAYS[d.getDay()]}{dayVisits.length ? ` · ${dayVisits.length}` : ''}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>{d.getDate()} {MONTHS[d.getMonth()]} {d.getFullYear()}</div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {!isToday && <button onClick={() => setDate(TODAY)} style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--blue)', padding: '0 4px' }}>Today</button>}
+          <button onClick={() => shift(1)} style={{ width: 34, height: 34, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(60,60,67,0.06)' }}><Icon name="chevRight" size={18} /></button>
+        </div>
+      </div>
+      <div style={{ position: 'relative', height: slots * SLOT_PX, marginLeft: TIME_COL, marginRight: 8, marginTop: 8 }}>
         {Array.from({ length: GRID_END - GRID_START + 1 }, (_, i) => (
           <div key={i} style={{ position: 'absolute', top: i * HOUR_PX, left: -TIME_COL, right: 0 }}>
             <div style={{ position: 'absolute', top: -7, left: 0, width: TIME_COL - 6, textAlign: 'right', fontSize: 10, color: 'var(--text-tertiary)' }} className="tnum">{formatTime(`${GRID_START + i}:00`).label.replace(':00', '')}</div>
@@ -146,29 +161,73 @@ function DayView({ visits, patients, procedures, openSheet }) {
   );
 }
 
-function MonthView({ visits, procedures, setScheduleView }) {
-  const base = parseDate(TODAY);
+const MONTHS_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+function MonthView({ visits, patients, openSheet }) {
+  const [base, setBase] = React.useState(() => parseDate(TODAY));   // month being shown
+  const [selected, setSelected] = React.useState(TODAY);           // selected day
   const first = new Date(base.getFullYear(), base.getMonth(), 1);
-  const startDow = (first.getDay() + 6) % 7;
+  const startDow = first.getDay();                                  // Sun = 0 (matches Sun–Sat header)
   const cells = Array.from({ length: 42 }, (_, i) => { const d = new Date(first); d.setDate(1 - startDow + i); return d; });
+  const shiftMonth = (n) => setBase(new Date(base.getFullYear(), base.getMonth() + n, 1));
+  const pById = id => patients.find(p => p.id === id);
+  const selVisits = visits.filter(v => v.date === selected).sort((a, b) => a.startTime.localeCompare(b.startTime));
+  const selD = parseDate(selected);
+
   return (
-    <div className="scroll" style={{ flex: 1, padding: '8px 12px' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', marginBottom: 4 }}>
-        {['M','T','W','T','F','S','S'].map((d, i) => <div key={i} style={{ textAlign: 'center', fontSize: 11, color: 'var(--text-secondary)', fontWeight: 600, padding: '4px 0' }}>{d}</div>)}
+    <div className="scroll" style={{ flex: 1 }}>
+      {/* month header + navigation */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 16px 6px' }}>
+        <span style={{ fontSize: 19, fontWeight: 700, letterSpacing: '-0.02em' }}>{MONTHS_FULL[base.getMonth()]} {base.getFullYear()}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <button onClick={() => shiftMonth(-1)} style={{ width: 32, height: 32, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(60,60,67,0.06)' }}><Icon name="chevLeft" size={17} /></button>
+          <button onClick={() => { setBase(parseDate(TODAY)); setSelected(TODAY); }} style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--blue)', padding: '0 4px' }}>Today</button>
+          <button onClick={() => shiftMonth(1)} style={{ width: 32, height: 32, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(60,60,67,0.06)' }}><Icon name="chevRight" size={17} /></button>
+        </div>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gridAutoRows: 64, gap: 2 }}>
+
+      {/* weekday header */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', padding: '0 8px' }}>
+        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d, i) => (
+          <div key={i} style={{ textAlign: 'center', fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600, padding: '4px 0' }}>{d}</div>
+        ))}
+      </div>
+
+      {/* month grid — date + colour event bars */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gridAutoRows: 56, gap: 2, padding: '0 8px' }}>
         {cells.map((d, i) => {
-          const iso = toISO(d); const inMonth = d.getMonth() === base.getMonth(); const isToday = iso === TODAY;
+          const iso = toISO(d); const inMonth = d.getMonth() === base.getMonth(); const isToday = iso === TODAY; const isSel = iso === selected;
           const dayV = visits.filter(v => v.date === iso);
           return (
-            <button key={i} onClick={() => setScheduleView('Day')} style={{ borderRadius: 8, padding: 4, textAlign: 'left', background: 'transparent', opacity: inMonth ? 1 : 0.32, display: 'flex', flexDirection: 'column', gap: 3 }}>
-              <div style={{ width: 24, height: 24, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: isToday ? 'var(--accent)' : 'transparent' }}>
-                <span className="tnum" style={{ fontSize: 13, fontWeight: 600, color: isToday ? 'var(--accent-ink)' : 'var(--text-primary)' }}>{d.getDate()}</span>
+            <button key={i} onClick={() => setSelected(iso)} style={{ borderRadius: 12, padding: '5px 2px 3px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, background: isSel ? 'rgba(60,60,67,0.06)' : 'transparent', opacity: inMonth ? 1 : 0.3 }}>
+              <div style={{ width: 26, height: 26, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: isSel ? '#1C1C1E' : isToday ? 'var(--accent)' : 'transparent' }}>
+                <span className="tnum" style={{ fontSize: 13, fontWeight: 600, color: isSel ? '#fff' : isToday ? 'var(--accent-ink)' : 'var(--text-primary)' }}>{d.getDate()}</span>
               </div>
-              <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-                {dayV.slice(0, 3).map(v => { const proc = procedures.find(x => x.id === v.procedureId); return <div key={v.id} style={{ width: 5, height: 5, borderRadius: '50%', background: getProcedureColor(proc ? proc.type : 'Other').dot }} />; })}
-                {dayV.length > 3 && <span style={{ fontSize: 9, color: 'var(--text-secondary)' }}>+{dayV.length - 3}</span>}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%', alignItems: 'center' }}>
+                {dayV.slice(0, 3).map(v => <div key={v.id} style={{ width: '64%', height: 3, borderRadius: 2, background: getProcedureColor(v.purpose || 'Other').border }} />)}
               </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* selected-day detail list */}
+      <div style={{ padding: '16px 16px 28px' }}>
+        <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: '0.02em', textTransform: 'uppercase', color: 'var(--text-tertiary)', marginBottom: 10 }}>
+          {DAYS[selD.getDay()]} {selD.getDate()} {MONTHS[selD.getMonth()]}{selected === TODAY ? ' · Today' : ''}
+        </div>
+        {selVisits.length === 0 ? (
+          <div style={{ textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14, padding: '18px 0' }}>Nothing planned</div>
+        ) : selVisits.map((v, i) => {
+          const p = pById(v.patientId); const col = getProcedureColor(v.purpose || 'Other'); const t = formatTime(v.startTime);
+          return (
+            <button key={v.id} onClick={() => openSheet('apptPeek', { id: v.id })} className="rowtap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 0', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left' }}>
+              <div style={{ width: 3, alignSelf: 'stretch', minHeight: 36, borderRadius: 2, background: col.border, flexShrink: 0 }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 15.5, fontWeight: 600 }}>{p ? p.name : 'Patient'}</div>
+                <div className="t-meta">{v.purpose || 'Consultation'}{v.tooth ? ' · Tooth ' + v.tooth : ''}</div>
+              </div>
+              <span className="tnum" style={{ fontSize: 13.5, color: 'var(--text-secondary)', fontWeight: 600, flexShrink: 0 }}>{t.label}</span>
             </button>
           );
         })}
@@ -291,6 +350,7 @@ function ScheduleScreen() {
   const loadAppointments = useVisitStore((s) => s.loadAppointments);
   const loadClinicalVisits = useVisitStore((s) => s.loadClinicalVisits);
   const procedures = useClinicalStore((s) => s.procedures);
+  const [dayDate, setDayDate] = useState(TODAY);
 
   useEffect(() => {
     loadAppointments();
@@ -323,14 +383,13 @@ function ScheduleScreen() {
             <span style={{ fontSize: 14, color: 'var(--text-secondary)' }}>Loading appointments…</span>
           </div>
         </div>
-      ) : visits.length === 0 ? (
-        <EmptyState title="No appointments" hint="Tap + to schedule" />
+      ) : view === 'Month' ? (
+        // Every view shows its own structure (grid / week list / day timeline) even when empty.
+        <MonthView visits={visits} patients={patients} openSheet={openSheet} />
       ) : view === 'Week' ? (
         <WeekView visits={visits} patients={patients} procedures={procedures} openSheet={openSheet} />
-      ) : view === 'Day' ? (
-        <DayView visits={visits} patients={patients} procedures={procedures} openSheet={openSheet} />
       ) : (
-        <MonthView visits={visits} procedures={procedures} setScheduleView={setScheduleView} />
+        <DayView visits={visits} patients={patients} procedures={procedures} openSheet={openSheet} date={dayDate} setDate={setDayDate} />
       )}
     </div>
   );

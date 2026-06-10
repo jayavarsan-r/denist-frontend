@@ -1,23 +1,46 @@
-// Standard response helpers — all endpoints use these, never res.json() directly
+const { codeForStatus } = require('./errors');
 
-function ok(res, data, meta = null) {
-  const body = { success: true, data };
-  if (meta) body.meta = meta;
-  return res.json(body);
+// Explicit helpers (use these in new code).
+function ok(res, data = null, status = 200) {
+  return res.status(status).json({ success: true, data });
 }
 
-function okCreated(res, data) {
-  return res.status(201).json({ success: true, data });
+function fail(res, code, message, details = null, status) {
+  return res
+    .status(status || 400)
+    .json({ success: false, error: { code, message, details } });
 }
 
-function okPaginated(res, data, meta) {
-  return res.json({ success: true, data, meta });
+function isEnvelope(body) {
+  return body && typeof body === 'object' && 'success' in body &&
+    ('data' in body || 'error' in body);
 }
 
-function fail(res, status, code, message, details = null) {
-  const body = { success: false, error: { code, message } };
-  if (details) body.error.details = details;
-  return res.status(status).json(body);
+// Global response-shaping middleware. Monkeypatches res.json so EVERY endpoint
+// emits the standard envelope without each route being rewritten:
+//   - already-enveloped bodies pass through untouched
+//   - status >= 400 with a legacy { error } body  -> { success:false, error:{...} }
+//   - everything else                             -> { success:true, data: body }
+// After the frontend interceptor unwraps `data`, each service receives exactly the
+// same object it did before this change (backward compatible).
+function responseEnvelope(req, res, next) {
+  const rawJson = res.json.bind(res);
+  res.json = (body) => {
+    if (isEnvelope(body)) return rawJson(body);
+
+    const status = res.statusCode || 200;
+    if (status >= 400) {
+      const message =
+        body && typeof body === 'object' && body.error
+          ? body.error
+          : (typeof body === 'string' ? body : 'Request failed');
+      const details =
+        body && typeof body === 'object' && body.details ? body.details : null;
+      return rawJson({ success: false, error: { code: codeForStatus(status), message, details } });
+    }
+    return rawJson({ success: true, data: body });
+  };
+  next();
 }
 
-module.exports = { ok, okCreated, okPaginated, fail };
+module.exports = { ok, fail, responseEnvelope, isEnvelope };

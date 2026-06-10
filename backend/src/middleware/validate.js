@@ -1,18 +1,21 @@
-const { fail } = require('../utils/response');
+const { AppError } = require('../utils/errors');
 
-// Zod middleware factory — validates req.body against a Zod schema
-// Usage: router.post('/...', validate(mySchema), handler)
-module.exports = function validate(schema) {
-  return (req, res, next) => {
-    const result = schema.safeParse(req.body);
-    if (!result.success) {
-      const details = result.error.errors.map(e => ({
-        field: e.path.join('.'),
-        message: e.message,
-      }));
-      return fail(res, 400, 'VALIDATION_ERROR', 'Request validation failed', details);
-    }
-    req.body = result.data;
-    next();
-  };
+// Zod validation middleware. Validates a request part against a schema, and on
+// success REPLACES it with the parsed value — so controllers only ever see
+// whitelisted, type-coerced fields (no more `...req.body` mass assignment).
+//
+//   router.post('/', auth, validate(createPatientSchema), controller.create)
+//   router.get('/', auth, validate(listQuerySchema, 'query'), controller.list)
+module.exports = (schema, source = 'body') => (req, res, next) => {
+  const result = schema.safeParse(req[source] || {});
+  if (!result.success) {
+    const details = result.error.issues.map((i) => ({
+      field: i.path.join('.') || '(root)',
+      message: i.message,
+    }));
+    return next(new AppError('VALIDATION_ERROR', 'Validation failed', details));
+  }
+  // req.query can be a read-only getter on some Express versions; assign defensively.
+  try { req[source] = result.data; } catch { Object.defineProperty(req, source, { value: result.data, writable: true }); }
+  next();
 };

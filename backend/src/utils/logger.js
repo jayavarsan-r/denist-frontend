@@ -1,27 +1,27 @@
-// Structured logger — JSON in production, human-readable in development
+// Minimal structured logger. Emits single-line JSON in production (greppable in
+// Render logs) and readable text in development. No PHI should be passed in fields.
 
-function log(level, message, meta = {}) {
-  const entry = { level, message, timestamp: new Date().toISOString(), ...meta };
-  if (process.env.NODE_ENV === 'production') {
-    console.log(JSON.stringify(entry));
+const isProd = process.env.NODE_ENV === 'production';
+
+function emit(level, msg, fields = {}) {
+  if (isProd) {
+    process.stdout.write(JSON.stringify({ level, msg, ts: new Date().toISOString(), ...fields }) + '\n');
   } else {
-    const color = level === 'error' ? '\x1b[31m' : level === 'warn' ? '\x1b[33m' : '\x1b[0m';
-    console.log(`${color}[${level.toUpperCase()}]\x1b[0m ${message}`, Object.keys(meta).length ? meta : '');
+    const tail = Object.keys(fields).length ? ' ' + JSON.stringify(fields) : '';
+    // eslint-disable-next-line no-console
+    console.log(`[${level}] ${msg}${tail}`);
   }
 }
 
-function createLogger(context = {}) {
-  return {
-    info:  (message, extra = {}) => log('info',  message, { ...context, ...extra }),
-    warn:  (message, extra = {}) => log('warn',  message, { ...context, ...extra }),
-    error: (message, extra = {}) => log('error', message, { ...context, ...extra }),
-    debug: (message, extra = {}) => {
-      if (process.env.NODE_ENV !== 'production') log('debug', message, { ...context, ...extra });
-    },
-  };
-}
-
-// Default logger with no context (use createLogger(req) in controllers)
-const logger = createLogger();
-
-module.exports = { createLogger, logger };
+module.exports = {
+  info:  (msg, fields) => emit('info', msg, fields),
+  warn:  (msg, fields) => emit('warn', msg, fields),
+  error: (msg, fields) => emit('error', msg, fields),
+  // Build the per-request context fields once auth has populated req.
+  reqContext: (req) => ({
+    requestId: req.id,
+    clinicId: req.clinicId || null,
+    staffId: req.staffId || null,
+    route: `${req.method} ${req.baseUrl || ''}${req.path || ''}`,
+  }),
+};

@@ -1,33 +1,32 @@
-const { logger } = require('../utils/logger');
+const { ERROR_CODES, codeForStatus } = require('../utils/errors');
+const logger = require('../utils/logger');
 
-module.exports = (err, req, res, next) => {
-  if (err.isAppError) {
-    // Known application error — no stack trace needed
-    logger.warn(err.message, { code: err.code, requestId: req.requestId, path: req.path });
-    const body = { success: false, error: { code: err.code, message: err.message } };
-    if (err.details) body.error.details = err.details;
-    return res.status(err.status).json(body);
+// Central error handler — emits the standard failure envelope:
+//   { success: false, error: { code, message, details } }
+module.exports = (err, req, res, next) => { // eslint-disable-line no-unused-vars
+  let status = err.status || 500;
+  let message = err.message || 'Internal server error';
+  let details = err.details || null;
+
+  // Postgres / Supabase unique violation → 409 Conflict
+  if (err.code === '23505') {
+    status = 409;
+    message = 'Resource already exists';
   }
 
-  // Unknown/unexpected error — log full stack, sanitize response
-  logger.error(err.message, {
-    stack: err.stack,
-    requestId: req.requestId,
-    path: req.path,
-    method: req.method,
-  });
+  const code = err.code && ERROR_CODES[err.code] ? err.code : codeForStatus(status);
 
-  // Supabase constraint violations (23505 = unique, 23503 = foreign key, etc.)
-  const pgCode = err.code;
-  if (pgCode === '23505') {
-    return res.status(409).json({ success: false, error: { code: 'CONFLICT', message: 'A record with this value already exists' } });
-  }
-  if (pgCode === '23503') {
-    return res.status(400).json({ success: false, error: { code: 'INVALID_REFERENCE', message: 'Referenced record does not exist' } });
+  if (status >= 500) {
+    logger.error('Unhandled error', {
+      ...logger.reqContext(req),
+      err: err.message,
+      pgcode: err.code,
+    });
+    if (process.env.NODE_ENV === 'production') {
+      message = 'Internal server error';
+      details = null;
+    }
   }
 
-  return res.status(err.status || 500).json({
-    success: false,
-    error: { code: 'INTERNAL_ERROR', message: 'An unexpected error occurred' },
-  });
+  res.status(status).json({ success: false, error: { code, message, details } });
 };

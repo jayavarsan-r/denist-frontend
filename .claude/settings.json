@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -X POST http://localhost:3000/api/auth/send-otp -H 'Content-Type: application/json' -d '{\"phone\":\"9876543210\"}')",
+      "Bash(curl -s -X POST http://localhost:3000/api/auth/verify-otp -H 'Content-Type: application/json' -d '{\"phone\":\"9876543210\",\"otp\":\"123456\"}')",
+      "Bash(export TOKEN=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJkZW50aXN0SWQiOiJkMTFlNmJlNC1mMzg1LTQ0OTItOTllZC0yNWNhNThiMDg0ZmEiLCJpYXQiOjE3ODEwNzkzNTIsImV4cCI6MTc4MzY3MTM1Mn0.bLMvUN-J7aDOlGT-KH2gld6PcUr1c90R5WYFe6_buZI\")",
+      "Bash(curl -s -X POST http://localhost:3000/api/auth/create-clinic -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJkZW50aXN0SWQiOiJkMTFlNmJlNC1mMzg1LTQ0OTItOTllZC0yNWNhNThiMDg0ZmEiLCJpYXQiOjE3ODEwNzkzNTIsImV4cCI6MTc4MzY3MTM1Mn0.bLMvUN-J7aDOlGT-KH2gld6PcUr1c90R5WYFe6_buZI' -H 'Content-Type: application/json' -d '{\"clinicName\":\"Velora Dental Studio\",\"doctorName\":\"Dr. Arjun MDS\",\"role\":\"doctor\"}')",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d, indent=2\\)\\)\")",
+      "Bash(export TOKEN=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJkZW50aXN0SWQiOiJkMTFlNmJlNC1mMzg1LTQ0OTItOTllZC0yNWNhNThiMDg0ZmEiLCJzdGFmZklkIjoiYzUxM2UxOTQtNjM0MS00YmE3LWEyN2ItMjUzZTZmNjMzYTRlIiwiY2xpbmljSWQiOiIwYWYyN2I0MS04OWNkLTQwMzctYjVmNC1jNmQwNzU0MDFlMzYiLCJyb2xlIjoiZG9jdG9yIiwiaWF0IjoxNzgxMDc5NDI1LCJleHAiOjE3ODM2NzE0MjV9.rafsY8wVS_idGmX8EUjNSYWbvrbqkNXS8Fk5SRho_IU\")",
+      "Bash(curl -s http://localhost:3000/api/analytics/dashboard -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJkZW50aXN0SWQiOiJkMTFlNmJlNC1mMzg1LTQ0OTItOTllZC0yNWNhNThiMDg0ZmEiLCJzdGFmZklkIjoiYzUxM2UxOTQtNjM0MS00YmE3LWEyN2ItMjUzZTZmNjMzYTRlIiwiY2xpbmljSWQiOiIwYWYyN2I0MS04OWNkLTQwMzctYjVmNC1jNmQwNzU0MDFlMzYiLCJyb2xlIjoiZG9jdG9yIiwiaWF0IjoxNzgxMDc5NDI1LCJleHAiOjE3ODM2NzE0MjV9.rafsY8wVS_idGmX8EUjNSYWbvrbqkNXS8Fk5SRho_IU')",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('data',{}\\), indent=2\\)\\)\")",
+      "Bash(cd /Users/jayavarsan/Desktop/dentai/dentai-app)",
+      "Bash(ls app/)",
+      "Bash(ls lib/services/)",
+      "Bash(ls store/)",
+      "Bash(sed -n '1,30p' lib/services/patient.service.js)",
+      "Bash(sed -n '1,40p' lib/services/index.js)",
+      "Bash(npx jest *)",
+      "Bash(node -c src/controllers/patients.controller.js)",
+      "Bash(node --check scripts/backfill_uhid.mjs)",
+      "Bash(node --check src/services/transaction.service.js)",
+      "Bash(node --check src/controllers/appointments.controller.js)",
+      "Bash(node --check src/utils/slot-overlap.js)",
+      "Bash(node --check src/validators/index.js)",
+      "Bash(node -e \"const {toMinutes,overlaps}=require\\('./src/utils/slot-overlap'\\); console.log\\('toMinutes 10:15 =>',toMinutes\\('10:15'\\)\\); console.log\\('toMinutes null =>',toMinutes\\(null\\)\\); console.log\\('toMinutes bad =>',toMinutes\\('bad'\\)\\); console.log\\('overlaps null,30,10:00,30 =>',overlaps\\(null,30,'10:00',30\\)\\);\")",
+      "Bash(node --check src/routes/queue.routes.js)",
+      "Bash(npm test *)"
+    ]
+  }
+}

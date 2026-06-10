@@ -3,7 +3,28 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const auth = require('../middleware/auth');
 const requireRole = require('../middleware/requireRole');
+<<<<<<< HEAD
+const validate = require('../middleware/validate');
+const v = require('../validators');
+
+function makeJoinCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no O,0,I,1
+  let code = '';
+  for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return code;
+}
+async function uniqueJoinCode() {
+  let code, exists = true;
+  while (exists) {
+    code = makeJoinCode();
+    const { data } = await supabase.from('clinics').select('id').eq('join_code', code).single();
+    exists = !!data;
+  }
+  return code;
+}
+=======
 const { ok, fail } = require('../utils/response');
+>>>>>>> origin/main
 
 // GET /api/clinic
 router.get('/', auth, async (req, res, next) => {
@@ -18,8 +39,13 @@ router.get('/', auth, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+<<<<<<< HEAD
+// PATCH /api/clinic — clinic settings are doctor/owner managed (not reception)
+router.patch('/', auth, requireRole('doctor'), validate(v.updateClinic), async (req, res, next) => {
+=======
 // PATCH /api/clinic — doctor only
 router.patch('/', auth, requireRole(['doctor']), async (req, res, next) => {
+>>>>>>> origin/main
   try {
     if (!req.clinicId) return fail(res, 403, 'FORBIDDEN', 'No clinic context');
     const { name, city, address, phone, openTime, closeTime, workingDays } = req.body;
@@ -49,6 +75,34 @@ router.post('/regenerate-join-code', auth, requireRole(['doctor']), async (req, 
       .select('join_code').single();
     if (error) throw error;
     return ok(res, { joinCode: data.join_code });
+  } catch (e) { next(e); }
+});
+
+// PATCH /api/clinic/settings — doctor-managed clinic preferences (jsonb merge).
+// First setting: receptionistCanAddMedicines. Requires migration 009 (clinics.settings).
+const ALLOWED_SETTINGS = ['receptionistCanAddMedicines'];
+router.patch('/settings', auth, requireRole('doctor'), async (req, res, next) => {
+  try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
+    const incoming = {};
+    for (const k of ALLOWED_SETTINGS) if (req.body[k] !== undefined) incoming[k] = !!req.body[k];
+    const { data: cur } = await supabase.from('clinics').select('settings').eq('id', req.clinicId).single();
+    const merged = { ...(cur?.settings || {}), ...incoming };
+    const { data, error } = await supabase.from('clinics').update({ settings: merged }).eq('id', req.clinicId).select().single();
+    if (error) throw error;
+    res.json({ clinic: data });
+  } catch (e) { next(e); }
+});
+
+// POST /api/clinic/regenerate-join-code — explicit replacement for the old
+// GET /me side-effect. Doctor/owner only.
+router.post('/regenerate-join-code', auth, requireRole('doctor'), async (req, res, next) => {
+  try {
+    const join_code = await uniqueJoinCode();
+    const { data, error } = await supabase.from('clinics')
+      .update({ join_code }).eq('id', req.clinicId).select('id, join_code').single();
+    if (error) throw error;
+    res.json({ clinic: data });
   } catch (e) { next(e); }
 });
 

@@ -28,18 +28,21 @@ function detectContentType(localPath, bucket) {
 }
 
 async function uploadFile(localPath, bucket, storagePath) {
-  // Use stat for size — avoids loading the entire file into memory
+  // Stream the file instead of buffering the whole thing in memory (avoids OOM
+  // under concurrent large uploads). storage-js auto-sets duplex:'half' for streams.
   const sizeKb = Math.ceil(fs.statSync(localPath).size / 1024);
-  const ext = path.extname(localPath) || (bucket === 'voice-notes' ? '.ogg' : '.jpg');
-  const finalPath = storagePath + ext;
-  const contentType = detectContentType(localPath, bucket);
+  const ext = path.extname(localPath);
+  const ext2 = ext || (bucket === 'voice-notes' ? '.m4a' : '.jpg');
+  const finalPath = storagePath + ext2;
 
-  // Stream the file rather than buffering it — prevents OOM on 25 MB audio uploads
-  const stream = fs.createReadStream(localPath);
+  const contentType = bucket === 'voice-notes'
+    ? 'audio/mp4'
+    : localPath.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg';
 
+  const fileStream = fs.createReadStream(localPath);
   const { data, error } = await supabase.storage
     .from(bucket)
-    .upload(finalPath, stream, { contentType, upsert: false });
+    .upload(finalPath, fileStream, { contentType, upsert: false });
 
   if (error) throw new Error(`Upload failed (${bucket}): ${error.message}`);
   return { storagePath: data.path, sizeKb };

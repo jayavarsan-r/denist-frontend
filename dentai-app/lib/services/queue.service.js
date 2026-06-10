@@ -25,6 +25,12 @@ export async function getQueueContext(id) {
   return data;
 }
 
+// Persisted consultation data for the checkout screen (works across users/sessions).
+export async function getCheckoutSummary(id) {
+  const { data } = await apiClient.get(`/api/queue/${id}/checkout-summary`);
+  return data.summary || data;
+}
+
 export async function removeFromQueue(id) {
   const { data } = await apiClient.delete(`/api/queue/${id}`);
   return data;

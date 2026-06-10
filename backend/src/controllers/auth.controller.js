@@ -1,45 +1,46 @@
 const supabase = require('../config/supabase');
 const jwt = require('jsonwebtoken');
-const { ok, fail } = require('../utils/response');
-
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-function makeJoinCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no O,0,I,1
-  let code = '';
-  for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
-  return code;
-}
-
-async function uniqueJoinCode() {
-  let code, exists = true;
-  while (exists) {
-    code = makeJoinCode();
-    const { data } = await supabase.from('clinics').select('id').eq('join_code', code).single();
-    exists = !!data;
-  }
-  return code;
-}
-
-function makeDisplayId(city) {
-  const prefix = city ? city.substring(0, 3).toUpperCase() : 'CLN';
-  const num = String(Math.floor(100 + Math.random() * 900));
-  return `DENT-${prefix}-${num}`;
-}
+const transaction = require('../services/transaction.service');
 
 function signToken(payload) {
   return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '30d' });
 }
 
-// ── send OTP ──────────────────────────────────────────────────────────────────
+// Resolve a REAL dentists.id for the authenticated request. Stale or cross-backend
+// tokens (and an older buggy fallback) can carry a dentistId that is actually a staff
+// id, which violates staff_dentist_id_fkey when inserting a staff row. Reuse a dentist
+// matching the user's phone, else create one. Returns a guaranteed-valid dentist id.
+async function ensureDentistId(req, { name } = {}) {
+  const claimed = req.dentistId;
+  if (claimed) {
+    const { data } = await supabase.from('dentists').select('id').eq('id', claimed).single();
+    if (data) return claimed;
+  }
+  // Find the user's phone via their staff row (token staffId), if any.
+  let phone = null;
+  if (req.staffId) {
+    const { data: s } = await supabase.from('staff').select('phone').eq('id', req.staffId).single();
+    phone = s?.phone || null;
+  }
+  if (phone) {
+    const { data: byPhone } = await supabase.from('dentists').select('id').eq('phone', phone).single();
+    if (byPhone) return byPhone.id;
+  }
+  const { data: created } = await supabase.from('dentists').insert({ phone, name: name || null }).select('id').single();
+  return created.id;
+}
+
+// ── send OTP (unchanged) ──────────────────────────────────────────────────────
 exports.sendOtp = async (req, res, next) => {
   try {
     const { phone } = req.body;
     if (!phone || !/^\d{10}$/.test(phone))
       return fail(res, 400, 'VALIDATION_ERROR', 'Valid 10-digit phone required');
 
+    // USE_DEV_OTP=true pins all phones to DEV_OTP (local dev only)
+    const useDevOtp = process.env.USE_DEV_OTP === 'true' && process.env.DEV_OTP;
     const isDemoPhone = process.env.DEMO_PHONE && phone === process.env.DEMO_PHONE;
-    const otp = isDemoPhone
+    const otp = (useDevOtp || isDemoPhone)
       ? (process.env.DEV_OTP || '012345')
       : (process.env.DEV_OTP_OTHER || Math.floor(100000 + Math.random() * 900000).toString());
 
@@ -70,13 +71,35 @@ exports.verifyOtp = async (req, res, next) => {
       .single();
 
     if (staffRow) {
+      // Returning user — fetch clinic and dentist data.
+      // Self-heal legacy staff rows whose dentist_id is null or dangling: using
+      // staffRow.id as the dentistId (the old fallback) poisons the JWT and breaks
+      // any insert that FKs into dentists (e.g. create-clinic → staff_dentist_id_fkey).
+      // Resolve a REAL dentist — reuse one matching this phone, else create one —
+      // and persist the link so the row is fixed for good.
+      let dentistId = staffRow.dentist_id;
+      let dentist = null;
+      if (dentistId) {
+        const { data } = await supabase.from('dentists').select('*').eq('id', dentistId).single();
+        dentist = data;
+      }
+      if (!dentist) {
+        const { data: existing } = await supabase.from('dentists').select('*').eq('phone', phone).single();
+        if (existing) {
+          dentist = existing;
+        } else {
+          const { data: created } = await supabase.from('dentists').insert({ phone, name: staffRow.name || null }).select('*').single();
+          dentist = created;
+        }
+        dentistId = dentist.id;
+        await supabase.from('staff').update({ dentist_id: dentistId }).eq('id', staffRow.id);
+        staffRow.dentist_id = dentistId;
+      }
+
       const { data: clinic } = await supabase.from('clinics').select('*').eq('id', staffRow.clinic_id).single();
-      const { data: dentist } = staffRow.dentist_id
-        ? await supabase.from('dentists').select('*').eq('id', staffRow.dentist_id).single()
-        : { data: null };
 
       const token = signToken({
-        dentistId: staffRow.dentist_id || staffRow.id,
+        dentistId,
         staffId:   staffRow.id,
         clinicId:  staffRow.clinic_id,
         role:      staffRow.role,
@@ -113,41 +136,21 @@ exports.verifyOtp = async (req, res, next) => {
 // ── create clinic ──────────────────────────────────────────────────────────────
 exports.createClinic = async (req, res, next) => {
   try {
-    const { clinicName, yourName, city } = req.body;
-    if (!clinicName || !yourName) return fail(res, 400, 'VALIDATION_ERROR', 'clinicName and yourName required');
+    const { clinicName, yourName, city, phone } = req.body;
+    if (!clinicName || !yourName) return res.status(400).json({ error: 'clinicName and yourName required' });
 
-    const joinCode = await uniqueJoinCode();
-    const displayId = makeDisplayId(city);
+    // Heal the dentistId before inserting staff (see ensureDentistId). The new token
+    // returned below carries the corrected dentistId, so the client session self-repairs.
+    const dentistId = await ensureDentistId(req, { name: yourName });
 
-    const { data: clinic, error: ce } = await supabase.from('clinics').insert({
-      name: clinicName, city: city || null, join_code: joinCode, display_id: displayId,
-    }).select().single();
-    if (ce) throw ce;
+    const { clinic, staff } = await transaction.createClinic({
+      dentistId, requestId: req.id,
+      clinicName, yourName, city, phone: phone || '',
+    });
 
-    const { data: staffRow, error: se } = await supabase.from('staff').insert({
-      clinic_id:  clinic.id,
-      dentist_id: req.dentistId,
-      phone:      req.body.phone || '',
-      name:       yourName,
-      role:       'doctor',
-      status:     'active',
-    }).select().single();
-    if (se) throw se;
-
-    await supabase.from('clinics').update({ owner_staff_id: staffRow.id }).eq('id', clinic.id);
-    await supabase.from('dentists').update({ name: yourName, clinic_name: clinicName }).eq('id', req.dentistId);
-
-    // Backfill clinic_id on all historical records for this dentist
-    await supabase.from('patients').update({ clinic_id: clinic.id }).eq('dentist_id', req.dentistId).is('clinic_id', null);
-    await supabase.from('visits').update({ clinic_id: clinic.id }).eq('dentist_id', req.dentistId).is('clinic_id', null);
-    await supabase.from('appointments').update({ clinic_id: clinic.id }).eq('dentist_id', req.dentistId).is('clinic_id', null);
-    await supabase.from('treatment_plans').update({ clinic_id: clinic.id }).eq('dentist_id', req.dentistId).is('clinic_id', null);
-    await supabase.from('prescriptions').update({ clinic_id: clinic.id }).eq('dentist_id', req.dentistId).is('clinic_id', null);
-    await supabase.from('xrays').update({ clinic_id: clinic.id }).eq('dentist_id', req.dentistId).is('clinic_id', null);
-
-    const token = signToken({ dentistId: req.dentistId, staffId: staffRow.id, clinicId: clinic.id, role: 'doctor' });
-    const { data: dentist } = await supabase.from('dentists').select('*').eq('id', req.dentistId).single();
-    return ok(res, { token, dentist, staff: staffRow, clinic: { ...clinic, owner_staff_id: staffRow.id } });
+    const token = signToken({ dentistId, staffId: staff.id, clinicId: clinic.id, role: 'doctor' });
+    const { data: dentist } = await supabase.from('dentists').select('*').eq('id', dentistId).single();
+    res.json({ token, dentist, staff, clinic });
   } catch (e) { next(e); }
 };
 
@@ -170,33 +173,15 @@ exports.joinClinic = async (req, res, next) => {
     if (!joinCode || !yourName || !role) return fail(res, 400, 'VALIDATION_ERROR', 'joinCode, yourName, role required');
     if (!['doctor', 'receptionist'].includes(role)) return fail(res, 400, 'VALIDATION_ERROR', 'role must be doctor or receptionist');
 
-    const { data: clinic } = await supabase.from('clinics')
-      .select('*').eq('join_code', joinCode.toUpperCase()).single();
-    if (!clinic) return fail(res, 404, 'NOT_FOUND', 'Invalid join code');
+    // Heal the dentistId before inserting the staff row (same FK hazard as createClinic).
+    const dentistId = await ensureDentistId(req, { name: yourName });
 
-    const { data: dentist } = await supabase.from('dentists').select('*').eq('id', req.dentistId).single();
+    const result = await transaction.joinClinic({ dentistId, requestId: req.id, joinCode, yourName, role });
+    if (result.error === 'NOT_FOUND') return res.status(404).json({ error: 'Invalid join code' });
 
-    const { data: staffRow, error: se } = await supabase.from('staff').insert({
-      clinic_id:  clinic.id,
-      dentist_id: req.dentistId,
-      phone:      dentist?.phone || '',
-      name:       yourName,
-      role,
-      status:     'active',
-    }).select().single();
-    if (se) {
-      if (se.code === '23505') {
-        const { data: existing } = await supabase.from('staff').select('*')
-          .eq('clinic_id', clinic.id).eq('dentist_id', req.dentistId).single();
-        const token = signToken({ dentistId: req.dentistId, staffId: existing.id, clinicId: clinic.id, role: existing.role });
-        return ok(res, { token, dentist, staff: existing, clinic });
-      }
-      throw se;
-    }
-
-    await supabase.from('dentists').update({ name: yourName, clinic_name: clinic.name }).eq('id', req.dentistId);
-    const token = signToken({ dentistId: req.dentistId, staffId: staffRow.id, clinicId: clinic.id, role });
-    return ok(res, { token, dentist: { ...dentist, name: yourName }, staff: staffRow, clinic });
+    const { clinic, staff, dentist } = result;
+    const token = signToken({ dentistId, staffId: staff.id, clinicId: clinic.id, role: staff.role });
+    res.json({ token, dentist, staff, clinic });
   } catch (e) { next(e); }
 };
 
@@ -212,6 +197,8 @@ exports.getMe = async (req, res, next) => {
     }
     if (req.clinicId) {
       const { data: c } = await supabase.from('clinics').select('*').eq('id', req.clinicId).single();
+      // (Removed) join_code generation side-effect on GET /me. Use
+      // POST /api/clinic/regenerate-join-code instead.
       clinic = c;
     }
     return ok(res, { dentist, staff, clinic });

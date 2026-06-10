@@ -4,6 +4,7 @@ import {
   getPatient,
   createPatient,
   updatePatient as apiUpdatePatient,
+  deletePatient as apiDeletePatient,
 } from '@/lib/services/patient.service';
 
 // Map DB values (lowercase) → display values
@@ -88,6 +89,19 @@ export const usePatientStore = create((set, get) => ({
     }
   },
 
+  deletePatient: async (id) => {
+    // Optimistic removal, then persist the soft delete.
+    const prev = get().patients;
+    set((s) => ({ patients: s.patients.filter((p) => p.id !== id) }));
+    try {
+      await apiDeletePatient(id);
+      return true;
+    } catch (err) {
+      set({ patients: prev }); // revert on failure
+      throw err;
+    }
+  },
+
   updatePatient: async (id, patch) => {
     // Optimistic update
     set((s) => ({
@@ -105,26 +119,16 @@ export const usePatientStore = create((set, get) => ({
     }
   },
 
-  updateToothState: async (pid, tooth, state) => {
-    const currentPatient = get().patients.find((p) => p.id === pid);
-    const updatedTeeth = { ...(currentPatient?.teeth ?? {}), [tooth]: state };
-
-    // Optimistic update
+  // Tooth state is LOCAL-ONLY here: there is no `patients.teeth` column, and routing
+  // this through updatePatient() rebuilt the whole patient from a partial patch —
+  // wiping medical fields and returning a wrapper that corrupted the store (id→undefined),
+  // which blanked the profile page. Persistence happens via a visit (tooth_number),
+  // so this is just an optimistic in-memory tint until tooth-history refetches.
+  updateToothState: (pid, tooth, state) => {
     set((s) => ({
       patients: s.patients.map((p) =>
-        p.id === pid ? { ...p, teeth: updatedTeeth } : p
+        p.id === pid ? { ...p, teeth: { ...(p.teeth ?? {}), [tooth]: state } } : p
       ),
     }));
-
-    try {
-      const raw = await apiUpdatePatient(pid, { teeth: updatedTeeth });
-      const updated = normalisePatient(raw);
-      set((s) => ({
-        patients: s.patients.map((p) => (p.id === pid ? updated : p)),
-      }));
-    } catch (err) {
-      set({ error: err?.message ?? 'Failed to update tooth state' });
-      throw err;
-    }
   },
 }));

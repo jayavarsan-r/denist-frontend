@@ -8,12 +8,12 @@ import { useClinicalStore } from '@/store/useClinicalStore';
 import Icon from '@/components/icons';
 import { Avatar, Chip, StatusChip, SectionHeader, PillToggle, StageDots, ToothChip, EmptyState, PrimaryButton, NavBar } from '@/components/ui';
 import Odontogram from '@/components/odontogram/Odontogram';
-import { treatmentPlans } from '@/lib/data/procedures';
 import { TODAY } from '@/lib/data/patients';
 import { formatCurrency, formatDate, formatTime, clinicianFlags, hasComplications, parseDate, MONTHS, formatCurrencyK } from '@/lib/data/utils';
 import { getProcedureColor, TOOTH_STATE_STYLE } from '@/lib/data/procedures';
 import { getToothHistory, getPatientCaseSheet } from '@/lib/services/patient.service';
 import { getPatientXrays, uploadXray, uploadPatientPhoto } from '@/lib/services/xray.service';
+import BeforeAfterCapture from '@/components/sheets/BeforeAfterCapture';
 
 function VoiceToolbar({ onClick, label = 'Add voice entry' }) {
   return (
@@ -62,192 +62,313 @@ function ProcedureCard({ proc, onClick, showLab, labOrders }) {
 }
 
 /* ---- tabs ---- */
-function OverviewTab({ p, procedures, visits, labOrders, openSheet, router }) {
-  const procs = procedures.filter(pr => pr.patientId === p.id);
-  const active = procs.filter(pr => pr.status === 'in_progress' || pr.status === 'planned');
-  const upcoming = visits.filter(v => v.patientId === p.id && v.date >= TODAY && v.status !== 'done').sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
-  const history = visits.filter(v => v.patientId === p.id && v.status === 'done').sort((a, b) => b.date.localeCompare(a.date));
-  const procById = id => procedures.find(x => x.id === id);
+// OverviewTab — the treatment control center. Answers "what's happening with this
+// patient right now, and what do I do next?" Driven entirely by the live case sheet.
+function OverviewTab({ p, caseSheet, toothHistory, teeth, activePlan, activeTeeth, openSheet, router, setTab }) {
+  const plan = activePlan;
+  const total = plan?.total_sittings || 1;
+  const done = plan?.completed_sittings || 0;
+  const remaining = Math.max(0, total - done);
+  const pending = caseSheet?.summary?.pendingAmount || 0;
+  const nextAppt = (caseSheet?.upcomingAppointments || [])[0];
+  const recent = (caseSheet?.visits || []).slice(0, 3);
+  const ongoing = !!plan && remaining > 0 && plan.status === 'active';
+
+  const PLAN_TONE = { active: '#1E8E3E', completed: '#9CA3AF', cancelled: '#EF4444' };
+  const nextLabel = ongoing ? 'Continue treatment' : 'Record findings';
+  const nextSub = ongoing
+    ? `${plan.procedure_name || 'Treatment'} · ${remaining} sitting${remaining > 1 ? 's' : ''} left`
+    : 'Speak findings — plan, Rx & next visit auto-fill';
 
   return (
     <div>
-      <SectionHeader>Diagnosis</SectionHeader>
-      <div className="card" style={{ padding: 16, marginBottom: 22, display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-        <span style={{ fontSize: 16, lineHeight: 1.4 }}>{p.chiefComplaint ? 'Irreversible pulpitis, tooth 36. ' + (p.clinicalNotes || '') : 'No diagnosis recorded yet'}</span>
-        <button style={{ color: 'var(--blue)', fontSize: 14, fontWeight: 500, flexShrink: 0 }}>Edit</button>
-      </div>
-
-      {active.length > 0 && <>
-        <SectionHeader>Current treatment</SectionHeader>
-        <div style={{ marginBottom: 12 }}>
-          {active.map(pr => <ProcedureCard key={pr.id} proc={pr} labOrders={labOrders} showLab onClick={() => openSheet('procedure', { id: pr.id })} />)}
+      {/* ── NEXT ACTION — the single strongest, operational CTA ── */}
+      <button onClick={() => openSheet('patientConsult', { patientId: p.id })} className="tap" style={{
+        width: '100%', display: 'flex', alignItems: 'center', gap: 14, background: '#1C1C1E', color: '#fff',
+        borderRadius: 18, padding: '18px 20px', textAlign: 'left', marginBottom: 18, boxShadow: 'var(--elevation-2)',
+      }}>
+        <div style={{ width: 48, height: 48, borderRadius: 14, background: 'rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <Icon name="mic" size={24} color="#fff" />
         </div>
-      </>}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: '-0.02em' }}>{nextLabel}</div>
+          <div style={{ fontSize: 13.5, color: 'rgba(255,255,255,0.7)', marginTop: 2 }}>{nextSub}</div>
+        </div>
+        <Icon name="arrowRight" size={20} color="rgba(255,255,255,0.85)" />
+      </button>
 
-      <SectionHeader>Upcoming visits</SectionHeader>
-      {upcoming.length === 0 ? <div className="card" style={{ marginBottom: 22 }}><EmptyState title="No upcoming visits" hint="Schedule the next appointment" /></div> : (
-        <div className="card" style={{ overflow: 'hidden', marginBottom: 22 }}>
-          {upcoming.map((v, i) => {
-            const d = parseDate(v.date); const proc = procById(v.procedureId);
-            return (
-              <button key={v.id} onClick={() => router.push('/appointments/' + v.id)} className="rowtap" style={{ width: '100%', minHeight: 52, display: 'flex', alignItems: 'center', gap: 12, padding: '8px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left' }}>
-                <div style={{ width: 38, textAlign: 'center', flexShrink: 0 }}>
-                  <div style={{ fontSize: 10, color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>{MONTHS[d.getMonth()]}</div>
-                  <div className="tnum" style={{ fontSize: 22, fontWeight: 600, lineHeight: 1 }}>{d.getDate()}</div>
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 15, fontWeight: 600 }}>{proc ? proc.type : 'Consultation'}</div>
-                  <div className="t-meta">{formatTime(v.startTime).label}</div>
-                </div>
-                <StatusChip status={v.status} />
-              </button>
-            );
-          })}
+      {/* ── CURRENT TREATMENT ── */}
+      <SectionHeader>Current treatment</SectionHeader>
+      {plan ? (
+        <div className="card" style={{ padding: 16, marginBottom: 18 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
+            <span style={{ fontSize: 17, fontWeight: 700, letterSpacing: '-0.01em' }}>{plan.procedure_name || 'Treatment plan'}</span>
+            <span style={{ fontSize: 12, fontWeight: 700, textTransform: 'capitalize', color: PLAN_TONE[plan.status] || 'var(--text-secondary)', flexShrink: 0 }}>{plan.status || 'active'}</span>
+          </div>
+          {plan.diagnosis && <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 10 }}>{plan.diagnosis}</div>}
+          {activeTeeth.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+              {activeTeeth.map(t => <ToothChip key={t} tooth={t} />)}
+            </div>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, marginBottom: 6 }}>
+            <span style={{ color: 'var(--text-secondary)' }}>Sittings</span>
+            <span style={{ fontWeight: 700 }}>{done} of {total} done · {remaining} more</span>
+          </div>
+          <div style={{ height: 6, borderRadius: 99, background: 'rgba(60,60,67,0.1)', overflow: 'hidden', marginBottom: 12 }}>
+            <div style={{ height: '100%', width: `${Math.min(100, (done / total) * 100)}%`, background: 'var(--accent)', borderRadius: 99 }} />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 10, borderTop: '1px solid var(--border-light)' }}>
+            <span style={{ fontSize: 14, color: 'var(--text-secondary)' }}>{formatCurrency(plan.estimated_cost || 0)} estimated</span>
+            {pending > 0 && <span style={{ fontSize: 14, fontWeight: 700, color: '#C77700' }}>{formatCurrency(pending)} pending</span>}
+          </div>
+        </div>
+      ) : (
+        <div className="card" style={{ padding: '22px 16px', marginBottom: 18, textAlign: 'center' }}>
+          <Icon name="stethoscope" size={30} color="var(--text-tertiary)" stroke={1.6} />
+          <div style={{ fontSize: 15.5, fontWeight: 600, marginTop: 10 }}>No active treatment</div>
+          <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', marginTop: 3 }}>Record findings above to start a treatment plan.</div>
         </div>
       )}
 
-      <SectionHeader>Treatment history</SectionHeader>
-      {history.length === 0 ? <div className="card"><EmptyState icon="doc" title="No history yet" /></div> : history.map(v => {
-        const proc = procById(v.procedureId);
-        return (
-          <div key={v.id} className="card" style={{ padding: 16, marginBottom: 10, borderLeft: v.status === 'arrived' ? '3px solid var(--amber)' : 'none' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-              <span style={{ fontSize: 16, fontWeight: 600 }}>{proc ? proc.type : 'Visit'}</span>
-              {proc && proc.tooth && <ToothChip tooth={proc.tooth} />}
-              <span className="t-meta" style={{ marginLeft: 'auto' }}>{formatDate(v.date)}</span>
+      {/* ── AFFECTED TEETH — the chart, central and alive ── */}
+      <SectionHeader action={<button onClick={() => setTab('Tooth Map')} style={{ fontSize: 13, fontWeight: 600, color: 'var(--blue)' }}>Open map</button>}>Affected teeth</SectionHeader>
+      <div className="card" style={{ padding: '10px 8px 12px', marginBottom: 18 }}>
+        <Odontogram
+          teeth={teeth}
+          onTooth={(n) => {
+            const td = toothHistory?.toothMap?.find(t => t.toothNumber === String(n));
+            openSheet('tooth', { tooth: n, state: teeth[n] || 'healthy', patientId: p.id, toothData: td });
+          }}
+        />
+        <div style={{ textAlign: 'center', fontSize: 12.5, color: 'var(--text-tertiary)', marginTop: 4 }}>Tap a tooth to view or chart its treatment</div>
+      </div>
+
+      {/* ── NEXT VISIT ── */}
+      {nextAppt && (
+        <>
+          <SectionHeader>Next visit</SectionHeader>
+          <div className="card" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 16px', marginBottom: 18 }}>
+            {(() => { const d = parseDate(nextAppt.appointment_date); return (
+              <div style={{ width: 40, textAlign: 'center', flexShrink: 0 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-secondary)', fontWeight: 700, textTransform: 'uppercase' }}>{MONTHS[d.getMonth()]}</div>
+                <div className="tnum" style={{ fontSize: 22, fontWeight: 700, lineHeight: 1 }}>{d.getDate()}</div>
+              </div>
+            ); })()}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 15.5, fontWeight: 600 }}>{nextAppt.purpose || 'Appointment'}</div>
+              <div className="t-meta">{nextAppt.appointment_time ? formatTime(nextAppt.appointment_time).label : 'Time not set'}{nextAppt.sitting_number ? ` · Sitting ${nextAppt.sitting_number}` : ''}</div>
             </div>
-            {v.proceduresDone && <><div className="t-section" style={{ marginBottom: 3 }}>Notes</div><div style={{ fontSize: 14, lineHeight: 1.45, color: 'var(--text-primary)', marginBottom: v.nextSteps ? 10 : 0 }}>{v.clinicalNotes}</div></>}
-            {v.nextSteps && <><div className="t-section" style={{ marginBottom: 3 }}>Next steps</div><div style={{ fontSize: 14, lineHeight: 1.45, color: 'var(--text-secondary)' }}>{v.nextSteps}</div></>}
           </div>
-        );
-      })}
+        </>
+      )}
+
+      {/* ── PREVIOUS WORK ── */}
+      <SectionHeader>Previous work</SectionHeader>
+      {recent.length === 0 ? (
+        <div className="card" style={{ padding: '20px 16px', marginBottom: 18, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>No visits recorded yet</div>
+      ) : (
+        <div className="card" style={{ overflow: 'hidden', marginBottom: 18 }}>
+          {recent.map((v, i) => (
+            <div key={v.id || i} style={{ padding: '12px 16px', borderTop: i ? '1px solid var(--border-light)' : 'none' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 15, fontWeight: 600 }}>{v.procedure_name || 'Visit'}</span>
+                {v.tooth_number && <ToothChip tooth={v.tooth_number} />}
+                <span className="t-meta" style={{ marginLeft: 'auto' }}>{v.visit_date ? formatDate(v.visit_date) : ''}</span>
+              </div>
+              {v.notes && <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', marginTop: 4, lineHeight: 1.45 }}>{v.notes}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── SECONDARY tools for this patient ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+        {[
+          { icon: 'pencil', label: 'Prescribe', tint: '#1E8E3E', soft: 'rgba(48,209,88,0.12)', fn: () => openSheet('rx', { patientId: p.id }) },
+          { icon: 'calendar', label: 'Schedule', tint: '#2F6FB3', soft: 'rgba(0,122,255,0.10)', fn: () => openSheet('newVisit', { patientId: p.id }) },
+          { icon: 'rupee', label: 'Collect', tint: '#B07D2B', soft: 'rgba(255,159,10,0.14)', fn: () => openSheet('bill', { patientId: p.id }) },
+        ].map(a => (
+          <button key={a.label} onClick={a.fn} className="tap" style={{ background: a.soft, borderRadius: 14, padding: '14px 10px', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 10, textAlign: 'left' }}>
+            <Icon name={a.icon} size={20} color={a.tint} stroke={2} />
+            <span style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)' }}>{a.label}</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
 
-function CasesTab({ p, procedures, labOrders, openSheet, patientTreatmentPlans }) {
-  const [apiPlans, setApiPlans] = React.useState(null);
-  const [loadingPlans, setLoadingPlans] = React.useState(true);
+// Consolidated case view: the live "overall case" (updates each visit), the
+// treatment plans, and the detailed treatment history (tap a row for full detail).
+// Replaces the old standalone Case Sheet tab.
+function CaseSummaryCard({ p, caseSheet, history }) {
+  const flags = clinicianFlags(p);
+  const conditions = [];
+  if (p.hasDiabetes) conditions.push('Diabetes');
+  if (p.hasHypertension) conditions.push('Hypertension');
+  if (p.hasHeartCondition) conditions.push('Heart condition');
+  if (p.isPregnant) conditions.push('Pregnant');
+  if (p.isOnBloodThinners) conditions.push('Blood thinners');
+  const medHistory = [...new Set([...conditions, ...flags])];
+  const allergies = Array.isArray(p.allergies) ? p.allergies.filter(Boolean) : (p.allergies ? [p.allergies] : []);
+  const latest = history[0];
+  const activePlan = (caseSheet?.activeTreatmentPlans || [])[0]
+    || (caseSheet?.allTreatmentPlans || []).find(pl => pl.status === 'active');
+  const diagnosis = activePlan?.diagnosis || latest?.notes || p.clinicalNotes || null;
+  const lastUpdated = latest?.date || null;
 
-  React.useEffect(() => {
-    if (!p?.id) return;
-    setLoadingPlans(true);
-    import('@/lib/services/patient.service').then(({ getPatientTreatmentPlans }) =>
-      getPatientTreatmentPlans(p.id)
-        .then(data => setApiPlans(data?.treatment_plans || data?.treatmentPlans || data || []))
-        .catch(() => setApiPlans([]))
-        .finally(() => setLoadingPlans(false))
-    );
-  }, [p?.id]);
+  const Row = ({ label, value, accent }) => (
+    <div style={{ padding: '9px 0', borderTop: '1px solid var(--border-light)' }}>
+      <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)', marginBottom: 3 }}>{label}</div>
+      <div style={{ fontSize: 15, lineHeight: 1.5, color: accent || 'var(--text-primary)', fontWeight: accent ? 600 : 400 }}>{value || <span style={{ color: 'var(--text-tertiary)', fontStyle: 'italic' }}>Not recorded</span>}</div>
+    </div>
+  );
 
-  const localPlans = patientTreatmentPlans.filter(t => t.patientId === p.id);
-  const plans = apiPlans !== null ? apiPlans : localPlans;
-
-  if (loadingPlans) {
-    return (
-      <div style={{ display: 'flex', justifyContent: 'center', padding: '40px 0' }}>
-        <div style={{ width: 22, height: 22, borderRadius: '50%', border: '3px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin .7s linear infinite' }} />
+  return (
+    <div className="card" style={{ padding: '14px 16px 8px', marginBottom: 22 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
+        <span style={{ fontSize: 15, fontWeight: 700 }}>Case summary</span>
+        {lastUpdated && <span className="t-meta">Updated {formatDate(lastUpdated)}</span>}
       </div>
-    );
-  }
+      <Row label="Chief complaint" value={p.chiefComplaint} />
+      <Row label="Medical history" value={medHistory.length ? medHistory.join(', ') : 'None reported'} accent={medHistory.length ? 'var(--red)' : undefined} />
+      <Row label="Allergies" value={allergies.length ? allergies.join(', ') : 'None'} />
+      <Row label="Working diagnosis" value={diagnosis} />
+    </div>
+  );
+}
 
-  const normalisePlan = (plan) => ({
-    id: plan.id,
-    title: plan.title || plan.procedure || plan.name || 'Treatment Plan',
-    diagnosis: plan.diagnosis,
-    status: plan.status || 'planned',
-    tooth: plan.tooth || plan.tooth_number,
-    totalSittings: plan.totalSittings || plan.total_sittings || plan.sessions,
-    completedSittings: plan.completedSittings || plan.completed_sittings || 0,
-    totalCost: plan.totalCost || plan.total_cost || plan.estimatedCost || plan.estimated_cost || 0,
-    procedures: plan.procedures?.map?.(pid =>
-      typeof pid === 'string' ? (procedures.find(x => x.id === pid) || null) : pid
-    ).filter(Boolean) || [],
-    instructions: plan.instructions || plan.notes,
-    createdAt: plan.createdAt || plan.created_at,
-  });
-
-  if (plans.length === 0) {
-    return (
-      <div>
-        <EmptyState icon="stethoscope" title="No treatment plans" hint="Record a diagnosis to auto-create a plan" />
-        <button
-          onClick={() => {}}
-          className="card tap"
-          style={{ width: '100%', height: 50, color: 'var(--blue)', fontSize: 15, fontWeight: 600, marginTop: 12 }}
-        >
-          + New treatment plan
-        </button>
+function PlanCard({ raw, p, openSheet }) {
+  const plan = {
+    id: raw.id,
+    title: raw.title || raw.procedure || raw.procedure_name || raw.name || 'Treatment Plan',
+    diagnosis: raw.diagnosis,
+    status: raw.status || 'active',
+    tooth: raw.tooth || raw.tooth_number,
+    totalSittings: raw.totalSittings || raw.total_sittings || raw.sessions || 0,
+    completedSittings: raw.completedSittings || raw.completed_sittings || 0,
+    totalCost: raw.totalCost || raw.total_cost || raw.estimatedCost || raw.estimated_cost || 0,
+  };
+  return (
+    <div className="card" style={{ padding: 16, marginBottom: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 12 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: '-0.02em' }}>{plan.title}</div>
+          {plan.diagnosis && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>{plan.diagnosis}</div>}
+        </div>
+        <StatusChip status={plan.status} />
       </div>
-    );
-  }
+      <div style={{ display: 'flex', gap: 18 }}>
+        {plan.totalCost > 0 && (
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Cost</div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>{formatCurrency(plan.totalCost)}</div>
+          </div>
+        )}
+        {plan.totalSittings > 0 && (
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Sittings</div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>{plan.completedSittings || 0}/{plan.totalSittings}</div>
+          </div>
+        )}
+        {plan.tooth && (
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Tooth</div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>#{plan.tooth}</div>
+          </div>
+        )}
+      </div>
+      {plan.totalSittings > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ height: 5, borderRadius: 3, background: 'rgba(60,60,67,0.1)', overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${Math.min(100, Math.round((plan.completedSittings / plan.totalSittings) * 100))}%`, background: 'var(--green)', borderRadius: 3 }} />
+          </div>
+        </div>
+      )}
+      <button
+        onClick={() => openSheet('treatmentPlan', { plan: { ...raw, ...plan }, patientId: p.id })}
+        style={{ marginTop: 14, width: '100%', height: 40, borderRadius: 10, background: 'rgba(0,122,255,0.08)', color: 'var(--blue)', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}
+      >
+        <Icon name="share" size={16} color="var(--blue)" />
+        View / Share with Patient
+      </button>
+    </div>
+  );
+}
+
+function CasesTab({ p, caseSheet, clinicalVisits, openSheet }) {
+  const plans = caseSheet?.allTreatmentPlans || caseSheet?.activeTreatmentPlans || [];
+  // Prefer the patient's own visits from the case sheet (already patient-scoped and
+  // loaded with the page) over filtering the clinic-wide list — the latter can be
+  // momentarily empty, which made the history look like it "wasn't showing up".
+  const csVisits = (caseSheet?.visits || []).map(v => ({
+    id: v.id,
+    date: v.visit_date || v.date || '',
+    procedureName: v.procedure_name || v.procedureName || '',
+    toothNumber: v.tooth_number || v.toothNumber || null,
+    notes: v.notes || '',
+  }));
+  const fallback = (clinicalVisits || []).filter(v => v.patientId === p.id);
+  const history = (csVisits.length ? csVisits : fallback)
+    .slice()
+    .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
   return (
     <div>
-      {plans.map((raw, idx) => {
-        const plan = normalisePlan(raw);
-        const procItems = plan.procedures.length > 0 ? plan.procedures : [];
-        return (
-          <div key={plan.id || idx} style={{ marginBottom: 28 }}>
-            {/* plan header */}
-            <div className="card" style={{ padding: 16, marginBottom: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 12 }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: '-0.02em' }}>{plan.title}</div>
-                  {plan.diagnosis && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>{plan.diagnosis}</div>}
-                </div>
-                <StatusChip status={plan.status} />
-              </div>
+      {/* OVERALL CASE — see the whole picture at once; updates each visit */}
+      <CaseSummaryCard p={p} caseSheet={caseSheet} history={history} />
 
-              {/* stats row */}
-              <div style={{ display: 'flex', gap: 18 }}>
-                {plan.totalCost > 0 && (
-                  <div>
-                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Cost</div>
-                    <div style={{ fontSize: 16, fontWeight: 700 }}>{formatCurrency(plan.totalCost)}</div>
-                  </div>
-                )}
-                {plan.totalSittings > 0 && (
-                  <div>
-                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Sittings</div>
-                    <div style={{ fontSize: 16, fontWeight: 700 }}>{plan.completedSittings || 0}/{plan.totalSittings}</div>
-                  </div>
-                )}
-                {plan.tooth && (
-                  <div>
-                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Tooth</div>
-                    <div style={{ fontSize: 16, fontWeight: 700 }}>#{plan.tooth}</div>
-                  </div>
-                )}
-              </div>
+      {/* TREATMENT PLANS */}
+      <SectionHeader>Treatment plans</SectionHeader>
+      {plans.length === 0 ? (
+        <div className="card" style={{ marginBottom: 22 }}><EmptyState icon="stethoscope" title="No treatment plans yet" hint="Record findings by voice to auto-create one" /></div>
+      ) : (
+        <div style={{ marginBottom: 22 }}>
+          {plans.map((raw, idx) => <PlanCard key={raw.id || idx} raw={raw} p={p} openSheet={openSheet} />)}
+        </div>
+      )}
 
-              {/* progress bar */}
-              {plan.totalSittings > 0 && (
-                <div style={{ marginTop: 12 }}>
-                  <div style={{ height: 5, borderRadius: 3, background: 'rgba(60,60,67,0.1)', overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${Math.round((plan.completedSittings / plan.totalSittings) * 100)}%`, background: 'var(--green)', borderRadius: 3 }} />
-                  </div>
-                </div>
-              )}
-
-              {/* share with patient CTA */}
-              <button
-                onClick={() => openSheet('treatmentPlan', { plan: { ...raw, ...plan }, patientId: p.id })}
-                style={{ marginTop: 14, width: '100%', height: 40, borderRadius: 10, background: 'rgba(0,122,255,0.08)', color: 'var(--blue)', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}
-              >
-                <Icon name="share" size={16} color="var(--blue)" />
-                View / Share with Patient
-              </button>
-            </div>
-
-            {/* procedures */}
-            {procItems.map(pr => (
-              <ProcedureCard key={pr.id} proc={pr} labOrders={labOrders} showLab onClick={() => openSheet('procedure', { id: pr.id })} />
-            ))}
+      {/* BEFORE / AFTER — add for the latest case right here (also available per-case
+          by tapping a treatment below) */}
+      {history.length > 0 && (
+        <div className="card" style={{ padding: '12px 14px', marginBottom: 22 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
+            <span style={{ fontSize: 13.5, fontWeight: 700 }}>Before / After · latest case</span>
+            <span className="t-meta">{history[0].date ? formatDate(history[0].date) : ''}</span>
           </div>
-        );
-      })}
-      <button className="card tap" style={{ width: '100%', height: 48, color: 'var(--blue)', fontSize: 15, fontWeight: 600 }}>+ New treatment plan</button>
+          <BeforeAfterCapture patientId={p.id} visitId={history[0].id} title="" />
+        </div>
+      )}
+
+      {/* TREATMENT HISTORY — tap a visit for the full case detail */}
+      <SectionHeader>Treatment history · {history.length}</SectionHeader>
+      {history.length === 0 ? (
+        <div className="card"><EmptyState icon="clipboard" title="No treatments recorded" hint="Recorded visits appear here — tap one for full detail" /></div>
+      ) : (
+        <div className="card" style={{ overflow: 'hidden' }}>
+          {history.map((v, i) => (
+            <button
+              key={v.id}
+              onClick={() => openSheet('visitRecord', { id: v.id })}
+              className="rowtap"
+              style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left' }}
+            >
+              <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(59,130,246,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <Icon name="stethoscope" size={18} color="var(--blue)" />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <span style={{ fontSize: 15.5, fontWeight: 600 }}>{v.procedureName || 'Consultation'}</span>
+                  {v.toothNumber && <ToothChip tooth={v.toothNumber} />}
+                </div>
+                <div className="t-meta" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{[v.date && formatDate(v.date), v.notes].filter(Boolean).join(' · ')}</div>
+              </div>
+              <Icon name="chevRight" size={16} color="var(--text-tertiary)" />
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -259,14 +380,18 @@ function ToothMapTab({ p, bills, openSheet, toothHistory, toothLoading }) {
   const billed = bills.filter(b => b.patientId === p.id).reduce((s, b) => s + b.total, 0);
   const STATE_LABEL = { rct: 'Root canal', crown: 'Crown', filling: 'Filling', implant: 'Implant', extraction: 'Extraction', infection: 'Infection', scheduled: 'Scheduled' };
 
+  // Legend shows ONLY the states actually present on this patient — no generic decoder.
+  const presentStates = [...new Set(treated.map(([, st]) => st))];
+
   return (
     <div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-        <Chip label={`${treatedCount} treated`} tone="blueOutline" size="lg" />
-        <Chip label={`${scheduledCount} scheduled`} tone="amber" size="lg" />
-        <Chip label={`${formatCurrencyK(billed)} billed`} tone="green" size="lg" />
-      </div>
-      <div className="card" style={{ padding: '8px 6px', marginBottom: 22 }}>
+      {treated.length > 0 && (
+        <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 12 }}>
+          <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{treatedCount}</span> treated
+          {scheduledCount > 0 && <> · <span style={{ fontWeight: 700, color: '#C77700' }}>{scheduledCount}</span> pending</>}
+        </div>
+      )}
+      <div className="card" style={{ padding: '12px 8px 8px', marginBottom: 10 }}>
         <Odontogram
           teeth={p.teeth}
           onTooth={(n) => {
@@ -274,9 +399,24 @@ function ToothMapTab({ p, bills, openSheet, toothHistory, toothLoading }) {
             openSheet('tooth', { tooth: n, state: p.teeth[n] || 'healthy', patientId: p.id, toothData });
           }}
         />
+        <div style={{ textAlign: 'center', fontSize: 12.5, color: 'var(--text-tertiary)', marginTop: 2 }}>Tap a tooth to view or chart its treatment</div>
       </div>
+      {/* Contextual legend — only what's on this mouth */}
+      {presentStates.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px', padding: '0 4px', marginBottom: 22 }}>
+          {presentStates.map((st) => {
+            const c = TOOTH_STATE_STYLE[st] || TOOTH_STATE_STYLE.healthy;
+            return (
+              <span key={st} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ width: 12, height: 12, borderRadius: 4, background: c.fill === '#ffffff' ? '#fff' : c.fill, border: `1.5px solid ${c.stroke}`, flexShrink: 0 }} />
+                <span style={{ fontSize: 12, color: 'var(--text-tertiary)', fontWeight: 500 }}>{STATE_LABEL[st] || st}</span>
+              </span>
+            );
+          })}
+        </div>
+      )}
       <SectionHeader>Treated teeth</SectionHeader>
-      {treated.length === 0 ? <div className="card"><EmptyState icon="tooth" title="No teeth charted" hint="Tap any tooth above to record work" /></div> : (
+      {treated.length === 0 ? <div className="card"><EmptyState icon="tooth" title="Nothing charted yet" hint="Tap a tooth on the chart above to begin charting treatment" /></div> : (
         <div className="card" style={{ overflow: 'hidden' }}>
           {treated.map(([num, st], i) => {
             const c = TOOTH_STATE_STYLE[st] || TOOTH_STATE_STYLE.healthy;
@@ -355,87 +495,91 @@ function LabTab({ p, labOrders, openSheet, markLabReceived }) {
   );
 }
 
-function BillingTab({ p, bills, prescriptions, labOrders, visits, procedures, openSheet, toothHistory }) {
-  const pbills = bills.filter(b => b.patientId === p.id);
-  const rxs = prescriptions.filter(r => r.patientId === p.id);
-  const totalBilled = pbills.reduce((s, b) => s + b.total, 0);
-  const outstanding = pbills.reduce((s, b) => s + b.outstanding, 0);
-  const labCost = labOrders.filter(l => l.patientId === p.id).reduce((s, l) => s + l.costToClinic, 0);
-  const margin = totalBilled - labCost;
-  const marginPct = totalBilled ? Math.round(margin / totalBilled * 100) : 0;
-  const visitCount = visits.filter(v => v.patientId === p.id).length;
-  const procCount = procedures.filter(x => x.patientId === p.id).length;
-  const Row = ({ k, v, color, bold }) => (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0' }}>
-      <span style={{ fontSize: 15, color: 'var(--text-secondary)' }}>{k}</span>
-      <span className="tnum" style={{ fontSize: 15, fontWeight: bold ? 700 : 600, color: color || 'var(--text-primary)' }}>{v}</span>
+// Billing — driven entirely by real backend data (tooth-history payments/costs +
+// case-sheet summary). The old version read a local `bills` array that was always
+// empty, so the tab looked broken.
+function BillingTab({ p, prescriptions, openSheet, toothHistory, caseSheet }) {
+  const summary = caseSheet?.summary || {};
+  const payments = (toothHistory?.payments || []).slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const collected = payments.reduce((s, pay) => s + (parseFloat(pay.amount) || 0), 0) || (summary.totalCollected || 0);
+  const billed = toothHistory?.totalBilled ?? summary.totalBilled ?? 0;
+  const planned = summary.totalPlannedCost ?? 0;
+  const pending = summary.pendingAmount != null ? summary.pendingAmount : Math.max(0, planned - collected);
+  const toothCosts = (toothHistory?.toothMap || []).filter(t => t.totalCost > 0);
+  const rxs = (prescriptions || []).filter(r => r.patientId === p.id);
+
+  const Stat = ({ value, label, color }) => (
+    <div style={{ flex: 1 }}>
+      <div className="tnum" style={{ fontSize: 21, fontWeight: 700, color: color || 'var(--text-primary)', letterSpacing: '-0.02em' }}>{value}</div>
+      <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', fontWeight: 500, marginTop: 1 }}>{label}</div>
     </div>
   );
+
   return (
     <div>
+      {/* headline — real money in / billed / owed */}
       <div className="card" style={{ padding: 18, marginBottom: 16 }}>
-        <div className="tnum" style={{ fontSize: 32, fontWeight: 700, letterSpacing: '-0.02em' }}>{formatCurrency(totalBilled)}</div>
-        <div style={{ fontSize: 14, color: 'var(--orange)', fontWeight: 600, marginTop: 2 }}>{formatCurrency(outstanding)} outstanding</div>
-        <div style={{ display: 'flex', gap: 20, marginTop: 14 }}>
-          <span className="t-meta">{visitCount} visits</span><span className="t-meta">{procCount} procedures</span>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Stat value={formatCurrency(collected)} label="Collected" color="#1E8E3E" />
+          <Stat value={formatCurrency(billed || planned)} label="Billed" />
+          <Stat value={formatCurrency(pending)} label="Pending" color={pending > 0 ? 'var(--orange)' : undefined} />
         </div>
-      </div>
-      <SectionHeader>Cost breakdown</SectionHeader>
-      <div className="card" style={{ padding: '8px 16px', marginBottom: 22 }}>
-        <Row k="Patient revenue" v={formatCurrency(totalBilled)} color="#1E8E3E" />
-        <Row k="Lab costs" v={'−' + formatCurrency(labCost)} color="var(--orange)" />
-        <div style={{ borderTop: '1px solid var(--border-light)', margin: '2px 0' }} />
-        <Row k="Net margin" v={formatCurrency(margin)} color="#1E8E3E" bold />
-        <div style={{ borderTop: '1px solid var(--border-light)', margin: '2px 0' }} />
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0' }}>
-          <span className="t-section">Margin percentage</span>
-          <span style={{ fontSize: 17, fontWeight: 700 }}>{marginPct}%</span>
-        </div>
+        <button onClick={() => openSheet('bill', { patientId: p.id })} style={{ marginTop: 16, width: '100%', height: 44, borderRadius: 12, background: 'var(--accent)', color: 'var(--accent-ink)', fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
+          <Icon name="rupee" size={17} color="var(--accent-ink)" /> Collect payment
+        </button>
       </div>
 
-      <SectionHeader right={<button onClick={() => openSheet('bill', { patientId: p.id })} style={{ color: 'var(--blue)', fontSize: 14, fontWeight: 500 }}>Create bill</button>}>Bills</SectionHeader>
-      {pbills.length === 0 ? <div className="card" style={{ marginBottom: 22 }}><EmptyState icon="rupee" title="No bills yet" /></div> :
-        <div style={{ marginBottom: 22 }}>{pbills.map(b => (
-          <button key={b.id} onClick={() => openSheet('bill', { patientId: p.id, billId: b.id })} className="card tap" style={{ width: '100%', padding: 16, marginBottom: 10, textAlign: 'left', display: 'block' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-              <span style={{ fontSize: 15, fontWeight: 600 }}>Bill · {formatDate(b.createdAt)}</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span className="tnum" style={{ fontSize: 15, fontWeight: 700 }}>{formatCurrency(b.total)}</span><StatusChip status={b.status} /></div>
-            </div>
-            <div className="t-meta" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{b.items.slice(0, 2).map(it => it.description).join(', ')}{b.items.length > 2 ? ` +${b.items.length - 2} more` : ''}</div>
-          </button>
-        ))}</div>}
-
-      <SectionHeader right={<button onClick={() => openSheet('rx', { patientId: p.id })} style={{ color: 'var(--blue)', fontSize: 14, fontWeight: 500 }}>New prescription</button>}>Prescriptions</SectionHeader>
-      {rxs.length === 0 ? <div className="card"><EmptyState icon="pill" title="No prescriptions" /></div> :
-        <div className="card" style={{ overflow: 'hidden' }}>{rxs.map((r, i) => (
-          <button key={r.id} onClick={() => openSheet('rx', { patientId: p.id, rxId: r.id })} className="rowtap" style={{ width: '100%', minHeight: 52, display: 'flex', alignItems: 'center', gap: 12, padding: '8px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left' }}>
-            <Icon name="pill" size={18} color="var(--text-secondary)" />
-            <div style={{ flex: 1 }}><div style={{ fontSize: 15, fontWeight: 600 }}>{formatDate(r.date)}</div><div className="t-meta">{r.medicines.length} medicines</div></div>
-            <span style={{ color: 'var(--blue)', fontSize: 14, fontWeight: 500 }}>View</span>
-          </button>
-        ))}</div>}
-
-      {/* Real visit costs from API */}
-      {toothHistory && (toothHistory.totalBilled > 0 || toothHistory.generalVisits?.length > 0) && (
-        <>
-          <div style={{ height: 20 }} />
-          <SectionHeader>Recorded visit costs</SectionHeader>
-          <div className="card" style={{ padding: '8px 16px', marginBottom: 16 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0' }}>
-              <span style={{ fontSize: 15, color: 'var(--text-secondary)' }}>Total from visits</span>
-              <span className="tnum" style={{ fontSize: 15, fontWeight: 700, color: '#1E8E3E' }}>₹{Math.round(toothHistory.totalBilled).toLocaleString('en-IN')}</span>
-            </div>
-          </div>
-          {toothHistory.toothMap?.filter(t => t.totalCost > 0).map(t => (
-            <div key={t.toothNumber} className="card" style={{ padding: '12px 14px', marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <span style={{ fontSize: 15, fontWeight: 600 }}>Tooth {t.toothNumber}</span>
-                <span className="t-meta" style={{ display: 'block' }}>{t.completedProcedures?.[0]?.procedure || ''}</span>
+      {/* payments ledger (real) */}
+      <SectionHeader>Payments · {payments.length}</SectionHeader>
+      {payments.length === 0 ? (
+        <div className="card" style={{ marginBottom: 22 }}><EmptyState icon="rupee" title="No payments yet" hint="Collected payments appear here" /></div>
+      ) : (
+        <div className="card" style={{ overflow: 'hidden', marginBottom: 22 }}>
+          {payments.map((pay, i) => (
+            <div key={pay.id || i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none' }}>
+              <div style={{ width: 34, height: 34, borderRadius: '50%', background: 'rgba(48,209,88,0.14)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="rupee" size={16} color="#1E8E3E" /></div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 15, fontWeight: 600 }}>{pay.date ? formatDate(pay.date) : 'Payment'}</div>
+                {pay.method && <div className="t-meta" style={{ textTransform: 'capitalize' }}>{pay.method}</div>}
               </div>
-              <span className="tnum" style={{ fontSize: 15, fontWeight: 700, color: 'var(--blue)' }}>₹{Math.round(t.totalCost).toLocaleString('en-IN')}</span>
+              <span className="tnum" style={{ fontSize: 15, fontWeight: 700, color: '#1E8E3E' }}>+{formatCurrency(parseFloat(pay.amount) || 0)}</span>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* cost by tooth (real recorded visit costs) */}
+      {toothCosts.length > 0 && (
+        <>
+          <SectionHeader>Cost by tooth</SectionHeader>
+          <div className="card" style={{ overflow: 'hidden', marginBottom: 22 }}>
+            {toothCosts.map((t, i) => (
+              <div key={t.toothNumber} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                  <ToothChip tooth={t.toothNumber} />
+                  <span style={{ fontSize: 14, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.completedProcedures?.[0]?.procedure || ''}</span>
+                </div>
+                <span className="tnum" style={{ fontSize: 15, fontWeight: 700, flexShrink: 0 }}>{formatCurrency(t.totalCost)}</span>
+              </div>
+            ))}
+          </div>
         </>
+      )}
+
+      {/* prescriptions */}
+      <SectionHeader right={<button onClick={() => openSheet('rx', { patientId: p.id })} style={{ color: 'var(--blue)', fontSize: 14, fontWeight: 500 }}>New</button>}>Prescriptions · {rxs.length}</SectionHeader>
+      {rxs.length === 0 ? (
+        <div className="card"><EmptyState icon="pill" title="No prescriptions" /></div>
+      ) : (
+        <div className="card" style={{ overflow: 'hidden' }}>
+          {rxs.map((r, i) => (
+            <button key={r.id} onClick={() => openSheet('rx', { patientId: p.id, rxId: r.id })} className="rowtap" style={{ width: '100%', minHeight: 52, display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left' }}>
+              <Icon name="pill" size={18} color="var(--text-secondary)" />
+              <div style={{ flex: 1 }}><div style={{ fontSize: 15, fontWeight: 600 }}>{r.date ? formatDate(r.date) : 'Prescription'}</div><div className="t-meta">{(r.medicines || []).length} medicines</div></div>
+              <span style={{ color: 'var(--blue)', fontSize: 14, fontWeight: 500 }}>View</span>
+            </button>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -494,22 +638,20 @@ function MediaTab({ p, openSheet }) {
   const [xrays, setXrays] = React.useState([]);
   const [photos, setPhotos] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
-  const beforeFileRef = React.useRef(null);
-  const afterFileRef = React.useRef(null);
   const xrayFileRef = React.useRef(null);
-  const [uploading, setUploading] = React.useState(null);
 
   React.useEffect(() => {
     if (!p?.id) return;
     setLoading(true);
     getPatientXrays(p.id)
       .then(data => {
-        const all = data?.xrays || data || [];
+        const all = Array.isArray(data) ? data : (data?.xrays || []);
         const normalised = all.map(x => ({
           id: x.id,
           url: x.url || x.file_url || x.imageUrl,
           xrayType: x.xray_type || x.xrayType || x.type || 'Photo',
-          date: x.created_at || x.createdAt || x.date || '',
+          date: x.date_taken || x.created_at || x.createdAt || x.date || '',
+          visitId: x.visit_id || x.visitId || null,
           isBeforeAfter: ['before', 'after'].includes((x.xray_type || x.xrayType || '').toLowerCase()),
           photoType: (x.xray_type || x.xrayType || '').toLowerCase(),
         }));
@@ -520,41 +662,27 @@ function MediaTab({ p, openSheet }) {
       .finally(() => setLoading(false));
   }, [p?.id]);
 
-  const beforePhoto = photos.find(x => x.photoType === 'before');
-  const afterPhoto = photos.find(x => x.photoType === 'after');
+  // Group before/after photos by case (visit). Legacy photos with no visit fall back
+  // to their date so they still group sensibly. Capture lives in the case sheet now.
+  const caseMap = {};
+  photos.forEach(ph => {
+    const key = ph.visitId || ('d:' + (ph.date || '').slice(0, 10));
+    if (!caseMap[key]) caseMap[key] = { key, date: ph.date, before: null, after: null };
+    caseMap[key][ph.photoType] = ph;
+    if (ph.date && ph.date > (caseMap[key].date || '')) caseMap[key].date = ph.date;
+  });
+  const caseList = Object.values(caseMap).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
-  const handleFileUpload = async (file, type) => {
+  const handleXrayUpload = async (file) => {
     if (!file) return;
     const preview = URL.createObjectURL(file);
-    setUploading(type);
     try {
-      const res = await (type === 'xray'
-        ? uploadXray(file, p.id, 'OPG')
-        : uploadPatientPhoto(file, p.id, type));
-      const uploaded = {
-        id: res.id || res.xray_id,
-        url: res.url || res.file_url || preview,
-        xrayType: type,
-        photoType: type,
-        isBeforeAfter: ['before', 'after'].includes(type),
-      };
-      if (type === 'xray') {
-        setXrays(prev => [uploaded, ...prev]);
-      } else {
-        setPhotos(prev => prev.filter(x => x.photoType !== type).concat(uploaded));
-      }
-      showToast('Photo saved');
+      const res = await uploadXray(file, p.id, 'OPG');
+      setXrays(prev => [{ id: res.id || res.xray_id || res.xray?.id, url: res.url || res.xray?.url || preview, xrayType: 'OPG' }, ...prev]);
+      showToast('X-ray saved');
     } catch {
-      // Keep local preview even if upload fails
-      const local = { preview, xrayType: type, photoType: type, isBeforeAfter: ['before', 'after'].includes(type) };
-      if (type === 'xray') {
-        setXrays(prev => [local, ...prev]);
-      } else {
-        setPhotos(prev => prev.filter(x => x.photoType !== type).concat(local));
-      }
+      setXrays(prev => [{ preview, xrayType: 'OPG' }, ...prev]);
       showToast('Saved locally — will sync when online');
-    } finally {
-      setUploading(null);
     }
   };
 
@@ -570,47 +698,50 @@ function MediaTab({ p, openSheet }) {
     onDelete: handleDeletePhoto,
   });
 
-  const openBeforeAfter = (type) => {
-    const target = type === 'before' ? beforePhoto : afterPhoto;
-    if (!target) return;
-    openSheet('photoViewer', {
-      photos: photos,
-      initialIndex: photos.indexOf(target),
-      title: 'Before / After',
-      onDelete: handleDeletePhoto,
-    });
+  const CasePhoto = ({ label, photo }) => {
+    const accent = label === 'Before' ? 'var(--amber)' : 'var(--green)';
+    return (
+      <div style={{ flex: 1 }}>
+        {photo ? (
+          <button onClick={() => (photo.url || photo.preview) && openSheet('photoViewer', { photos: [photo], title: label, onDelete: handleDeletePhoto })} className="tap" style={{ width: '100%', aspectRatio: '1', borderRadius: 12, overflow: 'hidden', background: '#000', border: 'none', padding: 0 }}>
+            <img src={photo.url || photo.preview} alt={label} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+          </button>
+        ) : (
+          <div style={{ width: '100%', aspectRatio: '1', borderRadius: 12, border: `1.5px dashed ${accent}`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-tertiary)', fontSize: 12.5, background: label === 'Before' ? 'rgba(245,158,11,0.05)' : 'rgba(34,197,94,0.05)' }}>No {label.toLowerCase()}</div>
+        )}
+        <div style={{ fontSize: 11.5, fontWeight: 700, color: accent, marginTop: 4, textAlign: 'center' }}>{label}</div>
+      </div>
+    );
   };
 
   return (
     <div>
-      {/* ── Before / After ── */}
+      {/* ── Before / After — grouped by case; add them from a case in the Cases tab ── */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-        <span style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)' }}>Before & After</span>
-        {(beforePhoto || afterPhoto) && (
-          <button
-            onClick={() => openSheet('photoViewer', { photos, title: 'Before / After', onDelete: handleDeletePhoto })}
-            style={{ fontSize: 13, color: 'var(--blue)', fontWeight: 600 }}
-          >
-            View all
-          </button>
-        )}
+        <span style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)' }}>Before &amp; After · by case</span>
       </div>
-      <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
-        <input ref={beforeFileRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => { handleFileUpload(e.target.files[0], 'before'); e.target.value = ''; }} />
-        <input ref={afterFileRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => { handleFileUpload(e.target.files[0], 'after'); e.target.value = ''; }} />
-        <BeforeAfterSlot
-          label="Before"
-          photo={uploading === 'before' ? { preview: '' } : beforePhoto}
-          onPick={() => beforeFileRef.current?.click()}
-          onView={() => openBeforeAfter('before')}
-        />
-        <BeforeAfterSlot
-          label="After"
-          photo={uploading === 'after' ? { preview: '' } : afterPhoto}
-          onPick={() => afterFileRef.current?.click()}
-          onView={() => openBeforeAfter('after')}
-        />
-      </div>
+      {caseList.length === 0 ? (
+        <div className="card" style={{ padding: '20px 16px', marginBottom: 24, textAlign: 'center' }}>
+          <Icon name="compare" size={26} color="var(--text-tertiary)" />
+          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)', marginTop: 8 }}>No before / after photos</div>
+          <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)', marginTop: 2 }}>Open a case in the Cases tab to add them</div>
+        </div>
+      ) : (
+        <div style={{ marginBottom: 24 }}>
+          {caseList.map((c, i) => (
+            <div key={c.key} className="card" style={{ padding: 12, marginBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                <span style={{ fontSize: 13.5, fontWeight: 700 }}>Case {caseList.length - i}</span>
+                <span className="t-meta">{c.date ? formatDate(c.date) : ''}</span>
+              </div>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <CasePhoto label="Before" photo={c.before} />
+                <CasePhoto label="After" photo={c.after} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ── X-rays ── */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
@@ -619,7 +750,7 @@ function MediaTab({ p, openSheet }) {
           <Icon name="plus" size={14} color="var(--blue)" /> Add
         </button>
       </div>
-      <input ref={xrayFileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={e => { handleFileUpload(e.target.files[0], 'xray'); e.target.value = ''; }} />
+      <input ref={xrayFileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={e => { handleXrayUpload(e.target.files[0]); e.target.value = ''; }} />
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: '24px 0' }}>
@@ -769,7 +900,7 @@ function CaseSheetTab({ p, visits, procedures, openSheet }) {
   );
 }
 
-const PROFILE_TABS = ['Overview', 'Cases', 'Tooth Map', 'Media', 'Case Sheet', 'Lab', 'Billing'];
+const PROFILE_TABS = ['Overview', 'Cases', 'Tooth Map', 'Media', 'Billing'];
 
 function procedureToState(name) {
   const n = (name || '').toLowerCase();
@@ -798,10 +929,15 @@ function buildTeethMap(toothHistory) {
 function PatientProfile({ patientId, initialTab }) {
   const router = useRouter();
   const openSheet = useAppStore(s => s.openSheet);
+  const showToast = useAppStore(s => s.showToast);
+  const patientDataVersion = useAppStore(s => s.patientDataVersion);
   const patients = usePatientStore(s => s.patients);
   const fetchPatient = usePatientStore(s => s.fetchPatient);
+  const deletePatient = usePatientStore(s => s.deletePatient);
   const updateToothState = usePatientStore(s => s.updateToothState);
   const visits = useVisitStore(s => s.visits);
+  const clinicalVisits = useVisitStore(s => s.clinicalVisits);
+  const loadClinicalVisits = useVisitStore(s => s.loadClinicalVisits);
   const procedures = useClinicalStore(s => s.procedures);
   const labOrders = useClinicalStore(s => s.labOrders);
   const bills = useClinicalStore(s => s.bills);
@@ -821,7 +957,8 @@ function PatientProfile({ patientId, initialTab }) {
     }
   }, [patientId]);
 
-  // Fetch tooth history from API
+  // Fetch tooth history from API. Re-runs on patientDataVersion bumps so a tooth
+  // dictated by voice (which persists a visit) recolors the map right away.
   React.useEffect(() => {
     if (!patientId) return;
     setToothLoading(true);
@@ -829,7 +966,30 @@ function PatientProfile({ patientId, initialTab }) {
       .then(data => setToothHistory(data))
       .catch(() => {})
       .finally(() => setToothLoading(false));
-  }, [patientId]);
+  }, [patientId, patientDataVersion]);
+
+  // This patient's clinical visits power the Cases → treatment history list.
+  React.useEffect(() => {
+    if (!patientId) return;
+    loadClinicalVisits();
+  }, [patientId, patientDataVersion]);
+
+  // Load this patient's lab orders + prescriptions (the latter feeds Billing).
+  const loadPatientLabOrders = useClinicalStore(s => s.loadPatientLabOrders);
+  const loadPatientPrescriptions = useClinicalStore(s => s.loadPatientPrescriptions);
+  React.useEffect(() => {
+    if (!patientId) return;
+    loadPatientLabOrders(patientId);
+    loadPatientPrescriptions(patientId);
+  }, [patientId, patientDataVersion]);
+
+  // Case sheet — the live clinical state that drives the control center (active plan,
+  // upcoming visit, recent work, balances). One read; backend is the source of truth.
+  const [caseSheet, setCaseSheet] = React.useState(null);
+  React.useEffect(() => {
+    if (!patientId) return;
+    getPatientCaseSheet(patientId).then(setCaseSheet).catch(() => {});
+  }, [patientId, patientDataVersion]);
 
   if (!p) return null;
 
@@ -842,8 +1002,23 @@ function PatientProfile({ patientId, initialTab }) {
   const outstanding = bills.filter(b => b.patientId === p.id).reduce((s, b) => s + b.outstanding, 0);
   const statusPill = p.status === 'current' ? <Chip label="Current patient" tone="dark" size="lg" /> : p.status === 'new' ? <Chip label="New patient" tone="blueOutline" size="lg" /> : <Chip label="Completed" tone="neutral" size="lg" />;
 
-  // treatmentPlans from data (static seed)
-  const patientTreatmentPlans = (treatmentPlans || []);
+  // Active treatment = the live case context driving the header + control center.
+  const activePlan = (caseSheet?.activeTreatmentPlans || [])[0] || (caseSheet?.allTreatmentPlans || []).find(pl => pl.status === 'active') || null;
+  const activeTeeth = activePlan ? ((toothHistory?.treatmentPlans || []).find(tp => tp.id === activePlan.id)?.teeth || []) : [];
+  const stageLine = activePlan
+    ? `${activePlan.procedure_name || 'Treatment'}${activeTeeth.length ? ` · ${activeTeeth.length > 1 ? 'Teeth ' + activeTeeth.join(', ') : 'Tooth ' + activeTeeth[0]}` : ''} · Sitting ${(activePlan.completed_sittings || 0)} of ${activePlan.total_sittings || 1}`
+    : null;
+
+  const handleDeletePatient = async () => {
+    if (typeof window !== 'undefined' && !window.confirm(`Delete ${p.name}? They'll be removed from your lists. This is recoverable in the database.`)) return;
+    try {
+      await deletePatient(p.id);
+      showToast('Patient deleted');
+      router.replace('/patients');
+    } catch {
+      showToast('Could not delete patient');
+    }
+  };
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
@@ -852,12 +1027,24 @@ function PatientProfile({ patientId, initialTab }) {
         {/* hero */}
         <div style={{ padding: '16px 20px', display: 'flex', gap: 14 }}>
           <Avatar name={p.name} size={56} ring />
-          <div style={{ flex: 1 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-0.02em' }}>{p.name}</div>
             <a href={'tel:' + p.phone.replace(/\s/g, '')} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--blue)', fontSize: 15, textDecoration: 'none', margin: '2px 0' }}><Icon name="phone" size={14} color="var(--blue)" />{p.phone}</a>
             <div className="t-meta" style={{ marginBottom: 8 }}>{p.age} · {p.gender} · {p.bloodGroup}</div>
-            {statusPill}
+            {stageLine ? (
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: 'rgba(48,209,88,0.10)', borderRadius: 99, padding: '5px 12px' }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#1E8E3E' }} />
+                <span style={{ fontSize: 13, fontWeight: 700, color: '#15702F' }}>{stageLine}</span>
+              </div>
+            ) : statusPill}
           </div>
+          {/* Delete lives here — top-right of the name/number, not buried in every tab */}
+          <button
+            onClick={handleDeletePatient}
+            style={{ flexShrink: 0, alignSelf: 'flex-start', height: 30, padding: '0 12px', borderRadius: 99, border: '1px solid rgba(255,59,48,0.30)', background: 'rgba(255,59,48,0.06)', color: '#FF3B30', fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}
+          >
+            <Icon name="x" size={13} color="#FF3B30" stroke={2.4} /> Delete
+          </button>
         </div>
 
         <div style={{ padding: '0 20px' }}>
@@ -889,16 +1076,14 @@ function PatientProfile({ patientId, initialTab }) {
         </div>
 
         <div style={{ padding: '18px 20px 24px' }}>
-          {tab === 'Overview' && <OverviewTab p={p} procedures={procedures} visits={visits} labOrders={labOrders} openSheet={openSheet} router={router} />}
-          {tab === 'Cases' && <CasesTab p={p} procedures={procedures} labOrders={labOrders} openSheet={openSheet} patientTreatmentPlans={patientTreatmentPlans} />}
+          {tab === 'Overview' && <OverviewTab p={p} caseSheet={caseSheet} toothHistory={toothHistory} teeth={mergedTeeth} activePlan={activePlan} activeTeeth={activeTeeth} openSheet={openSheet} router={router} setTab={setTab} />}
+          {tab === 'Cases' && <CasesTab p={p} procedures={procedures} caseSheet={caseSheet} clinicalVisits={clinicalVisits} toothHistory={toothHistory} openSheet={openSheet} />}
           {tab === 'Tooth Map' && <ToothMapTab p={{ ...p, teeth: mergedTeeth }} bills={bills} openSheet={openSheet} toothHistory={toothHistory} toothLoading={toothLoading} />}
           {tab === 'Media' && <MediaTab p={p} openSheet={openSheet} />}
-          {tab === 'Case Sheet' && <CaseSheetTab p={p} visits={visits} procedures={procedures} openSheet={openSheet} />}
-          {tab === 'Lab' && <LabTab p={p} labOrders={labOrders} openSheet={openSheet} markLabReceived={markLabReceived} />}
-          {tab === 'Billing' && <BillingTab p={p} bills={bills} prescriptions={prescriptions} labOrders={labOrders} visits={visits} procedures={procedures} openSheet={openSheet} toothHistory={toothHistory} />}
+          {tab === 'Billing' && <BillingTab p={p} prescriptions={prescriptions} openSheet={openSheet} toothHistory={toothHistory} caseSheet={caseSheet} />}
         </div>
       </div>
-      <VoiceToolbar onClick={() => openSheet('voice', { scope: 'patient', patientId: p.id })} />
+      <VoiceToolbar onClick={() => openSheet('patientConsult', { patientId: p.id })} />
     </div>
   );
 }

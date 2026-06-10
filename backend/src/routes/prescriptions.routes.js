@@ -4,7 +4,28 @@ const supabase = require('../config/supabase');
 const auth = require('../middleware/auth');
 const { extractPrescription } = require('../services/ai.service');
 const { generatePrescriptionPdf } = require('../services/pdf.service');
+<<<<<<< HEAD
+const { parsePagination, pageMeta } = require('../utils/pagination');
+
+// GET /api/prescriptions — clinic-scoped list (paginated, optional ?patientId)
+router.get('/', auth, async (req, res, next) => {
+  try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
+    const { from, to, page, limit } = parsePagination(req.query);
+    let q = supabase.from('prescriptions')
+      .select('*, patients(name, phone)', { count: 'exact' })
+      .or(`clinic_id.eq.${req.clinicId},dentist_id.eq.${req.dentistId}`)
+      .is('deleted_at', null);
+    if (req.query.patientId) q = q.eq('patient_id', req.query.patientId);
+    q = q.order('created_at', { ascending: false }).range(from, to);
+    const { data, error, count } = await q;
+    if (error) throw error;
+    res.json({ prescriptions: data || [], pagination: pageMeta({ page, limit }, count) });
+  } catch (e) { next(e); }
+});
+=======
 const { ok, okCreated, fail } = require('../utils/response');
+>>>>>>> origin/main
 
 router.post('/', auth, async (req, res, next) => {
   try {
@@ -23,6 +44,21 @@ router.post('/', auth, async (req, res, next) => {
     }
 
     const { data, error } = await supabase.from('prescriptions').insert({
+<<<<<<< HEAD
+      patient_id: patientId,
+      dentist_id: req.dentistId,
+      clinic_id: req.clinicId || null,
+      visit_id: visitId || null,
+      visit_note_id: visitNoteId || null,
+      raw_voice: rawVoice || null,
+      medicines: extractedMedicines || [],
+      instructions: extractedInstructions || null,
+      follow_up: extractedFollowUp || null,
+    }).select(`*, patients(name, age, gender, phone)`).single();
+
+    if (error) throw error;
+    res.status(201).json({ prescription: data });
+=======
       patient_id:    patientId,
       dentist_id:    req.dentistId,
       clinic_id:     req.clinicId || null,
@@ -52,6 +88,7 @@ router.get('/', auth, async (req, res, next) => {
       .order('created_at', { ascending: false });
     if (error) throw error;
     return ok(res, { prescriptions: data || [] });
+>>>>>>> origin/main
   } catch (err) { next(err); }
 });
 

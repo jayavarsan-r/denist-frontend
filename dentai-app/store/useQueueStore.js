@@ -59,6 +59,29 @@ export const useQueueStore = create((set, get) => ({
     }
   },
 
+  /* ─── Swap a different waiting patient into the chair ───
+     Doctor-first: while one patient is in_consultation, tapping another
+     waiting patient calls THEM in and returns the current one to 'waiting'.
+     The current patient's consult draft is keyed by entry id in
+     useConsultStore, so it survives untouched — no work is lost. */
+  swapIn: async (id) => {
+    const current = get().queue.find((e) => e.status === 'in_consultation');
+    if (current && current.id === id) return; // already in the chair
+    set((s) => ({
+      queue: s.queue.map((e) => {
+        if (current && e.id === current.id) return { ...e, status: 'waiting', calledInAt: null };
+        if (e.id === id) return { ...e, status: 'in_consultation', calledInAt: nowTime() };
+        return e;
+      }),
+    }));
+    try {
+      if (current) await updateQueueEntry(current.id, { status: 'waiting' });
+      await updateQueueEntry(id, { status: 'in_consultation' });
+    } catch {
+      get().loadQueue(); // revert on error
+    }
+  },
+
   /* ─── Complete consult ─── */
   completeConsult: async (id, consult) => {
     const entry = get().queue.find(e => e.id === id);
@@ -85,6 +108,9 @@ export const useQueueStore = create((set, get) => ({
         procedure:     consult?.procedure || '',
         diagnosis:     consult?.diagnosis || '',
         toothNumber:   consult?.tooth ? String(consult.tooth) : null,
+        toothNumbers:  Array.isArray(consult?.teeth) && consult.teeth.length
+          ? consult.teeth.map(String)
+          : (consult?.tooth ? [String(consult.tooth)] : []),
         totalSittings: consult?.totalSittings || 1,
         estimatedCost: consult?.estimatedCost || 0,
         transcript:    consult?.transcript || '',
@@ -156,6 +182,9 @@ function normaliseEntry(e) {
     calledInAt: e.called_in_at ?? e.calledInAt ?? null,
     readyAt: e.ready_at ?? e.readyAt ?? null,
     assignedDoctor: e.assigned_doctor ?? e.assignedDoctor ?? null,
+    assignedDoctorName: e.assigned_doctor_staff?.name ?? e.assignedDoctorName ?? null,
+    assignedDoctorRole: e.assigned_doctor_staff?.role ?? e.assignedDoctorRole ?? null,
+    patientName: e.patients?.name ?? e.patientName ?? null,
     xrays: e.xrays || [],
     outcome: e.consultation_outcome ?? e.outcome ?? null,
     consult: e.outcome_metadata ?? e.consult ?? null,

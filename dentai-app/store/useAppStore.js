@@ -43,6 +43,10 @@ export const useAppStore = create((set, get) => ({
   activeSheet: null,
   _toastTimer: null,
 
+  // Bumped after a clinical write (e.g. a voice consult) so any open patient screen
+  // refetches its case sheet / tooth history / visits without a manual reload.
+  patientDataVersion: 0,
+
   /* ─── Auth actions ─── */
   setAuth: ({ token, staffId, role, clinicId, name, clinicName, clinicCity, joinCode }) =>
     set({
@@ -79,6 +83,7 @@ export const useAppStore = create((set, get) => ({
         clinicName: clinic?.name || '',
         city: clinic?.city || '',
         joinCode: clinic?.join_code || '',
+        settings: clinic?.settings || {},
       },
     });
   },
@@ -126,6 +131,9 @@ export const useAppStore = create((set, get) => ({
   /* ─── Sheets ─── */
   openSheet: (name, params = {}) => set({ activeSheet: { name, params } }),
   closeSheet: () => set({ activeSheet: null }),
+
+  /* ─── Data refresh signal ─── */
+  refreshPatientData: () => set((s) => ({ patientDataVersion: s.patientDataVersion + 1 })),
 
   /* ─── Toast ─── */
   showToast: (msg) => {

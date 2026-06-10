@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { apiClient } from '@/lib/api/client';
-import { updateClinic } from '@/lib/services/clinic.service';
+import { updateClinic, updateClinicSettings } from '@/lib/services/clinic.service';
 import Icon from '@/components/icons';
 import { SheetHeader, Chip } from '@/components/ui';
 
@@ -201,6 +201,41 @@ function ProceduresPanel() {
   );
 }
 
+// Doctor-managed staff permissions. First toggle: let receptionists add medicines.
+function PermissionsPanel({ showToast }) {
+  const clinic = useAppStore(s => s.clinic);
+  const updateClinicLocal = useAppStore(s => s.updateClinicLocal);
+  const [on, setOn] = useState(!!clinic?.settings?.receptionistCanAddMedicines);
+  const [saving, setSaving] = useState(false);
+
+  const toggle = async () => {
+    const next = !on;
+    setOn(next); setSaving(true);
+    try {
+      await updateClinicSettings({ receptionistCanAddMedicines: next });
+      updateClinicLocal({ settings: { ...(clinic?.settings || {}), receptionistCanAddMedicines: next } });
+      showToast(next ? 'Receptionists can now add medicines' : 'Receptionist medicine access off');
+    } catch (e) {
+      setOn(!next);
+      showToast(e?.apiError?.message || 'Could not save — run migration 009 if this persists');
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div>
+      <button onClick={toggle} disabled={saving} className="rowtap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '6px 0', textAlign: 'left', opacity: saving ? 0.6 : 1 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>Receptionists can add medicines</div>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>Lets front-desk staff add to a patient's prescription</div>
+        </div>
+        <div style={{ width: 46, height: 28, borderRadius: 99, background: on ? 'var(--accent)' : 'rgba(60,60,67,0.2)', padding: 3, display: 'flex', justifyContent: on ? 'flex-end' : 'flex-start', transition: 'background .2s', flexShrink: 0 }}>
+          <div style={{ width: 22, height: 22, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }} />
+        </div>
+      </button>
+    </div>
+  );
+}
+
 export default function AccountSettingsSheet({ onClose }) {
   const name = useAppStore(s => s.name);
   const role = useAppStore(s => s.role);
@@ -222,10 +257,9 @@ export default function AccountSettingsSheet({ onClose }) {
   useEffect(() => {
     apiClient.get('/api/clinic').then(r => {
       const c = r.data?.clinic;
-      if (c?.join_code) {
-        setJoinCode(c.join_code);
-        updateClinicLocal({ joinCode: c.join_code, clinicName: c.name || clinicName, city: c.city || city });
-      }
+      if (!c) return;
+      if (c.join_code) setJoinCode(c.join_code);
+      updateClinicLocal({ joinCode: c.join_code || joinCode, clinicName: c.name || clinicName, city: c.city || city, settings: c.settings || {} });
     }).catch(() => {});
   }, []);
 
@@ -276,6 +310,11 @@ export default function AccountSettingsSheet({ onClose }) {
         <Section icon="user2" label="Staff accounts" open={openSection === 'staff'} onToggle={() => toggle('staff')}>
           <StaffPanel />
         </Section>
+        {role !== 'receptionist' && (
+          <Section icon="userCheck" label="Permissions" open={openSection === 'perms'} onToggle={() => toggle('perms')}>
+            <PermissionsPanel showToast={showToast} />
+          </Section>
+        )}
         <Section icon="tooth" label="Procedures library" open={openSection === 'procedures'} onToggle={() => toggle('procedures')}>
           <ProceduresPanel />
         </Section>

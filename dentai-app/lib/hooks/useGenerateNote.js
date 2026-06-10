@@ -30,17 +30,18 @@ export function useGenerateNote() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  const generateFromTranscript = useCallback(async (transcript) => {
+  const generateFromTranscript = useCallback(async (transcript, current) => {
     setLoading(true);
     setError(null);
     try {
-      const raw = await generateNote(transcript);
+      // `current` (optional): the existing structured note (_raw) → merge as a correction.
+      const raw = await generateNote(transcript, current);
       const mapped = mapToFrontendShape(raw);
       setNote(mapped);
       setLoading(false);
       return mapped;
     } catch (e) {
-      const msg = e?.response?.data?.message || 'Failed to generate note';
+      const msg = e?.apiError?.message || e?.message || 'Failed to generate note';
       setError(msg);
       setLoading(false);
       throw new Error(msg);
@@ -75,7 +76,7 @@ export function useExtractComplaint() {
       setLoading(false);
       return text;
     } catch (e) {
-      const msg = e?.response?.data?.message || 'Extraction failed';
+      const msg = e?.apiError?.message || e?.message || 'Extraction failed';
       setError(msg);
       setLoading(false);
       // Fall back to raw transcript
@@ -89,7 +90,15 @@ export function useExtractComplaint() {
 
 /* ─── Map backend structured note → frontend shape ─── */
 function mapToFrontendShape(raw) {
-  const meds = (raw.medications || raw.medicines || []).map((m) => ({
+  // Backend wraps the note as { structured: {...} } and the Gemini schema uses
+  // camelCase (toothNumber, totalSittings, notes) with no explicit "diagnosis"
+  // field. Unwrap, and read both camelCase and snake_case so nothing maps to empty.
+  const n = (raw && raw.structured) ? raw.structured : (raw || {});
+
+  // In the consultation schema `medications` is a STRING (or null); only the
+  // prescription schema returns an array. Guard so .map never runs on a string.
+  const medsRaw = n.medications || n.medicines;
+  const meds = (Array.isArray(medsRaw) ? medsRaw : []).map((m) => ({
     name: m.name || '',
     dose: m.dose || m.dosage || '',
     frequency: m.frequency || 'OD',
@@ -100,24 +109,33 @@ function mapToFrontendShape(raw) {
     slots: m.meal_timing_slots || m.slots || { breakfast: true, lunch: false, dinner: true },
   }));
 
-  const appointments = (raw.follow_up_appointments || raw.appointments || []).map((a, i) => ({
+  const appointments = (n.follow_up_appointments || n.appointments || []).map((a, i) => ({
     session: a.session || i + 2,
     date: a.date || '',
     time: a.time || '10:00',
     purpose: a.purpose || `Session ${(a.session || i + 2)}`,
   }));
 
+  const tooth = n.toothNumber ?? n.tooth_number;
+  // All teeth covered by this procedure (multi-tooth); fall back to the primary tooth.
+  const teethRaw = Array.isArray(n.toothNumbers) ? n.toothNumbers
+    : Array.isArray(n.tooth_numbers) ? n.tooth_numbers : [];
+  const teeth = [...new Set(
+    [...teethRaw, tooth].filter((t) => t != null && String(t).trim() !== '').map((t) => String(t).trim())
+  )];
+
   return {
-    diagnosis: raw.diagnosis || '',
-    procedure: raw.procedure_name || raw.procedure || '',
-    tooth: raw.tooth_number ? Number(raw.tooth_number) : null,
-    totalSittings: raw.total_sittings || 1,
-    estimatedCost: raw.cost || raw.estimated_cost || 0,
+    diagnosis: n.diagnosis || n.notes || '',
+    procedure: n.procedure || n.procedure_name || '',
+    tooth: tooth ? Number(tooth) : null,
+    teeth,
+    totalSittings: n.totalSittings || n.total_sittings || 1,
+    estimatedCost: n.cost || n.estimated_cost || 0,
     medicines: meds,
-    instructions: raw.notes || raw.instructions || '',
-    followUp: raw.next_steps || raw.follow_up || '',
+    instructions: n.instructions || '',
+    followUp: n.followUpDate || n.follow_up_date || n.nextSteps || n.next_steps || '',
     appointments,
-    // keep raw for backend submission
-    _raw: raw,
+    // keep the structured note for backend submission
+    _raw: n,
   };
 }

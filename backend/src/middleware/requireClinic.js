@@ -1,9 +1,10 @@
-const { fail } = require('../utils/response');
+const { AppError } = require('../utils/errors');
 
-// Rejects requests where the JWT has no clinic context (new user mid-setup)
+// Guard for endpoints that operate on clinic-scoped data. Authorization is
+// clinic_id-based (never dentist_id). Rejects requests without clinic context.
 module.exports = (req, res, next) => {
   if (!req.clinicId) {
-    return fail(res, 403, 'FORBIDDEN', 'Clinic context required. Complete clinic setup first.');
+    return next(new AppError('FORBIDDEN', 'No clinic context for this account'));
   }
   next();
 };

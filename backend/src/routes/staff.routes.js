@@ -3,7 +3,13 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const auth = require('../middleware/auth');
 const requireRole = require('../middleware/requireRole');
+<<<<<<< HEAD
+const validate = require('../middleware/validate');
+const v = require('../validators');
+const audit = require('../services/audit.service');
+=======
 const { ok, fail } = require('../utils/response');
+>>>>>>> origin/main
 
 // GET /api/staff — all active staff in this clinic
 router.get('/', auth, async (req, res, next) => {
@@ -60,6 +66,37 @@ router.delete('/:id', auth, requireRole(['doctor']), async (req, res, next) => {
     if (error) throw error;
     if (!data) return fail(res, 404, 'NOT_FOUND', 'Staff member not found');
     return ok(res, { success: true });
+  } catch (e) { next(e); }
+});
+
+// PATCH /api/staff/:id — update a clinic member (doctor/owner only)
+router.patch('/:id', auth, requireRole('doctor'), validate(v.updateStaff), async (req, res, next) => {
+  try {
+    const updates = {};
+    if (req.body.name !== undefined) updates.name = req.body.name;
+    if (req.body.role !== undefined) updates.role = req.body.role;
+    if (req.body.status !== undefined) updates.status = req.body.status;
+    if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No updatable fields' });
+
+    const { data, error } = await supabase.from('staff')
+      .update(updates).eq('id', req.params.id).eq('clinic_id', req.clinicId).select().maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Staff not found' });
+    audit.fromReq(req, { action: 'ROLE_CHANGE', entityType: 'staff', entityId: req.params.id, metadata: updates });
+    res.json({ staff: data });
+  } catch (e) { next(e); }
+});
+
+// DELETE /api/staff/:id — deactivate a member (doctor/owner only). Cannot remove self.
+router.delete('/:id', auth, requireRole('doctor'), async (req, res, next) => {
+  try {
+    if (req.params.id === req.staffId) return res.status(400).json({ error: 'Cannot deactivate yourself' });
+    const { data, error } = await supabase.from('staff')
+      .update({ status: 'inactive' }).eq('id', req.params.id).eq('clinic_id', req.clinicId).select().maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Staff not found' });
+    audit.fromReq(req, { action: 'DELETE', entityType: 'staff', entityId: req.params.id });
+    res.json({ success: true });
   } catch (e) { next(e); }
 });
 
