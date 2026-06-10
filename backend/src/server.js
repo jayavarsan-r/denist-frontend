@@ -51,6 +51,7 @@ app.use('/api/queue', require('./routes/queue.routes'));
 app.use('/api/staff', require('./routes/staff.routes'));
 app.use('/api/clinic', require('./routes/clinic.routes'));
 app.use('/api/payments', require('./routes/payments.routes'));
+app.use('/api/payment-plans', require('./routes/payment-plans.routes'));
 
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 app.use(require('./middleware/errorHandler'));

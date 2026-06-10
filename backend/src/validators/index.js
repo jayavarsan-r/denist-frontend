@@ -137,12 +137,34 @@ const createTreatmentPlan = z.object({
   notes: optStr,
   startDate: z.string().optional().nullable(),
   expectedEndDate: z.string().optional().nullable(),
+  metadata: z.record(z.any()).optional(),
 });
 const updateTreatmentPlan = z.object({
   completedSittings: z.coerce.number().int().optional(),
   collectedAmount: z.coerce.number().optional(),
   status: z.string().optional(),
   estimatedCost: z.coerce.number().optional(),
+  notes: optStr,
+  metadata: z.record(z.any()).optional(),
+});
+
+// ── Payment plans (EMI) ───────────────────────────────────────────────────
+const EMI_FREQ = ['monthly', 'weekly', 'biweekly'];
+const createPaymentPlan = z.object({
+  patientId: uuid,
+  treatmentPlanId: uuid.optional().nullable(),
+  totalAmount: z.coerce.number().nonnegative(),
+  advancePaid: z.coerce.number().nonnegative().optional(),
+  emiAmount: z.coerce.number().positive(),
+  emiFrequency: z.enum(EMI_FREQ).optional(),
+  startDate: z.string().optional().nullable(),
+  notes: optStr,
+});
+const updatePaymentPlan = z.object({
+  emiAmount: z.coerce.number().positive().optional(),
+  emiFrequency: z.enum(EMI_FREQ).optional(),
+  nextDueDate: z.string().optional().nullable(),
+  status: z.enum(['active', 'completed', 'defaulted', 'cancelled']).optional(),
   notes: optStr,
 });
 
@@ -219,6 +241,7 @@ module.exports = {
   addToQueue, patchQueue, completeConsult,
   recordPayment,
   createTreatmentPlan, updateTreatmentPlan,
+  createPaymentPlan, updatePaymentPlan,
   updateClinic,
   createClinic, joinClinic, lookupClinic,
   updateStaff,
