@@ -26,6 +26,8 @@ const createPatient = z.object({
   medical_conditions: optStr,
   allergies: optStr,
   clinical_flags: optStr,
+  guardian_name:  optStr,
+  guardian_phone: optStr,
 });
 const updatePatient = createPatient.partial();
 

@@ -1,5 +1,7 @@
 const repos = require('../repositories');
+const supabase = require('../config/supabase');
 const { parsePagination, pageMeta } = require('../utils/pagination');
+const { clinicPrefix, formatUhid } = require('../utils/uhid');
 
 const LIST_SELECT = '*, visits(id, visit_date, procedure_name, status, follow_up_date), appointments(id, appointment_date, appointment_time, status)';
 const DETAIL_SELECT = '*, visits(*), appointments(*)';
@@ -35,12 +37,34 @@ exports.list = async (req, res, next) => {
 
 exports.create = async (req, res, next) => {
   try {
-    const { name, phone, age, gender, medical_conditions, allergies, clinical_flags } = req.body;
+    const { name, phone, age, gender, medical_conditions, allergies, clinical_flags,
+      guardian_name, guardian_phone } = req.body;
     if (!name || !phone) return res.status(400).json({ error: 'Name and phone required' });
+
+    // UHID is per-clinic sequential with a collision-safe retry against the unique
+    // (clinic_id, uhid) index added in migration 010.
+    let uhid = null;
+    if (req.clinicId) {
+      const { data: clinic } = await supabase.from('clinics').select('name, display_id').eq('id', req.clinicId).single();
+      const prefix = clinicPrefix(clinic || {});
+      const { count } = await supabase.from('patients')
+        .select('id', { count: 'exact', head: true }).eq('clinic_id', req.clinicId);
+      let seq = (count || 0) + 1;
+      for (let attempt = 0; attempt < 5 && !uhid; attempt++) {
+        const candidate = formatUhid(prefix, seq);
+        const { data, error } = await supabase.from('patients').select('id')
+          .eq('clinic_id', req.clinicId).eq('uhid', candidate).maybeSingle();
+        if (!error && !data) uhid = candidate; else seq++;
+      }
+    }
+
     const patient = await repos.patients.create({
       dentist_id: req.dentistId,
       clinic_id: req.clinicId || null,
       name, phone, age, gender, medical_conditions, allergies, clinical_flags,
+      guardian_name: guardian_name || null,
+      guardian_phone: guardian_phone || null,
+      uhid,
     });
     res.status(201).json({ patient });
   } catch (e) { next(e); }
@@ -57,7 +81,7 @@ exports.getById = async (req, res, next) => {
 exports.update = async (req, res, next) => {
   try {
     // Whitelist editable fields (validator already stripped unknowns; this is belt-and-braces).
-    const allowed = ['name', 'phone', 'age', 'gender', 'medical_conditions', 'allergies', 'clinical_flags'];
+    const allowed = ['name', 'phone', 'age', 'gender', 'medical_conditions', 'allergies', 'clinical_flags', 'guardian_name', 'guardian_phone'];
     const updates = { updated_at: new Date().toISOString() };
     for (const k of allowed) if (req.body[k] !== undefined) updates[k] = req.body[k];
 
