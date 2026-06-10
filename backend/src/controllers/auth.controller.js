@@ -35,7 +35,7 @@ exports.sendOtp = async (req, res, next) => {
   try {
     const { phone } = req.body;
     if (!phone || !/^\d{10}$/.test(phone))
-      return res.status(400).json({ error: 'Valid 10-digit phone required' });
+      return fail(res, 400, 'VALIDATION_ERROR', 'Valid 10-digit phone required');
 
     // USE_DEV_OTP=true pins all phones to DEV_OTP (local dev only)
     const useDevOtp = process.env.USE_DEV_OTP === 'true' && process.env.DEV_OTP;
@@ -48,18 +48,18 @@ exports.sendOtp = async (req, res, next) => {
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
     const { error } = await supabase.from('otp_codes').insert({ phone, code: otp, expires_at: expiresAt });
     if (error) throw error;
-    res.json({ success: true, message: 'OTP sent' });
+    return ok(res, { message: 'OTP sent' });
   } catch (e) { next(e); }
 };
 
-// ── verify OTP — extended to detect new vs returning user ─────────────────────
+// ── verify OTP ─────────────────────────────────────────────────────────────────
 exports.verifyOtp = async (req, res, next) => {
   try {
     const { phone, otp } = req.body;
     const { data: otpRecord } = await supabase.from('otp_codes')
       .select('*').eq('phone', phone).eq('code', otp).eq('used', false)
       .gt('expires_at', new Date().toISOString()).single();
-    if (!otpRecord) return res.status(400).json({ error: 'Invalid or expired OTP' });
+    if (!otpRecord) return fail(res, 400, 'VALIDATION_ERROR', 'Invalid or expired OTP');
     await supabase.from('otp_codes').update({ used: true }).eq('id', otpRecord.id);
 
     // Check if staff record exists for this phone (V3 path)
@@ -104,13 +104,12 @@ exports.verifyOtp = async (req, res, next) => {
         clinicId:  staffRow.clinic_id,
         role:      staffRow.role,
       });
-      return res.json({ token, dentist: dentist || { id: staffRow.id, phone, name: staffRow.name }, staff: staffRow, clinic, isNewUser: false });
+      return ok(res, { token, dentist: dentist || { id: staffRow.id, phone, name: staffRow.name }, staff: staffRow, clinic, isNewUser: false });
     }
 
-    // Legacy dentist check (backward compat for existing users without staff row)
+    // Legacy dentist check
     const { data: dentist } = await supabase.from('dentists').select('*').eq('phone', phone).single();
     if (dentist) {
-      // Try to find their auto-migrated staff row
       const { data: migratedStaff } = await supabase
         .from('staff').select('id, clinic_id, role').eq('dentist_id', dentist.id).single();
       if (migratedStaff) {
@@ -121,22 +120,20 @@ exports.verifyOtp = async (req, res, next) => {
           clinicId:  migratedStaff.clinic_id,
           role:      migratedStaff.role,
         });
-        return res.json({ token, dentist, staff: migratedStaff, clinic, isNewUser: false });
+        return ok(res, { token, dentist, staff: migratedStaff, clinic, isNewUser: false });
       }
-      // dentist exists but no clinic yet (migration hasn't run)
       const token = signToken({ dentistId: dentist.id });
-      return res.json({ token, dentist, isNewUser: false, needsClinic: true });
+      return ok(res, { token, dentist, isNewUser: false, needsClinic: true });
     }
 
-    // Brand new user — no dentist, no staff
-    // Create dentist row so JWT dentistId still works for legacy routes
+    // Brand new user
     const { data: newDentist } = await supabase.from('dentists').insert({ phone }).select().single();
     const token = signToken({ dentistId: newDentist.id });
-    res.json({ token, dentist: newDentist, isNewUser: true });
+    return ok(res, { token, dentist: newDentist, isNewUser: true });
   } catch (e) { next(e); }
 };
 
-// ── create clinic (new user, first-time setup) ────────────────────────────────
+// ── create clinic ──────────────────────────────────────────────────────────────
 exports.createClinic = async (req, res, next) => {
   try {
     const { clinicName, yourName, city, phone } = req.body;
@@ -157,23 +154,24 @@ exports.createClinic = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
-// ── join clinic (new user, entering join code) ────────────────────────────────
+// ── lookup clinic ──────────────────────────────────────────────────────────────
 exports.lookupClinic = async (req, res, next) => {
   try {
     const { joinCode } = req.body;
-    if (!joinCode) return res.status(400).json({ error: 'joinCode required' });
+    if (!joinCode) return fail(res, 400, 'VALIDATION_ERROR', 'joinCode required');
     const { data: clinic, error } = await supabase.from('clinics')
       .select('id, name, city, display_id').eq('join_code', joinCode.toUpperCase()).single();
-    if (error || !clinic) return res.status(404).json({ error: 'Clinic not found. Check the join code.' });
-    res.json({ clinic });
+    if (error || !clinic) return fail(res, 404, 'NOT_FOUND', 'Clinic not found. Check the join code.');
+    return ok(res, { clinic });
   } catch (e) { next(e); }
 };
 
+// ── join clinic ────────────────────────────────────────────────────────────────
 exports.joinClinic = async (req, res, next) => {
   try {
     const { joinCode, yourName, role } = req.body;
-    if (!joinCode || !yourName || !role) return res.status(400).json({ error: 'joinCode, yourName, role required' });
-    if (!['doctor', 'receptionist'].includes(role)) return res.status(400).json({ error: 'role must be doctor or receptionist' });
+    if (!joinCode || !yourName || !role) return fail(res, 400, 'VALIDATION_ERROR', 'joinCode, yourName, role required');
+    if (!['doctor', 'receptionist'].includes(role)) return fail(res, 400, 'VALIDATION_ERROR', 'role must be doctor or receptionist');
 
     // Heal the dentistId before inserting the staff row (same FK hazard as createClinic).
     const dentistId = await ensureDentistId(req, { name: yourName });
@@ -187,7 +185,8 @@ exports.joinClinic = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
-// ── getMe — extended ──────────────────────────────────────────────────────────
+// ── getMe — GET side-effect removed: join_code no longer generated here
+// ── Use POST /api/clinic/regenerate-join-code (doctor only) for that
 exports.getMe = async (req, res, next) => {
   try {
     const { data: dentist } = await supabase.from('dentists').select('*').eq('id', req.dentistId).single();
@@ -202,21 +201,25 @@ exports.getMe = async (req, res, next) => {
       // POST /api/clinic/regenerate-join-code instead.
       clinic = c;
     }
-    res.json({ dentist, staff, clinic });
+    return ok(res, { dentist, staff, clinic });
   } catch (e) { next(e); }
 };
 
-// ── updateProfile ─────────────────────────────────────────────────────────────
+// ── updateProfile ──────────────────────────────────────────────────────────────
 exports.updateProfile = async (req, res, next) => {
   try {
     const { name, clinic_name, phone } = req.body;
+    const updates = { updated_at: new Date().toISOString() };
+    if (name !== undefined) updates.name = name;
+    if (clinic_name !== undefined) updates.clinic_name = clinic_name;
+    // Note: phone update does not re-verify via OTP — user is already authenticated
+    if (phone !== undefined) updates.phone = phone;
     const { data: dentist, error } = await supabase.from('dentists')
-      .update({ name, clinic_name, phone, updated_at: new Date().toISOString() })
-      .eq('id', req.dentistId).select().single();
+      .update(updates).eq('id', req.dentistId).select().single();
     if (error) throw error;
     if (req.staffId && name) {
       await supabase.from('staff').update({ name }).eq('id', req.staffId);
     }
-    res.json({ dentist });
+    return ok(res, { dentist });
   } catch (e) { next(e); }
 };

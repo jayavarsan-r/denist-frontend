@@ -18,7 +18,7 @@ exports.list = async (req, res, next) => {
     if (to) query = query.lte('appointment_date', to);
     const { data, error } = await query;
     if (error) throw error;
-    res.json({ appointments: data });
+    return ok(res, { appointments: data });
   } catch (e) { next(e); }
 };
 
@@ -27,7 +27,7 @@ exports.today = async (req, res, next) => {
     const { data, error } = await repos.appointments.query(scopeOf(req), SELECT)
       .eq('appointment_date', today()).order('appointment_time');
     if (error) throw error;
-    res.json({ appointments: data });
+    return ok(res, { appointments: data });
   } catch (e) { next(e); }
 };
 
@@ -38,7 +38,7 @@ exports.upcoming = async (req, res, next) => {
       .gte('appointment_date', today()).lte('appointment_date', nextWeek)
       .order('appointment_date').order('appointment_time');
     if (error) throw error;
-    res.json({ appointments: data });
+    return ok(res, { appointments: data });
   } catch (e) { next(e); }
 };
 

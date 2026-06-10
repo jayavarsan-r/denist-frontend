@@ -20,6 +20,7 @@ exports.create = async (req, res, next) => {
       patient_id: patientId,
       dentist_id: req.dentistId,
       clinic_id: req.clinicId || null,
+      clinic_id: req.clinicId || null,
       procedure_name: procedureName,
       tooth_number: toothNumber,
       status: status || 'completed',

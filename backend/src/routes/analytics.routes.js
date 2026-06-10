@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const auth = require('../middleware/auth');
 const supabase = require('../config/supabase');
+const { ok } = require('../utils/response');
 
 router.get('/dashboard', auth, async (req, res, next) => {
   try {
@@ -22,7 +23,7 @@ router.get('/dashboard', auth, async (req, res, next) => {
         .limit(5),
     ]);
 
-    res.json({
+    return ok(res, {
       totalAppointmentsToday: appts?.length || 0,
       upcomingToday: appts?.filter(a => a.status === 'scheduled').length || 0,
       completedToday: visits?.length || 0,

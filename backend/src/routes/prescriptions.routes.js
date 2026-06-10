@@ -4,6 +4,7 @@ const supabase = require('../config/supabase');
 const auth = require('../middleware/auth');
 const { extractPrescription } = require('../services/ai.service');
 const { generatePrescriptionPdf } = require('../services/pdf.service');
+<<<<<<< HEAD
 const { parsePagination, pageMeta } = require('../utils/pagination');
 
 // GET /api/prescriptions — clinic-scoped list (paginated, optional ?patientId)
@@ -22,10 +23,14 @@ router.get('/', auth, async (req, res, next) => {
     res.json({ prescriptions: data || [], pagination: pageMeta({ page, limit }, count) });
   } catch (e) { next(e); }
 });
+=======
+const { ok, okCreated, fail } = require('../utils/response');
+>>>>>>> origin/main
 
 router.post('/', auth, async (req, res, next) => {
   try {
     const { patientId, visitId, visitNoteId, rawVoice, medicines, instructions } = req.body;
+    if (!patientId) return fail(res, 400, 'VALIDATION_ERROR', 'patientId required');
 
     let extractedMedicines = medicines;
     let extractedInstructions = instructions;
@@ -39,6 +44,7 @@ router.post('/', auth, async (req, res, next) => {
     }
 
     const { data, error } = await supabase.from('prescriptions').insert({
+<<<<<<< HEAD
       patient_id: patientId,
       dentist_id: req.dentistId,
       clinic_id: req.clinicId || null,
@@ -52,6 +58,37 @@ router.post('/', auth, async (req, res, next) => {
 
     if (error) throw error;
     res.status(201).json({ prescription: data });
+=======
+      patient_id:    patientId,
+      dentist_id:    req.dentistId,
+      clinic_id:     req.clinicId || null,
+      visit_id:      visitId || null,
+      visit_note_id: visitNoteId || null,
+      raw_voice:     rawVoice || null,
+      medicines:     extractedMedicines || [],
+      instructions:  extractedInstructions || null,
+      follow_up:     extractedFollowUp || null,
+    }).select(`*, patients(name, age, gender, phone)`).single();
+
+    if (error) throw error;
+    return okCreated(res, { prescription: data });
+  } catch (err) { next(err); }
+});
+
+// GET /api/prescriptions?patientId= — list prescriptions for a patient
+router.get('/', auth, async (req, res, next) => {
+  try {
+    const { patientId } = req.query;
+    if (!patientId) return fail(res, 400, 'VALIDATION_ERROR', 'patientId query param required');
+    const { data, error } = await supabase
+      .from('prescriptions')
+      .select('id, patient_id, created_at, instructions, follow_up, medicines')
+      .eq('patient_id', patientId)
+      .eq('dentist_id', req.dentistId)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return ok(res, { prescriptions: data || [] });
+>>>>>>> origin/main
   } catch (err) { next(err); }
 });
 
@@ -65,9 +102,8 @@ router.get('/:id/pdf', auth, async (req, res, next) => {
       .eq('dentist_id', req.dentistId)
       .single();
 
-    if (error || !rx) return res.status(404).json({ error: 'Prescription not found' });
+    if (error || !rx) return fail(res, 404, 'NOT_FOUND', 'Prescription not found');
 
-    // Fetch staff + clinic info for doctor header (only if staffId is available)
     let staff = null;
     if (req.staffId) {
       const { data: staffData } = await supabase
@@ -111,8 +147,8 @@ router.get('/:id', auth, async (req, res, next) => {
       .eq('dentist_id', req.dentistId)
       .single();
 
-    if (error || !data) return res.status(404).json({ error: 'Prescription not found' });
-    res.json({ prescription: data });
+    if (error || !data) return fail(res, 404, 'NOT_FOUND', 'Prescription not found');
+    return ok(res, { prescription: data });
   } catch (err) { next(err); }
 });
 

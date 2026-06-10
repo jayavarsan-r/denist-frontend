@@ -53,7 +53,13 @@ apiClient.interceptors.response.use(
     return response;
   },
   (error) => {
-    if (error.response && error.response.status === 401) {
+    const res = error.response;
+    // Standardize error message from new { success: false, error: { code, message } } shape
+    if (res?.data?.error?.message) {
+      error.message = res.data.error.message;
+      error.code = res.data.error.code;
+    }
+    if (res?.status === 401) {
       clearToken();
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('dentai:auth-expired'));

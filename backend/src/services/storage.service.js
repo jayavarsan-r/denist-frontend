@@ -2,6 +2,31 @@ const supabase = require('../config/supabase');
 const fs = require('fs');
 const path = require('path');
 
+function detectContentType(localPath, bucket) {
+  const ext = path.extname(localPath).toLowerCase();
+  if (bucket === 'voice-notes') {
+    const map = {
+      '.webm': 'audio/webm',
+      '.ogg': 'audio/ogg',
+      '.mp4': 'audio/mp4',
+      '.m4a': 'audio/mp4',
+      '.wav': 'audio/wav',
+      '.mp3': 'audio/mpeg',
+      '.flac': 'audio/flac',
+    };
+    return map[ext] || 'audio/ogg';
+  }
+  const map = {
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.webp': 'image/webp',
+    '.pdf': 'application/pdf',
+    '.dcm': 'application/dicom',
+  };
+  return map[ext] || 'image/jpeg';
+}
+
 async function uploadFile(localPath, bucket, storagePath) {
   // Stream the file instead of buffering the whole thing in memory (avoids OOM
   // under concurrent large uploads). storage-js auto-sets duplex:'half' for streams.
