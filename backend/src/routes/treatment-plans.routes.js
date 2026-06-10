@@ -14,6 +14,7 @@ router.post('/', auth, validate(v.createTreatmentPlan), async (req, res, next) =
     const plan = await transaction.createTreatmentPlan({
       clinicId: req.clinicId, dentistId: req.dentistId, staffId: req.staffId, requestId: req.id,
       patientId, diagnosis, procedureName, totalSittings, estimatedCost, notes, startDate, expectedEndDate,
+      metadata: req.body.metadata,
     });
     res.status(201).json({ plan });
   } catch (err) { next(err); }
@@ -37,6 +38,7 @@ router.patch('/:id', auth, validate(v.updateTreatmentPlan), async (req, res, nex
     if (req.body.status) updates.status = req.body.status;
     if (req.body.estimatedCost !== undefined) updates.estimated_cost = parseFloat(req.body.estimatedCost);
     if (req.body.notes) updates.notes = req.body.notes;
+    if (req.body.metadata !== undefined) updates.metadata = req.body.metadata;
 
     // Recalculate pending_amount when cost or collected changes (audit rec #4).
     if (updates.estimated_cost !== undefined || updates.collected_amount !== undefined) {

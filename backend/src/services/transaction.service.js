@@ -206,7 +206,7 @@ async function recordPayment(ctx) {
 // ── createTreatmentPlan ───────────────────────────────────────────────────
 async function createTreatmentPlan(ctx) {
   const { clinicId, dentistId, staffId, requestId, patientId, diagnosis, procedureName,
-    totalSittings, estimatedCost, notes, startDate, expectedEndDate } = ctx;
+    totalSittings, estimatedCost, notes, startDate, expectedEndDate, metadata } = ctx;
   const plan = await repos.treatmentPlans.create({
     patient_id: patientId, dentist_id: dentistId, clinic_id: clinicId || null,
     diagnosis: diagnosis || null, procedure_name: procedureName,
@@ -214,6 +214,7 @@ async function createTreatmentPlan(ctx) {
     estimated_cost: estimatedCost ? parseFloat(estimatedCost) : 0, collected_amount: 0,
     notes: notes || null, start_date: startDate || new Date().toISOString().split('T')[0],
     expected_end_date: expectedEndDate || null,
+    metadata: metadata || {},
   });
   audit.log({ clinicId, staffId, requestId, action: 'CREATE', entityType: 'treatment_plan', entityId: plan.id });
   return plan;
