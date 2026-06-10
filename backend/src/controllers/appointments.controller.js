@@ -90,6 +90,44 @@ exports.create = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
+exports.createRecurring = async (req, res, next) => {
+  try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
+    const { patientId, startDate, intervalDays, count, purpose, appointmentTime, durationMinutes, allowDoubleBook } = req.body;
+    const dur = durationMinutes || 30;
+    const dates = require('../utils/recurrence').buildSchedule(startDate, intervalDays, count);
+
+    let existing = [];
+    if (appointmentTime && !allowDoubleBook) {
+      const { data, error } = await supabase.from('appointments')
+        .select('appointment_date, appointment_time, duration_minutes')
+        .eq('clinic_id', req.clinicId).in('appointment_date', dates).neq('status', 'cancelled');
+      if (error) throw error;
+      existing = data || [];
+    }
+
+    const created = [], skipped = [];
+    for (const date of dates) {
+      if (appointmentTime && !allowDoubleBook) {
+        const clash = existing.find(a => a.appointment_date === date &&
+          overlaps(appointmentTime, dur, a.appointment_time, a.duration_minutes || 30));
+        if (clash) { skipped.push({ date, reason: 'conflict' }); continue; }
+      }
+      const base = {
+        patient_id: patientId, dentist_id: req.dentistId, clinic_id: req.clinicId,
+        appointment_date: date, appointment_time: appointmentTime || null,
+        purpose: purpose || 'Recurring visit', status: 'scheduled',
+      };
+      let row;
+      try { row = await repos.appointments.create({ ...base, duration_minutes: dur }); }
+      catch { row = await repos.appointments.create(base); }
+      created.push(row);
+      if (appointmentTime) existing.push({ appointment_date: date, appointment_time: appointmentTime, duration_minutes: dur });
+    }
+    res.status(201).json({ created, skipped });
+  } catch (e) { next(e); }
+};
+
 exports.update = async (req, res, next) => {
   try {
     const fieldMap = {

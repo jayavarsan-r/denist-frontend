@@ -10,6 +10,7 @@ router.get('/upcoming', ctrl.upcoming);
 router.get('/booked-slots', ctrl.bookedSlots);
 router.get('/', ctrl.list);
 router.post('/', validate(v.createAppointment), ctrl.create);
+router.post('/recurring', validate(v.recurringAppointments), ctrl.createRecurring);
 router.put('/:id', validate(v.updateAppointment), ctrl.update);
 
 module.exports = router;

@@ -55,6 +55,16 @@ const updateAppointment = z.object({
   status: z.enum(APPOINTMENT_STATUS).optional(),
   notes: optStr,
 });
+const recurringAppointments = z.object({
+  patientId: uuid,
+  startDate: z.string().min(1),
+  intervalDays: z.coerce.number().int().positive(),
+  count: z.coerce.number().int().min(1).max(60),
+  purpose: optStr,
+  appointmentTime: z.string().optional().nullable(),
+  durationMinutes: z.coerce.number().int().positive().optional().nullable(),
+  allowDoubleBook: z.coerce.boolean().optional(),
+});
 
 // ── Visits ────────────────────────────────────────────────────────────────
 const createVisit = z.object({
@@ -204,7 +214,7 @@ const updateStaff = z.object({
 
 module.exports = {
   createPatient, updatePatient,
-  createAppointment, updateAppointment,
+  createAppointment, updateAppointment, recurringAppointments,
   createVisit, updateVisit,
   addToQueue, patchQueue, completeConsult,
   recordPayment,
