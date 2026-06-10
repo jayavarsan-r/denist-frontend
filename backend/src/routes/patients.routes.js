@@ -147,7 +147,7 @@ router.get('/:id/tooth-history', async (req, res, next) => {
 });
 
 // GET /api/patients/:id/tooth-chart — current per-tooth status
-router.get('/:id/tooth-chart', auth, async (req, res, next) => {
+router.get('/:id/tooth-chart', async (req, res, next) => {
   try {
     if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
     const { data, error } = await supabase.from('tooth_chart')
@@ -162,7 +162,7 @@ router.get('/:id/tooth-chart', auth, async (req, res, next) => {
 });
 
 // PUT /api/patients/:id/tooth-chart/:toothNumber — upsert status for one tooth
-router.put('/:id/tooth-chart/:toothNumber', auth, validate(v.toothChartUpsert), async (req, res, next) => {
+router.put('/:id/tooth-chart/:toothNumber', validate(v.toothChartUpsert), async (req, res, next) => {
   try {
     if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
     const { conditions, surfaces, notes } = req.body;
