@@ -21,9 +21,11 @@ describe('validators', () => {
     expect(v.addToQueue.safeParse({ patientId: 'not-a-uuid' }).success).toBe(false);
   });
 
-  test('completeConsult: patientId optional, procedure must be non-empty when present', () => {
-    expect(v.completeConsult.safeParse({ procedure: 'RCT' }).success).toBe(true); // no patientId now OK
-    expect(v.completeConsult.safeParse({ patientId: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', procedure: '' }).success).toBe(false);
+  test('completeConsult: patientId and procedure are both optional (doctor can always finish)', () => {
+    expect(v.completeConsult.safeParse({ procedure: 'RCT' }).success).toBe(true);
+    expect(v.completeConsult.safeParse({}).success).toBe(true);              // nothing required
+    expect(v.completeConsult.safeParse({ procedure: '' }).success).toBe(true); // empty allowed → transaction defaults to 'Consultation'
+    expect(v.completeConsult.safeParse({ patientId: 'not-a-uuid' }).success).toBe(false); // but a provided patientId must be a real uuid
   });
 
   test('gender is case-insensitive and trimmed', () => {
