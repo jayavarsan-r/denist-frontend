@@ -40,6 +40,7 @@ const createAppointment = z.object({
   purpose: optStr,
   toothNumber: optStr,
   durationMinutes: z.coerce.number().int().positive().optional().nullable(),
+  allowDoubleBook: z.coerce.boolean().optional(),
 });
 const updateAppointment = z.object({
   appointmentDate: z.string().optional(),

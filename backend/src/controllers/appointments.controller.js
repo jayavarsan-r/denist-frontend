@@ -1,4 +1,7 @@
 const repos = require('../repositories');
+const supabase = require('../config/supabase');
+const { overlaps } = require('../utils/slot-overlap');
+const { conflict } = require('../utils/errors');
 
 const SELECT = '*, patients(id, name, phone)';
 const scopeOf = (req) => ({ clinicId: req.clinicId, dentistId: req.dentistId });
@@ -52,20 +55,33 @@ exports.bookedSlots = async (req, res, next) => {
 
 exports.create = async (req, res, next) => {
   try {
-    const { patientId, appointmentDate, appointmentTime, purpose, toothNumber, durationMinutes } = req.body;
+    const { patientId, appointmentDate, appointmentTime, purpose, toothNumber, durationMinutes, allowDoubleBook } = req.body;
+    const dur = durationMinutes || 30;
+
+    // Conflict detection: same clinic + date, overlapping [time, time+duration).
+    // Date-only suggestions (no time) never conflict. `allowDoubleBook` bypasses.
+    if (appointmentTime && !allowDoubleBook && req.clinicId) {
+      const { data: sameDay } = await supabase.from('appointments')
+        .select('id, appointment_time, duration_minutes, purpose, patients(name)')
+        .eq('clinic_id', req.clinicId).eq('appointment_date', appointmentDate)
+        .neq('status', 'cancelled');
+      const clash = (sameDay || []).find(a => overlaps(appointmentTime, dur, a.appointment_time, a.duration_minutes || 30));
+      if (clash) {
+        throw conflict('Time slot already booked', {
+          id: clash.id, time: clash.appointment_time, purpose: clash.purpose,
+          patientName: clash.patients?.name || null,
+        });
+      }
+    }
+
     const base = {
-      patient_id: patientId,
-      dentist_id: req.dentistId,
-      clinic_id: req.clinicId || null,
-      appointment_date: appointmentDate,
-      appointment_time: appointmentTime,
-      purpose,
-      tooth_number: toothNumber || null,
+      patient_id: patientId, dentist_id: req.dentistId, clinic_id: req.clinicId || null,
+      appointment_date: appointmentDate, appointment_time: appointmentTime,
+      purpose, tooth_number: toothNumber || null,
     };
     let appointment;
     try {
-      // Prefer storing duration; fall back if migration 008 (duration_minutes) isn't applied yet.
-      appointment = await repos.appointments.create({ ...base, duration_minutes: durationMinutes || 30 });
+      appointment = await repos.appointments.create({ ...base, duration_minutes: dur });
     } catch (e) {
       appointment = await repos.appointments.create(base);
     }
