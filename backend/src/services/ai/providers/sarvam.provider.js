@@ -101,35 +101,26 @@ function guessType(opts) {
   return { filename: `recording.${ext}`, contentType };
 }
 
-// transcribe(filePath, { originalname, mimetype }) → { transcript, raw }
-async function transcribe(filePath, opts = {}) {
-  const duration = await probeDuration(filePath);
-
-  // Short clip (or duration unknown) → transcode to WAV then a single real-time call.
-  // If ffmpeg/transcode fails, fall back to sending the original with a guessed type.
-  if (!duration || duration <= MAX_SECONDS) {
-    let wav = null;
-    try {
-      wav = await toWav(filePath);
-      const transcript = await callSarvam(wav, 'recording.wav', 'audio/wav');
-      return { transcript, raw: { duration, transcoded: true } };
-    } catch (e) {
-      const { filename, contentType } = guessType(opts);
-      const transcript = await callSarvam(filePath, filename, contentType);
-      return { transcript, raw: { duration, transcoded: false } };
-    } finally {
-      if (wav) { try { fs.unlinkSync(wav); } catch {} }
-    }
-  }
-
-  // Long clip → segment into WAV chunks, transcribe sequentially, join.
-  let split;
+// Single real-time call: transcode to WAV (Sarvam doesn't decode webm/opus
+// reliably) then send. If transcode fails, send the original with a guessed type.
+async function singleShot(filePath, opts, duration) {
+  let wav = null;
   try {
-    split = await splitAudio(filePath, CHUNK_SECONDS);
+    wav = await toWav(filePath);
+    const transcript = await callSarvam(wav, 'recording.wav', 'audio/wav');
+    return { transcript, raw: { duration, transcoded: true } };
   } catch (e) {
-    throw new AppError('AI_UNAVAILABLE',
-      `Recording is longer than 30s and could not be segmented (${e.message}). Ensure ffmpeg is installed.`);
+    const { filename, contentType } = guessType(opts);
+    const transcript = await callSarvam(filePath, filename, contentType);
+    return { transcript, raw: { duration, transcoded: false } };
+  } finally {
+    if (wav) { try { fs.unlinkSync(wav); } catch {} }
   }
+}
+
+// Segment into <=CHUNK_SECONDS WAV chunks, transcribe sequentially, join.
+async function segmentAndJoin(filePath, duration) {
+  const split = await splitAudio(filePath, CHUNK_SECONDS);
   try {
     const parts = [];
     for (const chunk of split.files) {
@@ -140,6 +131,27 @@ async function transcribe(filePath, opts = {}) {
     return { transcript, raw: { duration, chunks: split.files.length } };
   } finally {
     try { fs.rmSync(split.dir, { recursive: true, force: true }); } catch {}
+  }
+}
+
+// transcribe(filePath, { originalname, mimetype }) → { transcript, raw }
+async function transcribe(filePath, opts = {}) {
+  const duration = await probeDuration(filePath);
+
+  // Only audio we can PROVE is short skips segmentation. Browser MediaRecorder
+  // webm/opus blobs carry no duration metadata, so probeDuration returns null —
+  // and a long such recording would otherwise hit Sarvam's 30s limit as a single
+  // shot. Treat unknown duration as "might be long" and segment it (a short clip
+  // simply yields one chunk). Fall back to a single shot only if segmenting fails
+  // (e.g. ffmpeg unavailable), preserving the original best-effort behaviour.
+  if (duration != null && duration <= MAX_SECONDS) {
+    return singleShot(filePath, opts, duration);
+  }
+
+  try {
+    return await segmentAndJoin(filePath, duration);
+  } catch (e) {
+    return singleShot(filePath, opts, duration);
   }
 }
 
