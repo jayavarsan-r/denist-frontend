@@ -8,6 +8,8 @@ const supabase = require('../config/supabase');
 const repos = require('./../repositories');
 const aiService = require('./ai/ai.service');
 const audit = require('./audit.service');
+const { outstandingFor, isOverpayment } = require('../utils/payment-math');
+const { badRequest } = require('../utils/errors');
 
 function makeJoinCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -155,6 +157,19 @@ async function completeConsultation(ctx) {
 async function recordPayment(ctx) {
   const { clinicId, staffId, requestId, patientId, treatmentPlanId, queueEntryId,
     amount, paymentMethod, notes, paymentDate } = ctx;
+
+  // Overpayment guard: when tied to a plan, a payment may not exceed the outstanding
+  // balance. Ad-hoc payments (no plan) are unguarded — there is nothing to exceed.
+  if (treatmentPlanId) {
+    const { data: planRow } = await supabase.from('treatment_plans')
+      .select('estimated_cost, collected_amount').eq('id', treatmentPlanId).single();
+    if (planRow) {
+      const outstanding = outstandingFor(planRow);
+      if (isOverpayment(amount, outstanding)) {
+        throw badRequest('Payment exceeds the outstanding balance', { outstanding, attempted: parseFloat(amount) });
+      }
+    }
+  }
 
   const payment = await repos.payments.create({
     clinic_id: clinicId || null, patient_id: patientId,
