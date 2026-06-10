@@ -31,7 +31,8 @@ router.post('/prescription/:prescriptionId', auth, async (req, res, next) => {
   try {
     if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
     const { data: rx } = await supabase.from('prescriptions')
-      .select('*, patients(name, phone)').eq('id', req.params.prescriptionId).maybeSingle();
+      .select('*, patients(name, phone)').eq('id', req.params.prescriptionId)
+      .or(`clinic_id.eq.${req.clinicId},dentist_id.eq.${req.dentistId}`).maybeSingle();
     if (!rx) return res.status(404).json({ error: 'Prescription not found' });
     const body = msg.buildPrescriptionMessage(rx.patients, rx.medicines || []);
     const notification = await notify({ ...ctx(req), patientId: rx.patient_id, type: 'prescription',
@@ -62,7 +63,7 @@ router.post('/payment-due', auth, validate(v.notifyPaymentDue), async (req, res,
     const { data: p } = await supabase.from('patients').select('name, phone').eq('id', patientId).eq('clinic_id', req.clinicId).maybeSingle();
     let amount = 0;
     if (treatmentPlanId) {
-      const { data: plan } = await supabase.from('treatment_plans').select('estimated_cost, collected_amount').eq('id', treatmentPlanId).maybeSingle();
+      const { data: plan } = await supabase.from('treatment_plans').select('estimated_cost, collected_amount').eq('id', treatmentPlanId).eq('clinic_id', req.clinicId).maybeSingle();
       if (plan) amount = outstandingFor(plan);
     } else {
       const { data: plans } = await supabase.from('treatment_plans').select('estimated_cost, collected_amount').eq('patient_id', patientId).eq('status', 'active');
