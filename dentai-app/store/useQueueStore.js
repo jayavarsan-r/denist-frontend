@@ -59,6 +59,29 @@ export const useQueueStore = create((set, get) => ({
     }
   },
 
+  /* ─── Swap a different waiting patient into the chair ───
+     Doctor-first: while one patient is in_consultation, tapping another
+     waiting patient calls THEM in and returns the current one to 'waiting'.
+     The current patient's consult draft is keyed by entry id in
+     useConsultStore, so it survives untouched — no work is lost. */
+  swapIn: async (id) => {
+    const current = get().queue.find((e) => e.status === 'in_consultation');
+    if (current && current.id === id) return; // already in the chair
+    set((s) => ({
+      queue: s.queue.map((e) => {
+        if (current && e.id === current.id) return { ...e, status: 'waiting', calledInAt: null };
+        if (e.id === id) return { ...e, status: 'in_consultation', calledInAt: nowTime() };
+        return e;
+      }),
+    }));
+    try {
+      if (current) await updateQueueEntry(current.id, { status: 'waiting' });
+      await updateQueueEntry(id, { status: 'in_consultation' });
+    } catch {
+      get().loadQueue(); // revert on error
+    }
+  },
+
   /* ─── Complete consult ─── */
   completeConsult: async (id, consult) => {
     const entry = get().queue.find(e => e.id === id);
