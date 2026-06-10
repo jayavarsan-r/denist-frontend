@@ -103,6 +103,18 @@ router.get('/:id/tooth-history', async (req, res, next) => {
       entry.overallStatus = hasCompleted && hasPending ? 'treated_pending' : hasPending ? 'pending' : 'treated';
     });
 
+    // Merge current per-tooth status from tooth_chart (additive; never overwrites history).
+    // tooth_chart is purely clinic-scoped (no dentist_id), so it's keyed on clinic_id/patient_id
+    // only; skip for legacy dentist-only callers (no clinicId) so we never send clinic_id=undefined.
+    if (req.clinicId) {
+      const { data: chartRows } = await supabase.from('tooth_chart')
+        .select('tooth_number, conditions').eq('clinic_id', req.clinicId).eq('patient_id', id);
+      const chartByTooth = new Map((chartRows || []).map(r => [r.tooth_number, r.conditions || []]));
+      toothMap.forEach((entry, tn) => { entry.currentConditions = chartByTooth.get(tn) || []; });
+    } else {
+      toothMap.forEach((entry) => { entry.currentConditions = []; });
+    }
+
     const totalBilled = visits.reduce((s, v) => s + (v.cost != null ? parseFloat(v.cost) : 0), 0);
     const totalCollected = payments.reduce((s, p) => s + (p.amount != null ? parseFloat(p.amount) : 0), 0);
     const totalPlanned = plans.reduce((s, p) => s + (p.estimated_cost != null ? parseFloat(p.estimated_cost) : 0), 0);
@@ -131,6 +143,36 @@ router.get('/:id/tooth-history', async (req, res, next) => {
       })),
       summary: { totalBilled, totalCollected, totalPlanned, pendingAmount: Math.max(0, totalPlanned - totalCollected) },
     });
+  } catch (e) { next(e); }
+});
+
+// GET /api/patients/:id/tooth-chart — current per-tooth status
+router.get('/:id/tooth-chart', auth, async (req, res, next) => {
+  try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
+    const { data, error } = await supabase.from('tooth_chart')
+      .select('tooth_number, conditions, surfaces, notes, updated_at')
+      .eq('clinic_id', req.clinicId).eq('patient_id', req.params.id);
+    if (error) throw error;
+    res.json({ chart: (data || []).map(r => ({
+      toothNumber: r.tooth_number, conditions: r.conditions || [], surfaces: r.surfaces || null,
+      notes: r.notes || '', updatedAt: r.updated_at,
+    })) });
+  } catch (e) { next(e); }
+});
+
+// PUT /api/patients/:id/tooth-chart/:toothNumber — upsert status for one tooth
+router.put('/:id/tooth-chart/:toothNumber', auth, validate(v.toothChartUpsert), async (req, res, next) => {
+  try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
+    const { conditions, surfaces, notes } = req.body;
+    const { data, error } = await supabase.from('tooth_chart').upsert({
+      clinic_id: req.clinicId, patient_id: req.params.id, tooth_number: req.params.toothNumber,
+      conditions, surfaces: surfaces || null, notes: notes || null,
+      updated_by: req.staffId || null, updated_at: new Date().toISOString(),
+    }, { onConflict: 'clinic_id,patient_id,tooth_number' }).select().single();
+    if (error) throw error;
+    res.json({ tooth: { toothNumber: data.tooth_number, conditions: data.conditions, surfaces: data.surfaces, notes: data.notes } });
   } catch (e) { next(e); }
 });
 

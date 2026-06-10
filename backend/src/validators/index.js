@@ -227,6 +227,15 @@ const updateLabOrder = z.object({
   notes: optStr,
 });
 
+// ── Tooth chart ───────────────────────────────────────────────────────────
+const TOOTH_CONDITIONS = ['healthy','caries','infection','rct_initiated','rct_completed',
+  'temporary_restoration','permanent_restoration','crown','missing','implant','extraction_advised','mobility'];
+const toothChartUpsert = z.object({
+  conditions: z.array(z.enum(TOOTH_CONDITIONS)).default([]),
+  surfaces: z.any().optional(),
+  notes: optStr,
+});
+
 // ── Staff ─────────────────────────────────────────────────────────────────
 const updateStaff = z.object({
   name: z.string().trim().min(1).optional(),
@@ -259,5 +268,6 @@ module.exports = {
   updateStaff,
   createLabOrder, updateLabOrder,
   sendNotification, notifyReminder, notifyPaymentDue, notifyRecall,
+  toothChartUpsert, TOOTH_CONDITIONS,
   APPOINTMENT_STATUS, LAB_STATUS,
 };
