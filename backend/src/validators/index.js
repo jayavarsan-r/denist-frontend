@@ -234,6 +234,18 @@ const updateStaff = z.object({
   status: z.enum(['active', 'inactive']).optional(),
 });
 
+// ── Notifications ─────────────────────────────────────────────────────────
+const sendNotification = z.object({
+  patientId: uuid.optional().nullable(),
+  type: z.enum(['prescription', 'appointment_reminder', 'payment_due', 'recall', 'custom']),
+  channel: z.enum(['whatsapp', 'sms', 'email']).optional(),
+  body: optStr,
+  payload: z.any().optional(),
+});
+const notifyReminder   = z.object({ appointmentId: uuid });
+const notifyPaymentDue = z.object({ patientId: uuid, treatmentPlanId: uuid.optional().nullable() });
+const notifyRecall     = z.object({ patientId: uuid, dueDate: z.string().min(1), reason: optStr });
+
 module.exports = {
   createPatient, updatePatient,
   createAppointment, updateAppointment, recurringAppointments,
@@ -246,5 +258,6 @@ module.exports = {
   createClinic, joinClinic, lookupClinic,
   updateStaff,
   createLabOrder, updateLabOrder,
+  sendNotification, notifyReminder, notifyPaymentDue, notifyRecall,
   APPOINTMENT_STATUS, LAB_STATUS,
 };
