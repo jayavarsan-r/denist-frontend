@@ -1,9 +1,11 @@
 'use client';
+import { useState } from 'react';
 import { usePatientStore } from '@/store/usePatientStore';
 import { useVisitStore } from '@/store/useVisitStore';
 import Icon from '@/components/icons';
 import { SheetHeader, SectionHeader } from '@/components/ui';
 import { formatDate } from '@/lib/data/utils';
+import BeforeAfterCapture from '@/components/sheets/BeforeAfterCapture';
 
 function Row({ label, value }) {
   if (!value) return null;
@@ -49,6 +51,7 @@ export default function VisitRecordSheet({ params, onClose }) {
 
   const p = patients.find(x => x.id === record.patientId);
   const isConsult = record.type === 'consultation';
+  const [showTranscript, setShowTranscript] = useState(false);
 
   return (
     <div style={{ padding: '0 20px 36px' }}>
@@ -84,14 +87,24 @@ export default function VisitRecordSheet({ params, onClose }) {
         <Row label="Status" value={record.status ? record.status.replace(/_/g, ' ') : null} />
       </div>
 
+      {/* Before / After for this case */}
+      {isConsult && record.id && <BeforeAfterCapture patientId={record.patientId} visitId={record.id} />}
+
       <MedsList meds={record.medications} />
 
+      {/* The structured details above are the overview. The raw (often Tamil) transcript
+          is secondary — collapsed by default so it doesn't replace the summary. */}
       {record.rawTranscript && (
         <div style={{ marginBottom: 16 }}>
-          <SectionHeader>Transcript</SectionHeader>
-          <div className="card" style={{ padding: '12px 14px' }}>
-            <p style={{ fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.55, margin: 0 }}>{record.rawTranscript}</p>
-          </div>
+          <button onClick={() => setShowTranscript(s => !s)} style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-tertiary)', fontSize: 13, fontWeight: 600 }}>
+            <Icon name={showTranscript ? 'chevDown' : 'chevRight'} size={14} color="var(--text-tertiary)" />
+            {showTranscript ? 'Hide original transcript' : 'Show original transcript'}
+          </button>
+          {showTranscript && (
+            <div className="card" style={{ padding: '12px 14px', marginTop: 8 }}>
+              <p style={{ fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.55, margin: 0 }}>{record.rawTranscript}</p>
+            </div>
+          )}
         </div>
       )}
     </div>

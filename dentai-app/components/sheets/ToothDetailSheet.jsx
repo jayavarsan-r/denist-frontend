@@ -5,16 +5,50 @@ import { usePatientStore } from '@/store/usePatientStore';
 import { SheetHeader, SectionHeader, PrimaryButton, Field } from '@/components/ui';
 import { TOOTH_STATE_STYLE } from '@/lib/data/procedures';
 import { formatDate } from '@/lib/data/utils';
+import { createVisit } from '@/lib/services/visit.service';
 
 const TOOTH_STATES = ['healthy', 'filling', 'rct', 'crown', 'implant', 'extraction', 'infection', 'scheduled'];
 const TOOTH_STATE_LABEL = { healthy: 'Healthy', filling: 'Filling', rct: 'Root canal', crown: 'Crown', implant: 'Implant', extraction: 'Extraction', infection: 'Infection', scheduled: 'Scheduled' };
+// Tooth state is derived from visits, so charting a tooth records a visit with that
+// procedure. 'healthy' has nothing to record (it's a reset) and 'scheduled' is a plan.
+const STATE_TO_PROCEDURE = { filling: 'Filling', rct: 'Root Canal Treatment', crown: 'Crown', implant: 'Implant', extraction: 'Extraction', infection: 'Infection management', scheduled: 'Scheduled treatment' };
 
 export default function ToothDetailSheet({ params, onClose }) {
   const showToast = useAppStore((s) => s.showToast);
+  const refreshPatientData = useAppStore((s) => s.refreshPatientData);
   const updateToothState = usePatientStore((s) => s.updateToothState);
   const [state, setState] = useState(params.state || 'healthy');
   const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
   const toothData = params.toothData || null;
+
+  const save = async () => {
+    setSaving(true);
+    // Optimistic tint for instant feedback (reconciled by tooth-history refetch).
+    updateToothState(params.patientId, params.tooth, state);
+    try {
+      // Persist by recording a visit on this tooth — the tooth map reads tooth_number
+      // from visits, so this is what makes a manual chart edit stick. ALSO record when
+      // there are findings/notes even if the state is left 'healthy' (the doctor is just
+      // documenting), otherwise those findings would be silently dropped.
+      const treated = state && state !== 'healthy';
+      if (treated || notes.trim()) {
+        await createVisit({
+          patientId: params.patientId,
+          procedureName: treated ? (STATE_TO_PROCEDURE[state] || 'Charting') : 'Examination',
+          toothNumber: String(params.tooth),
+          notes: notes.trim() || `Charted ${TOOTH_STATE_LABEL[state]} · tooth ${params.tooth}`,
+          status: state === 'scheduled' ? 'planned' : 'completed',
+        });
+      }
+      refreshPatientData();
+      showToast(`Tooth ${params.tooth} updated`);
+      onClose();
+    } catch (e) {
+      showToast('Could not save — try again');
+      setSaving(false);
+    }
+  };
 
   return (
     <div style={{ padding: '0 20px 28px' }}>
@@ -94,7 +128,7 @@ export default function ToothDetailSheet({ params, onClose }) {
       )}
 
       <div style={{ height: 22 }} />
-      <PrimaryButton onClick={() => { updateToothState(params.patientId, params.tooth, state); showToast(`Tooth ${params.tooth} updated`); onClose(); }}>Save</PrimaryButton>
+      <PrimaryButton onClick={save} style={{ opacity: saving ? 0.6 : 1 }}>{saving ? 'Saving…' : 'Save'}</PrimaryButton>
     </div>
   );
 }

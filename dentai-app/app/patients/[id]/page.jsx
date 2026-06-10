@@ -1,9 +1,9 @@
 import PatientProfileClient from './PatientProfileClient';
 
-// generateStaticParams returns [] — patient IDs come from the API at runtime.
-// For Capacitor production builds (NEXT_EXPORT=1), use the real patient list.
+// output: export requires >=1 param. Real patient IDs are resolved
+// client-side by the router at runtime in the Capacitor app.
 export function generateStaticParams() {
-  return [];
+  return [{ id: 'placeholder' }];
 }
 
 export default async function PatientProfilePage({ params }) {

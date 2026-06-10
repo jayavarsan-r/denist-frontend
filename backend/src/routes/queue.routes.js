@@ -228,7 +228,10 @@ router.get('/:id/checkout-summary', auth, async (req, res, next) => {
     const [teethRows, prescRows, appts] = await Promise.all([
       planId ? safe(supabase.from('treatment_teeth').select('tooth_number').eq('treatment_plan_id', planId)) : Promise.resolve([]),
       safe(supabase.from('prescriptions').select('*').eq('queue_entry_id', id).order('created_at', { ascending: false })),
-      safe(supabase.from('appointments').select('*').eq('patient_id', entry.patient_id).eq('dentist_id', req.dentistId).gte('appointment_date', today).neq('status', 'cancelled').order('appointment_date')),
+      // Clinic-scoped, NOT dentist-scoped: appointments are created with the doctor's
+      // dentist_id, so a receptionist viewing checkout must match on clinic to see them
+      // (otherwise "0 future visits" even when sittings were scheduled).
+      safe(supabase.from('appointments').select('*').eq('patient_id', entry.patient_id).eq('clinic_id', req.clinicId).gte('appointment_date', today).neq('status', 'cancelled').order('appointment_date')),
     ]);
 
     const teeth = [...new Set(teethRows.map(t => t.tooth_number).filter(Boolean))];

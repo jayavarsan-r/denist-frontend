@@ -27,11 +27,14 @@ export async function getPatientXrays(patientId) {
   return data;
 }
 
-export async function uploadPatientPhoto(file, patientId, photoType) {
+// `visitId` links a before/after photo to a specific case (visit) so Media can group
+// them case-wise.
+export async function uploadPatientPhoto(file, patientId, photoType, visitId) {
   const formData = new FormData();
   formData.append('file', file);
   formData.append('patientId', patientId);
   formData.append('xrayType', photoType);
+  if (visitId) formData.append('visitId', visitId);
   const { data } = await apiClient.post('/api/xrays', formData);
   return data;
 }

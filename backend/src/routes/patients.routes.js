@@ -4,6 +4,18 @@ const auth = require('../middleware/auth');
 const supabase = require('../config/supabase');
 const validate = require('../middleware/validate');
 const v = require('../validators');
+const { getSignedUrl } = require('../services/storage.service');
+
+// A patient is clinic-scoped, so anyone who can see the patient can see their data.
+// Returns the patient row if the caller's clinic (or legacy dentist) owns it, else null.
+async function patientInScope(patientId, req) {
+  const { data } = await supabase.from('patients')
+    .select('id, clinic_id, dentist_id').eq('id', patientId).maybeSingle();
+  if (!data) return null;
+  if (req.clinicId && data.clinic_id === req.clinicId) return data;
+  if (data.dentist_id === req.dentistId) return data;
+  return null;
+}
 
 router.use(auth);
 router.get('/', ctrl.list);
@@ -17,13 +29,16 @@ router.get('/:id/tooth-history', async (req, res, next) => {
     // Each source is independent and non-fatal: a missing table (e.g. treatment_teeth
     // before migration 007) must not break the whole history view.
     const safe = async (p) => { try { const { data } = await p; return data || []; } catch { return []; } };
+    // Clinic-scoped so a patient's full history is visible to every staff member in the
+    // clinic (doctor + receptionist), not just the dentist_id that created each row.
+    const scope = (q) => (req.clinicId ? q.or(`clinic_id.eq.${req.clinicId},dentist_id.eq.${req.dentistId}`) : q.eq('dentist_id', req.dentistId));
 
     const [visits, appointments, links, labOrders, plans, payments] = await Promise.all([
-      safe(supabase.from('visits').select('*').eq('patient_id', id).eq('dentist_id', req.dentistId).order('visit_date', { ascending: false })),
-      safe(supabase.from('appointments').select('*').eq('patient_id', id).eq('dentist_id', req.dentistId).gte('appointment_date', today).neq('status', 'cancelled').order('appointment_date')),
+      safe(scope(supabase.from('visits').select('*').eq('patient_id', id)).order('visit_date', { ascending: false })),
+      safe(scope(supabase.from('appointments').select('*').eq('patient_id', id)).gte('appointment_date', today).neq('status', 'cancelled').order('appointment_date')),
       safe(supabase.from('treatment_teeth').select('*').eq('patient_id', id)),
-      safe(supabase.from('lab_orders').select('*').eq('patient_id', id).eq('dentist_id', req.dentistId).is('deleted_at', null).order('created_at', { ascending: false })),
-      safe(supabase.from('treatment_plans').select('*').eq('patient_id', id).eq('dentist_id', req.dentistId).order('created_at', { ascending: false })),
+      safe(scope(supabase.from('lab_orders').select('*').eq('patient_id', id)).is('deleted_at', null).order('created_at', { ascending: false })),
+      safe(scope(supabase.from('treatment_plans').select('*').eq('patient_id', id)).order('created_at', { ascending: false })),
       safe(supabase.from('payments').select('*').eq('patient_id', id).order('payment_date', { ascending: false })),
     ]);
 
@@ -125,10 +140,16 @@ router.delete('/:id', ctrl.remove);
 
 // ─── NEW V4 SUB-ROUTES ───
 
+// Clinic-scoped helper: a patient's records belong to the clinic, visible to all its
+// staff — match clinic_id OR dentist_id (legacy rows) rather than only the creator.
+function scoped(q, req) {
+  return req.clinicId ? q.or(`clinic_id.eq.${req.clinicId},dentist_id.eq.${req.dentistId}`) : q.eq('dentist_id', req.dentistId);
+}
+
 router.get('/:id/treatment-plans', async (req, res, next) => {
   try {
-    const { data, error } = await supabase.from('treatment_plans').select('*')
-      .eq('patient_id', req.params.id).eq('dentist_id', req.dentistId)
+    const { data, error } = await scoped(supabase.from('treatment_plans').select('*')
+      .eq('patient_id', req.params.id), req)
       .order('created_at', { ascending: false });
     if (error) throw error;
     res.json({ plans: data || [] });
@@ -137,8 +158,8 @@ router.get('/:id/treatment-plans', async (req, res, next) => {
 
 router.get('/:id/prescriptions', async (req, res, next) => {
   try {
-    const { data, error } = await supabase.from('prescriptions').select('*')
-      .eq('patient_id', req.params.id).eq('dentist_id', req.dentistId)
+    const { data, error } = await scoped(supabase.from('prescriptions').select('*')
+      .eq('patient_id', req.params.id), req)
       .order('created_at', { ascending: false });
     if (error) throw error;
     res.json({ prescriptions: data || [] });
@@ -147,8 +168,8 @@ router.get('/:id/prescriptions', async (req, res, next) => {
 
 router.get('/:id/lab-orders', async (req, res, next) => {
   try {
-    const { data, error } = await supabase.from('lab_orders').select('*')
-      .eq('patient_id', req.params.id).eq('dentist_id', req.dentistId)
+    const { data, error } = await scoped(supabase.from('lab_orders').select('*')
+      .eq('patient_id', req.params.id), req)
       .is('deleted_at', null)
       .order('created_at', { ascending: false });
     if (error) throw error;
@@ -158,11 +179,26 @@ router.get('/:id/lab-orders', async (req, res, next) => {
 
 router.get('/:id/xrays', async (req, res, next) => {
   try {
+    // Show ALL of this patient's x-rays regardless of which staff (doctor/receptionist)
+    // uploaded them — the patient is clinic-scoped, so uploader identity must not gate
+    // visibility. Previously this filtered by dentist_id, hiding receptionist uploads
+    // from the doctor.
+    if (!(await patientInScope(req.params.id, req))) {
+      return res.status(404).json({ error: 'Patient not found' });
+    }
     const { data, error } = await supabase.from('xrays').select('*')
-      .eq('patient_id', req.params.id).eq('dentist_id', req.dentistId)
+      .eq('patient_id', req.params.id)
+      .is('deleted_at', null)
       .order('date_taken', { ascending: false });
     if (error) throw error;
-    res.json({ xrays: data || [] });
+    // Attach short-lived signed URLs so the client can render thumbnails directly
+    // (the list previously returned only storage_path, so images never loaded).
+    const xrays = await Promise.all((data || []).map(async (x) => {
+      let url = null;
+      if (x.storage_path) { try { url = await getSignedUrl('xrays', x.storage_path, 3600); } catch { /* skip */ } }
+      return { ...x, url };
+    }));
+    res.json({ xrays });
   } catch (e) { next(e); }
 });
 
@@ -171,17 +207,23 @@ router.get('/:id/case-sheet', async (req, res, next) => {
     const patientId = req.params.id;
     const today = new Date().toISOString().split('T')[0];
 
+    // Clinic-scoped, not dentist-scoped: a doctor consulting a receptionist-checked-in
+    // patient (different dentist_id) must still see the full case sheet. Match clinic_id
+    // OR dentist_id (legacy rows) so nothing is hidden across staff in the same clinic.
+    const scope = (q) => (req.clinicId ? q.or(`clinic_id.eq.${req.clinicId},dentist_id.eq.${req.dentistId}`) : q.eq('dentist_id', req.dentistId));
+
     // lab_orders may not exist before migration 007 — keep it non-fatal.
-    const safeLab = supabase.from('lab_orders').select('*').eq('patient_id', patientId).eq('dentist_id', req.dentistId).is('deleted_at', null).order('created_at', { ascending: false })
+    const safeLab = scope(supabase.from('lab_orders').select('*').eq('patient_id', patientId)).is('deleted_at', null).order('created_at', { ascending: false })
       .then(r => r.data || []).catch(() => []);
 
     const [patientRes, plansRes, visitsRes, prescRes, xraysRes, apptRes, labOrders] = await Promise.all([
-      supabase.from('patients').select('*').eq('id', patientId).eq('dentist_id', req.dentistId).single(),
-      supabase.from('treatment_plans').select('*').eq('patient_id', patientId).eq('dentist_id', req.dentistId).order('created_at', { ascending: false }),
-      supabase.from('visits').select(`*, visit_notes(*)`).eq('patient_id', patientId).eq('dentist_id', req.dentistId).order('visit_date', { ascending: false }),
-      supabase.from('prescriptions').select('*').eq('patient_id', patientId).eq('dentist_id', req.dentistId).order('created_at', { ascending: false }),
-      supabase.from('xrays').select('id, xray_type, date_taken, tooth_number, notes, storage_path').eq('patient_id', patientId).eq('dentist_id', req.dentistId).order('date_taken', { ascending: false }),
-      supabase.from('appointments').select('*').eq('patient_id', patientId).eq('dentist_id', req.dentistId).gte('appointment_date', today).eq('status', 'scheduled').order('appointment_date', { ascending: true }).limit(3),
+      scope(supabase.from('patients').select('*').eq('id', patientId)).single(),
+      scope(supabase.from('treatment_plans').select('*').eq('patient_id', patientId)).order('created_at', { ascending: false }),
+      scope(supabase.from('visits').select(`*, visit_notes(*)`).eq('patient_id', patientId)).order('visit_date', { ascending: false }),
+      scope(supabase.from('prescriptions').select('*').eq('patient_id', patientId)).order('created_at', { ascending: false }),
+      supabase.from('xrays').select('id, xray_type, date_taken, created_at, tooth_number, notes, storage_path').eq('patient_id', patientId).is('deleted_at', null).order('created_at', { ascending: false }),
+      // Include 'suggested' (consult-created) appointments, not just 'scheduled'.
+      scope(supabase.from('appointments').select('*').eq('patient_id', patientId)).gte('appointment_date', today).neq('status', 'cancelled').order('appointment_date', { ascending: true }).limit(3),
       safeLab,
     ]);
 

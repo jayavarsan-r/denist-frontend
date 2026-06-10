@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { usePatientStore } from '@/store/usePatientStore';
 import { useVisitStore } from '@/store/useVisitStore';
-import { SheetHeader, SectionHeader, PrimaryButton, SelectPill } from '@/components/ui';
+import { SheetHeader, SectionHeader, PrimaryButton, SelectPill, Avatar } from '@/components/ui';
 import Icon from '@/components/icons';
 import { findFreeSlots, findNextAvailable, friendlyDate } from '@/lib/data/slotFinder';
 import { useAudioRecorder } from '@/lib/hooks/useAudioRecorder';
@@ -45,10 +45,25 @@ export default function NewVisitSheet({ params, onClose }) {
   const showToast = useAppStore((s) => s.showToast);
   const clinic    = useAppStore((s) => s.clinic);
   const patients  = usePatientStore((s) => s.patients);
+  const loadPatients = usePatientStore((s) => s.loadPatients);
   const addVisit  = useVisitStore((s) => s.addVisit);
   const visits    = useVisitStore((s) => s.visits);
 
-  const [pid,  setPid]  = useState(params?.patientId || patients[0]?.id || '');
+  // Only preselect when a patient is passed in (e.g. from a patient profile). Opening
+  // "New appointment" cold should land on the search box, not auto-pick patients[0].
+  const [pid,  setPid]  = useState(params?.patientId || '');
+  const [patientQuery, setPatientQuery] = useState('');
+
+  // Patients may not be in the store yet (this sheet can open before bootstrap loads
+  // them, and the search was unusable when the list was empty) — fetch on mount.
+  useEffect(() => { if (patients.length === 0) loadPatients(); }, []);
+
+  const selectedPatient = patients.find((p) => p.id === pid);
+  const patientResults = patientQuery.trim()
+    ? patients.filter((p) =>
+        (p.name || '').toLowerCase().includes(patientQuery.trim().toLowerCase()) ||
+        (p.phone || '').includes(patientQuery.trim()))
+    : patients;
   const [type, setType] = useState('Consultation');
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [time, setTime] = useState('');
@@ -176,13 +191,55 @@ export default function NewVisitSheet({ params, onClose }) {
         ) : null}
       </div>
 
-      {/* Patient */}
+      {/* Patient — searchable picker (the pill list was unsearchable and broke with
+          many/zero patients) */}
       <SectionHeader>Patient</SectionHeader>
-      <div className="noscroll-x" style={{ display: 'flex', gap: 8, marginBottom: 18 }}>
-        {patients.map(p => (
-          <SelectPill key={p.id} label={p.name.split(' ')[0]} active={pid === p.id} onClick={() => setPid(p.id)} />
-        ))}
-      </div>
+      {selectedPatient ? (
+        <button
+          onClick={() => { setPid(''); setPatientQuery(''); }}
+          className="card tap"
+          style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', marginBottom: 18, textAlign: 'left' }}
+        >
+          <Avatar name={selectedPatient.name} size={40} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 15.5, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selectedPatient.name}</div>
+            <div className="t-meta">{selectedPatient.phone}</div>
+          </div>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--blue)', flexShrink: 0 }}>Change</span>
+        </button>
+      ) : (
+        <div style={{ marginBottom: 18 }}>
+          <div className="card" style={{ height: 44, borderRadius: 12, display: 'flex', alignItems: 'center', padding: '0 14px', gap: 10, marginBottom: 8 }}>
+            <Icon name="search" size={18} color="var(--text-secondary)" />
+            <input
+              value={patientQuery}
+              onChange={(e) => setPatientQuery(e.target.value)}
+              placeholder="Search patient by name or phone"
+              style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: 15, fontFamily: 'inherit' }}
+            />
+          </div>
+          <div className="card" style={{ overflow: 'hidden', maxHeight: 220, overflowY: 'auto' }}>
+            {patientResults.length === 0 ? (
+              <div style={{ padding: 16, textAlign: 'center' }} className="t-meta">
+                {patientQuery ? `No patients match "${patientQuery}"` : 'No patients yet'}
+              </div>
+            ) : patientResults.map((p, i) => (
+              <button
+                key={p.id}
+                onClick={() => { setPid(p.id); setPatientQuery(''); }}
+                className="rowtap"
+                style={{ width: '100%', minHeight: 52, display: 'flex', alignItems: 'center', gap: 12, padding: '8px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left' }}
+              >
+                <Avatar name={p.name} size={36} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 15, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</div>
+                  <div className="t-meta">{p.phone}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Procedure */}
       <SectionHeader>Procedure</SectionHeader>

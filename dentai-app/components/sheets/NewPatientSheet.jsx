@@ -110,11 +110,15 @@ export default function NewPatientSheet({ onClose }) {
         if (!transcript) { setVoiceError(warning || "Couldn't hear — try again"); setVoicePhase('idle'); return; }
         setVoicePhase('extracting');
         const result = await extractPatientInfo(transcript);
-        // Only fill empty fields
-        if (result.name      && !name.trim())      setName(result.name);
-        if (result.phone     && !phone.trim())     setPhone(result.phone);
-        if (result.age       && !age.trim())       setAge(String(result.age));
-        if (result.complaint && !complaint.trim()) setComplaint(result.complaint);
+        // Backend (receptionist prompt) returns: name, age, phone, chiefComplaint,
+        // bloodGroup, flags{}. Map those names exactly. Only fill empty fields.
+        const cc = result.chiefComplaint || result.chief_complaint || result.complaint;
+        const bg = result.bloodGroup || result.blood_group;
+        if (result.name && !name.trim())       setName(result.name);
+        if (result.phone && !phone.trim())     setPhone(String(result.phone).replace(/\D/g, '').slice(0, 10));
+        if (result.age && !age.trim())         setAge(String(result.age));
+        if (bg && !bloodGroup.trim())          setBloodGroup(bg);
+        if (cc && !complaint.trim())           setComplaint(cc);
         if (result.flags) setFlags(f => ({
           ...f, ...Object.fromEntries(Object.entries(result.flags).filter(([k, v]) => v === true && !f[k]))
         }));
@@ -122,8 +126,15 @@ export default function NewPatientSheet({ onClose }) {
         setVoicePhase('done');
         setTimeout(() => setVoicePhase('idle'), 1800);
       } catch (err) {
-        const msg = err?.response?.data?.error || err?.message || '';
-        setVoiceError(msg.includes('transcri') ? 'Voice recognition unavailable — type below' : 'Could not process — fill fields manually');
+        const code = err?.apiError?.code;
+        const msg = err?.apiError?.message || err?.response?.data?.error || err?.message || '';
+        setVoiceError(
+          code === 'RATE_LIMITED' || /rate limit|quota|exhaust/i.test(msg)
+            ? 'AI is busy (free-tier limit) — wait a few seconds and retry, or type below'
+            : /transcri/i.test(msg)
+            ? 'Voice recognition unavailable — type below'
+            : 'Could not process — fill fields manually'
+        );
         setVoicePhase('idle');
       }
       return;

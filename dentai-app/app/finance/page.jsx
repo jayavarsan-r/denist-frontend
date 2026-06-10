@@ -27,8 +27,17 @@ function FinanceScreen() {
   const bills = useClinicalStore((s) => s.bills);
   const labOrders = useClinicalStore((s) => s.labOrders);
   const clinicAccounts = useClinicalStore((s) => s.clinicAccounts);
+  const loadClinicPayments = useClinicalStore((s) => s.loadClinicPayments);
+  const loadLabOrders = useClinicalStore((s) => s.loadLabOrders);
   const today = TODAY;
   const [showTx, setShowTx] = React.useState(false);
+
+  // Pull the clinic-wide ledger (collected payments) + lab orders so the page reflects
+  // checkouts done anywhere (e.g. the receptionist's collection) — not just this session.
+  React.useEffect(() => {
+    loadClinicPayments();
+    loadLabOrders();
+  }, []);
 
   const collectedToday = clinicAccounts.filter(a => a.type === 'income' && a.date === today).reduce((s, a) => s + a.amount, 0);
   const pendingBills = bills.filter(b => b.outstanding > 0)

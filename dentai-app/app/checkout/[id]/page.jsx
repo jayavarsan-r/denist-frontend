@@ -1,7 +1,9 @@
 import CheckoutClient from './CheckoutClient';
 
 export function generateStaticParams() {
-  return [];
+  // output: export requires >=1 param. Real entry IDs are resolved
+  // client-side by the router at runtime in the Capacitor app.
+  return [{ id: 'placeholder' }];
 }
 
 export default async function CheckoutPage({ params }) {

@@ -22,6 +22,7 @@ router.post('/', auth, upload.single('file'), async (req, res, next) => {
     const { data, error } = await supabase.from('xrays').insert({
       patient_id: patientId,
       dentist_id: req.dentistId,
+      clinic_id: req.clinicId || null,
       visit_id: visitId || null,
       xray_type: xrayType || 'OPG',
       storage_path: savedPath,
@@ -42,9 +43,14 @@ router.post('/', auth, upload.single('file'), async (req, res, next) => {
 
 router.get('/:id/url', auth, async (req, res, next) => {
   try {
-    const { data, error } = await supabase
-      .from('xrays').select('storage_path')
-      .eq('id', req.params.id).eq('dentist_id', req.dentistId).single();
+    // Clinic-wide access: any staff in the clinic can view an x-ray (a receptionist
+    // upload must be visible to the doctor). Match by clinic_id OR dentist_id so both
+    // newly clinic-stamped rows and legacy dentist-only rows resolve.
+    let q = supabase.from('xrays').select('storage_path').eq('id', req.params.id);
+    q = req.clinicId
+      ? q.or(`clinic_id.eq.${req.clinicId},dentist_id.eq.${req.dentistId}`)
+      : q.eq('dentist_id', req.dentistId);
+    const { data, error } = await q.single();
 
     if (error || !data) return res.status(404).json({ error: 'Not found' });
     const url = await getSignedUrl('xrays', data.storage_path, 3600);

@@ -9,7 +9,8 @@ import { Avatar, Chip, StatusChip, SectionHeader, NavBar, PrimaryButton, ToothCh
 import { formatCurrency, clinicianFlags, hasComplications, formatTime, parseDate, MONTHS, DAYS } from '@/lib/data/utils';
 import { CONSULT_OUTCOMES } from '@/lib/data/queue';
 import { recordPayment } from '@/lib/services/payment.service';
-import { getPrescriptionPdfUrl } from '@/lib/services/prescription.service';
+import { updateTreatmentPlan } from '@/lib/services/treatment-plan.service';
+import { fetchPrescriptionPdfBlob } from '@/lib/services/prescription.service';
 import { getCheckoutSummary } from '@/lib/services/queue.service';
 
 function MealTiming({ slots }) {
@@ -28,6 +29,10 @@ function CheckoutScreen({ entryId }) {
   const router = useRouter();
   const openSheet = useAppStore(s => s.openSheet);
   const showToast = useAppStore(s => s.showToast);
+  const role = useAppStore(s => s.role);
+  const clinicSettings = useAppStore(s => s.clinic?.settings);
+  // Doctors always can; receptionists only when the doctor enabled the clinic setting.
+  const canAddMedicines = role !== 'receptionist' || !!clinicSettings?.receptionistCanAddMedicines;
   const queue = useQueueStore(s => s.queue);
   const checkout = useQueueStore(s => s.checkout);
   const patients = usePatientStore(s => s.patients);
@@ -103,6 +108,11 @@ function CheckoutScreen({ entryId }) {
   const statusColor = status === 'paid' ? '#1E8E3E' : status === 'partial' ? 'var(--orange)' : 'var(--red)';
 
   const complete = async () => {
+    // Persist an edited quoted price to the plan so the doctor's UI reflects the change
+    // too (otherwise the doctor keeps seeing the originally advised fee).
+    if (c.treatmentPlanId && cost !== (c.estimatedCost || 0)) {
+      try { await updateTreatmentPlan(c.treatmentPlanId, { estimatedCost: cost }); } catch { /* non-fatal */ }
+    }
     // Only record a payment when money is actually collected (the API rejects ₹0).
     if (paid > 0) {
       try {
@@ -125,11 +135,35 @@ function CheckoutScreen({ entryId }) {
     router.push('/reception');
   };
 
-  const openPrescriptionPdf = (rxId) => {
-    if (rxId) {
-      window.open(getPrescriptionPdfUrl(rxId), '_blank');
-    } else {
-      showToast('Generating PDF…');
+  const openPrescriptionPdf = async (rxId) => {
+    if (!rxId) { showToast('Prescription is still generating…'); return; }
+    try {
+      const blob = await fetchPrescriptionPdfBlob(rxId);
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch {
+      showToast('Could not open the PDF');
+    }
+  };
+
+  // Share the prescription PDF via the OS share sheet (Instagram, WhatsApp, etc.).
+  // Falls back to WhatsApp if the device can't share files.
+  const sharePrescription = async (rxId) => {
+    if (!rxId) { showToast('Prescription is still generating…'); return; }
+    try {
+      const blob = await fetchPrescriptionPdfBlob(rxId);
+      const file = new File([blob], `${(p?.name || 'patient').replace(/\s+/g, '_')}_prescription.pdf`, { type: 'application/pdf' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'Prescription', text: `Prescription for ${p?.name || ''}`.trim() });
+        return;
+      }
+      // No file-share support (e.g. desktop) → open WhatsApp to the patient.
+      const phone = (p?.phone || '').replace(/\D/g, '').slice(-10);
+      window.open(phone ? `https://wa.me/91${phone}` : 'https://wa.me/', '_blank');
+      showToast('Opening WhatsApp — attach the PDF');
+    } catch (e) {
+      if (e?.name !== 'AbortError') showToast('Could not share');
     }
   };
 
@@ -191,9 +225,16 @@ function CheckoutScreen({ entryId }) {
               <button onClick={() => setEditingCost(true)} style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span className="tnum" style={{ fontSize: 16, fontWeight: 700 }}>{formatCurrency(cost)}</span><Icon name="pencil" size={14} color="var(--blue)" /></button>
             )}
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderTop: '1px solid var(--border-light)' }}>
-            <span style={{ fontSize: 15, color: 'var(--text-secondary)' }}>Collecting now</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}><span className="tnum" style={{ fontSize: 16, fontWeight: 700, color: '#1E8E3E' }}>₹</span><input value={collected} onChange={e => setCollected(e.target.value)} inputMode="numeric" placeholder="0" className="tnum" style={{ width: 90, textAlign: 'right', border: 'none', borderBottom: '1px solid var(--border)', outline: 'none', fontSize: 17, fontWeight: 700, color: '#1E8E3E', fontFamily: 'inherit' }} /></div>
+          {/* Collect now — the primary receptionist action, made large and obvious */}
+          <div style={{ padding: '12px 0 4px', borderTop: '1px solid var(--border-light)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <span style={{ fontSize: 15, fontWeight: 700 }}>Collect now</span>
+              {cost > 0 && <button onClick={() => setCollected(String(cost))} style={{ fontSize: 13, fontWeight: 700, color: 'var(--blue)', background: 'rgba(0,122,255,0.08)', borderRadius: 99, padding: '5px 12px' }}>Full · {formatCurrency(cost)}</button>}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(48,209,88,0.08)', border: '1.5px solid rgba(48,209,88,0.30)', borderRadius: 14, padding: '12px 16px' }}>
+              <span className="tnum" style={{ fontSize: 26, fontWeight: 800, color: '#1E8E3E' }}>₹</span>
+              <input value={collected} onChange={e => setCollected(e.target.value.replace(/\D/g, ''))} inputMode="numeric" placeholder="0" autoFocus className="tnum" style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', fontSize: 28, fontWeight: 800, color: '#1E8E3E', fontFamily: 'inherit' }} />
+            </div>
           </div>
           <div style={{ display: 'flex', gap: 6, padding: '12px 0 6px' }}>
             {['Cash', 'UPI', 'Card'].map(m => <button key={m} onClick={() => setMethod(m)} style={{ flex: 1, height: 38, borderRadius: 11, fontSize: 14, fontWeight: 600, background: method === m ? 'var(--accent)' : '#fff', color: method === m ? 'var(--accent-ink)' : 'var(--text-secondary)', border: method === m ? 'none' : '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>{m === 'Card' && <Icon name="card" size={15} color={method === m ? 'var(--accent-ink)' : 'var(--text-secondary)'} />}{m}</button>)}
@@ -232,7 +273,7 @@ function CheckoutScreen({ entryId }) {
         {/* prescription */}
         {c.medicines && c.medicines.length > 0 && (
           <>
-            <SectionHeader right={<div style={{ display: 'flex', gap: 14 }}><button onClick={() => openPrescriptionPdf(c.prescriptionId || c.prescription_id || null)} style={{ color: 'var(--blue)', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}><Icon name="printer" size={14} color="var(--blue)" />PDF</button><button onClick={() => showToast('Shared via WhatsApp')} style={{ color: 'var(--blue)', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}><Icon name="share" size={14} color="var(--blue)" />Share</button></div>}>Prescription</SectionHeader>
+            <SectionHeader right={<div style={{ display: 'flex', gap: 14 }}><button onClick={() => openPrescriptionPdf(c.prescriptionId || c.prescription_id || null)} style={{ color: 'var(--blue)', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}><Icon name="printer" size={14} color="var(--blue)" />PDF</button><button onClick={() => sharePrescription(c.prescriptionId || c.prescription_id || null)} style={{ color: 'var(--blue)', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}><Icon name="share" size={14} color="var(--blue)" />Share</button></div>}>Prescription</SectionHeader>
             <div className="card" style={{ overflow: 'hidden', marginBottom: 16 }}>
               {/* column header */}
               <div style={{ display: 'flex', alignItems: 'center', padding: '8px 14px', background: 'rgba(60,60,67,0.03)', borderBottom: '1px solid var(--border-light)' }}>
@@ -253,8 +294,15 @@ function CheckoutScreen({ entryId }) {
           </>
         )}
 
+        {/* Add / edit medicines — doctors always; receptionists when permitted (#5) */}
+        {canAddMedicines && patientId && (
+          <button onClick={() => openSheet('rx', { patientId })} className="card tap" style={{ width: '100%', height: 48, color: 'var(--blue)', fontSize: 15, fontWeight: 600, marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+            <Icon name="plus" size={16} color="var(--blue)" /> Add / edit medicines
+          </button>
+        )}
+
         {/* confirm */}
-        <PrimaryButton onClick={complete} style={{ height: 54 }}>{balance > 0 ? 'Approve & checkout · ' + formatCurrency(paid) : 'Approve & checkout'}</PrimaryButton>
+        <PrimaryButton onClick={complete} style={{ height: 56 }}>{paid > 0 ? 'Collect ' + formatCurrency(paid) + ' & check out' : 'Check out'}</PrimaryButton>
         <button onClick={() => router.back()} style={{ width: '100%', textAlign: 'center', color: 'var(--text-secondary)', fontSize: 15, fontWeight: 500, padding: '14px 0 2px' }}>Save & review later</button>
       </div>
     </div>

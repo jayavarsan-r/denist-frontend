@@ -197,6 +197,29 @@ export const useClinicalStore = create((set, get) => ({
   addAccount: (a) => set((s) => ({ clinicAccounts: [a, ...s.clinicAccounts] })),
 
   /* ─── Payments (API-backed via payment service) ─── */
+  // Clinic-wide ledger for the finance screen. Pulls every payment in the clinic and
+  // maps each to an income account entry. `date` is sliced to YYYY-MM-DD so the
+  // finance page's `date === today` filter (Collected today) matches reliably.
+  loadClinicPayments: async () => {
+    try {
+      const { data } = await apiClient.get('/api/payments');
+      const list = data?.payments || data || [];
+      const entries = list.map((p) => ({
+        id: p.id,
+        date: (p.payment_date || p.paymentDate || '').slice(0, 10),
+        type: 'income',
+        category: 'Treatment',
+        description: p.patients?.name ? `Payment · ${p.patients.name}` : 'Payment received',
+        amount: parseFloat(p.amount) || 0,
+        patientId: p.patient_id || p.patientId,
+        method: p.payment_method || p.paymentMethod || null,
+      }));
+      set({ clinicAccounts: entries });
+    } catch (e) {
+      console.warn('[ClinicalStore] loadClinicPayments failed', e?.response?.status);
+    }
+  },
+
   loadPatientPayments: async (patientId) => {
     try {
       const payments = await getPatientPayments(patientId);

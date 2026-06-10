@@ -142,6 +142,9 @@ export default function CheckInSheet({ onClose }) {
 
   const patientRecording = patientPhase === 'recording';
   const patientProcessing = patientPhase === 'transcribing' || patientPhase === 'extracting';
+  // Either voice flow mid-transcription → block step navigation so extracted fields
+  // don't land on the wrong step.
+  const voiceBusy = processing || patientProcessing;
 
   /* ─── File picker for xrays ─── */
   const handleFileSelect = (e) => {
@@ -444,14 +447,17 @@ export default function CheckInSheet({ onClose }) {
       )}
 
       <div style={{ display: 'flex', gap: 12, marginTop: 22 }}>
-        {step > 0 && <button onClick={() => { if (step === 2 && complaint.trim()) { setStep(0); return; } setStep(s => s - 1); }} style={{ width: 88, height: 52, borderRadius: 14, border: '1px solid var(--border)', background: '#fff', fontSize: 15, fontWeight: 600 }}>Back</button>}
+        {step > 0 && <button disabled={voiceBusy} onClick={() => { if (voiceBusy) return; if (step === 2 && complaint.trim()) { setStep(0); return; } setStep(s => s - 1); }} style={{ width: 88, height: 52, borderRadius: 14, border: '1px solid var(--border)', background: '#fff', fontSize: 15, fontWeight: 600, opacity: voiceBusy ? 0.5 : 1 }}>Back</button>}
         {step < 3
           ? <PrimaryButton onClick={() => {
+              // Block navigation while voice is still transcribing/extracting — advancing
+              // mid-transcription lands the extracted fields on the wrong step.
+              if (voiceBusy) { showToast('Hold on — still transcribing'); return; }
               if (!stepValid) { showToast('Pick a patient first'); return; }
               // Skip step 1 (complaint) if already filled from step 0
               if (step === 0 && complaint.trim()) { setStep(2); return; }
               setStep(s => s + 1);
-            }}>{step === 2 && xrays.length === 0 ? 'Skip' : 'Continue'}</PrimaryButton>
+            }} style={{ opacity: voiceBusy ? 0.5 : 1 }}>{voiceBusy ? 'Transcribing…' : (step === 2 && xrays.length === 0 ? 'Skip' : 'Continue')}</PrimaryButton>
           : <PrimaryButton onClick={finish} style={{ opacity: loading ? 0.6 : 1 }}>{loading ? 'Adding…' : 'Add to queue'}</PrimaryButton>
         }
       </div>

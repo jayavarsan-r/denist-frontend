@@ -52,6 +52,22 @@ router.patch('/', auth, requireRole('doctor'), validate(v.updateClinic), async (
   } catch (e) { next(e); }
 });
 
+// PATCH /api/clinic/settings — doctor-managed clinic preferences (jsonb merge).
+// First setting: receptionistCanAddMedicines. Requires migration 009 (clinics.settings).
+const ALLOWED_SETTINGS = ['receptionistCanAddMedicines'];
+router.patch('/settings', auth, requireRole('doctor'), async (req, res, next) => {
+  try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
+    const incoming = {};
+    for (const k of ALLOWED_SETTINGS) if (req.body[k] !== undefined) incoming[k] = !!req.body[k];
+    const { data: cur } = await supabase.from('clinics').select('settings').eq('id', req.clinicId).single();
+    const merged = { ...(cur?.settings || {}), ...incoming };
+    const { data, error } = await supabase.from('clinics').update({ settings: merged }).eq('id', req.clinicId).select().single();
+    if (error) throw error;
+    res.json({ clinic: data });
+  } catch (e) { next(e); }
+});
+
 // POST /api/clinic/regenerate-join-code — explicit replacement for the old
 // GET /me side-effect. Doctor/owner only.
 router.post('/regenerate-join-code', auth, requireRole('doctor'), async (req, res, next) => {

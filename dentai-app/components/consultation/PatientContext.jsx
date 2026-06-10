@@ -8,6 +8,20 @@ import { getXrayUrl } from '@/lib/services/xray.service';
 const LAB_DOT = { pending: '#F59E0B', sent: '#3B82F6', received: '#0891B2', completed: '#9CA3AF' };
 const PLAN_TONE = { active: '#1E8E3E', completed: '#9CA3AF', cancelled: '#EF4444' };
 
+// The consult screen shows ONLY this check-in's x-rays (what the receptionist just
+// uploaded for this visit) — the full history lives on the patient details page.
+// We isolate the most recent UPLOAD BATCH via created_at (x-rays uploaded together at
+// check-in land within a couple of minutes of each other), so a patient with older
+// x-rays from the same day still only shows the current one(s).
+function latestSessionXrays(all = []) {
+  if (!all.length) return all;
+  const t = (x) => new Date(x.created_at || x.date_taken || 0).getTime() || 0;
+  const maxT = Math.max(...all.map(t));
+  if (!maxT) return all.slice(0, 1);
+  const WINDOW = 10 * 60 * 1000; // 10 min — one check-in upload session
+  return all.filter((x) => maxT - t(x) <= WINDOW);
+}
+
 function Card({ title, action, children }) {
   return (
     <div style={{ padding: '16px 20px 0' }}>
@@ -53,8 +67,10 @@ export default function PatientContext({ patientId, onTypeResolved }) {
   }, [patientId]);
 
   // Resolve viewable URLs for x-rays (best-effort, skip failures).
+  // Only this check-in's x-rays belong on the consult screen — the full history lives
+  // on the patient details page.
   useEffect(() => {
-    const xrays = cs?.xrays || [];
+    const xrays = latestSessionXrays(cs?.xrays || []);
     if (!xrays.length) return;
     let alive = true;
     Promise.all(xrays.slice(0, 8).map(async (x) => {
@@ -83,7 +99,9 @@ export default function PatientContext({ patientId, onTypeResolved }) {
 
   const plan = (cs.activeTreatmentPlans || [])[0] || (cs.allTreatmentPlans || [])[0];
   const labs = cs.labOrders || [];
-  const xrays = cs.xrays || [];
+  // Consult screen shows ONLY this check-in's x-rays (latest session). Full history
+  // lives on the patient details page.
+  const xrays = latestSessionXrays(cs.xrays || []);
   const lastVisit = (cs.visits || [])[0];
   const pending = cs.summary?.pendingAmount || 0;
 

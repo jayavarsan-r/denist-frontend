@@ -37,9 +37,10 @@ exports.sendOtp = async (req, res, next) => {
     if (!phone || !/^\d{10}$/.test(phone))
       return res.status(400).json({ error: 'Valid 10-digit phone required' });
 
-    // Demo phone gets its pinned OTP; all others get the dev fallback or random OTP
+    // USE_DEV_OTP=true pins all phones to DEV_OTP (local dev only)
+    const useDevOtp = process.env.USE_DEV_OTP === 'true' && process.env.DEV_OTP;
     const isDemoPhone = process.env.DEMO_PHONE && phone === process.env.DEMO_PHONE;
-    const otp = isDemoPhone
+    const otp = (useDevOtp || isDemoPhone)
       ? (process.env.DEV_OTP || '012345')
       : (process.env.DEV_OTP_OTHER || Math.floor(100000 + Math.random() * 900000).toString());
 

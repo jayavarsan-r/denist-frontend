@@ -32,7 +32,9 @@ function makeDisplayId(city) {
 // ── completeConsultation ──────────────────────────────────────────────────
 async function completeConsultation(ctx) {
   const { clinicId, dentistId, staffId, requestId, queueId,
-    patientId, procedure, diagnosis, toothNumber, toothNumbers, totalSittings, estimatedCost, transcript, notes, followUp } = ctx;
+    patientId, diagnosis, toothNumber, toothNumbers, totalSittings, estimatedCost, transcript, notes, followUp } = ctx;
+  // Never block checkout on a missing procedure — fall back to a generic label.
+  const procedure = (ctx.procedure || '').trim() || 'Consultation';
   const todayStr = new Date().toISOString().split('T')[0];
   const sittings = Math.max(1, parseInt(totalSittings) || 1);
   // A follow-up like "2026-06-14" becomes a recommended appointment; free text is kept as a note only.

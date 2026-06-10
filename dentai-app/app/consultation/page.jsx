@@ -99,7 +99,10 @@ function ConsultModeScreen() {
           {/* patient card — tappable, leads to full profile */}
           {p && <>
           <div style={{ padding: '16px 20px 0' }}>
-            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--orange)', marginBottom: 10 }}>Now treating · Token {current.tokenNumber}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--orange)' }}>Now treating · Token {current.tokenNumber}</span>
+              {current.priority === 'urgent' && <Chip label="Urgent" tone="red" />}
+            </div>
 
             <button
               onClick={() => router.push('/patients/' + p.id)}
