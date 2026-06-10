@@ -22,7 +22,10 @@ const createPatient = z.object({
   name: z.string().trim().min(1, 'Name required'),
   phone,
   age: z.coerce.number().int().min(0).max(150).optional().nullable(),
-  gender: z.enum(['male', 'female', 'other']).optional().nullable(),
+  gender: z.preprocess(
+    (val) => (typeof val === 'string' ? val.trim().toLowerCase() : val),
+    z.enum(['male', 'female', 'other']).optional().nullable()
+  ),
   medical_conditions: optStr,
   allergies: optStr,
   clinical_flags: optStr,
@@ -89,10 +92,10 @@ const patchQueue = z.object({
   notes: optStr,
 });
 const completeConsult = z.object({
-  patientId: uuid,
+  patientId: uuid.optional().nullable(), // defaults from the queue entry in the route
   // Optional: the doctor must be able to finish/checkout even when the AI didn't extract
   // a clear procedure (or was rate-limited). The transaction defaults it to 'Consultation'.
-  procedure: optStr,
+  procedure: z.string().trim().min(1).optional().nullable(),
   diagnosis: optStr,
   toothNumber: optStr,
   toothNumbers: z.array(z.string().trim()).optional().nullable(), // multi-tooth procedure

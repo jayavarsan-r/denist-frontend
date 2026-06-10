@@ -271,7 +271,18 @@ router.get('/:id/checkout-summary', auth, async (req, res, next) => {
 router.post('/:id/complete-consult', auth, validate(v.completeConsult), async (req, res, next) => {
   try {
     if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
-    const { patientId, procedure, diagnosis, toothNumber, toothNumbers, totalSittings, estimatedCost, transcript, notes, followUp } = req.body;
+    let { patientId } = req.body;
+    const { procedure, diagnosis, toothNumber, toothNumbers, totalSittings, estimatedCost, transcript, notes, followUp } = req.body;
+
+    // The queue entry already knows the patient — default from it so the client
+    // never has to resend patientId (was a silent 400 trap).
+    if (!patientId) {
+      const { data: entry } = await supabase.from('queue_entries')
+        .select('patient_id').eq('id', req.params.id).eq('clinic_id', req.clinicId).maybeSingle();
+      if (!entry) return res.status(404).json({ error: 'Queue entry not found' });
+      patientId = entry.patient_id;
+    }
+
     const result = await transaction.completeConsultation({
       clinicId: req.clinicId, dentistId: req.dentistId, staffId: req.staffId, requestId: req.id,
       queueId: req.params.id,

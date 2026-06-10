@@ -21,9 +21,15 @@ describe('validators', () => {
     expect(v.addToQueue.safeParse({ patientId: 'not-a-uuid' }).success).toBe(false);
   });
 
-  test('completeConsult requires patientId + non-empty procedure', () => {
-    expect(v.completeConsult.safeParse({ patientId: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', procedure: 'RCT' }).success).toBe(true);
+  test('completeConsult: patientId optional, procedure must be non-empty when present', () => {
+    expect(v.completeConsult.safeParse({ procedure: 'RCT' }).success).toBe(true); // no patientId now OK
     expect(v.completeConsult.safeParse({ patientId: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', procedure: '' }).success).toBe(false);
+  });
+
+  test('gender is case-insensitive and trimmed', () => {
+    expect(v.createPatient.safeParse({ name: 'A', phone: '9876543210', gender: 'Male' }).data.gender).toBe('male');
+    expect(v.createPatient.safeParse({ name: 'A', phone: '9876543210', gender: ' FEMALE ' }).data.gender).toBe('female');
+    expect(v.createPatient.safeParse({ name: 'A', phone: '9876543210', gender: 'alien' }).success).toBe(false);
   });
 
   test('appointment status accepts the new "suggested"', () => {
