@@ -62,7 +62,6 @@ function AppShell({ children }) {
 
   const isDetailPage =
     (normPath.startsWith('/patients/') && normPath !== '/patients') ||
-    normPath.startsWith('/appointments/') ||
     normPath.startsWith('/checkout/') ||
     normPath === '/finance/lab';
 

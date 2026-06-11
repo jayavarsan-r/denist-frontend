@@ -13,7 +13,7 @@ function toHHMM(mins) {
   return `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
 }
 
-function formatLabel(hhmm) {
+export function formatLabel(hhmm) {
   const [h, m] = hhmm.split(':').map(Number);
   const ampm = h < 12 ? 'AM' : 'PM';
   const h12 = h % 12 || 12;
@@ -39,6 +39,12 @@ export function findFreeSlots(dateStr, visits, clinic, durationMins = 30) {
       end: toMins(v.startTime) + (v.durationMinutes || 30),
     }));
 
+  // Don't offer times that have already passed today (e.g. it's 4:50 PM → the 9 AM
+  // slot is not bookable). A 5-min lead time avoids offering the slot you're standing in.
+  const now = new Date();
+  const isToday = dateStr === now.toISOString().slice(0, 10);
+  const earliest = isToday ? now.getHours() * 60 + now.getMinutes() + 5 : -1;
+
   const free = [];
   const STEP = 30; // generate candidates every 30 min
 
@@ -46,6 +52,7 @@ export function findFreeSlots(dateStr, visits, clinic, durationMins = 30) {
     const sessStart = toMins(sess.open);
     const sessEnd = toMins(sess.close);
     for (let t = sessStart; t + durationMins <= sessEnd; t += STEP) {
+      if (t < earliest) continue; // already in the past today
       const end = t + durationMins;
       const clash = booked.some(b => t < b.end && end > b.start);
       if (!clash) {

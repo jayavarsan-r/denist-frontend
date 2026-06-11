@@ -10,6 +10,7 @@ import { formatCurrency, clinicianFlags, hasComplications, formatTime, parseDate
 import { CONSULT_OUTCOMES } from '@/lib/data/queue';
 import { recordPayment } from '@/lib/services/payment.service';
 import { updateTreatmentPlan } from '@/lib/services/treatment-plan.service';
+import { updateAppointment } from '@/lib/services/appointment.service';
 import { fetchPrescriptionPdfBlob } from '@/lib/services/prescription.service';
 import { getCheckoutSummary } from '@/lib/services/queue.service';
 
@@ -24,6 +25,88 @@ function MealTiming({ slots }) {
   );
 }
 
+
+/**
+ * NextAppointments — the AI-suggested return visits, shown for confirm/edit at
+ * checkout. Each row's date and time are editable and persist to the backend; the
+ * receptionist confirms a row (suggested → scheduled) before checking the patient
+ * out. Renders nothing when no visits were suggested, so a one-off visit stays clean.
+ */
+function NextAppointments({ initial, showToast }) {
+  const [rows, setRows] = React.useState([]);
+  React.useEffect(() => {
+    setRows((initial || []).map(a => ({
+      id: a.id || null, date: a.date || '', time: (a.time || '').slice(0, 5),
+      purpose: a.purpose || 'Follow-up', confirmed: a.status === 'scheduled',
+    })));
+  }, [initial]);
+
+  if (rows.length === 0) return null;
+
+  const persist = (row, patch) => {
+    if (!row.id) return;
+    const next = { ...row, ...patch };
+    updateAppointment(row.id, {
+      appointmentDate: next.date,
+      appointmentTime: next.time || null,
+      purpose: next.purpose,
+      status: next.confirmed ? 'scheduled' : 'suggested',
+    }).catch(() => showToast('Could not save the date — try again'));
+  };
+
+  const setRow = (i, patch) => setRows(rs => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  const allConfirmed = rows.every(r => r.confirmed);
+
+  const confirmAll = () => {
+    setRows(rs => rs.map(r => ({ ...r, confirmed: true })));
+    rows.forEach(r => persist(r, { confirmed: true }));
+    showToast('Next visits confirmed');
+  };
+
+  return (
+    <>
+      <SectionHeader right={!allConfirmed ? <button onClick={confirmAll} style={{ color: 'var(--blue)', fontSize: 13, fontWeight: 700 }}>Confirm all</button> : <span className="t-meta" style={{ color: '#1E8E3E' }}>All confirmed</span>}>
+        Next visits · {rows.length}
+      </SectionHeader>
+      <div className="card" style={{ overflow: 'hidden', marginBottom: 16 }}>
+        {rows.map((r, i) => {
+          const d = r.date ? parseDate(r.date) : null;
+          return (
+            <div key={r.id || i} style={{ padding: '12px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none', background: r.confirmed ? 'rgba(48,209,88,0.05)' : 'transparent' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                {d && (
+                  <div style={{ width: 38, textAlign: 'center', flexShrink: 0 }}>
+                    <div style={{ fontSize: 10, color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>{MONTHS[d.getMonth()]}</div>
+                    <div className="tnum" style={{ fontSize: 20, fontWeight: 700, lineHeight: 1 }}>{d.getDate()}</div>
+                  </div>
+                )}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 15, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.purpose}</div>
+                  <div className="t-meta">{d ? DAYS[d.getDay()] : 'Pick a date'}{r.time ? ` · ${formatTime(r.time).label}` : ''}</div>
+                </div>
+                {/* confirm toggle */}
+                <button
+                  onClick={() => { const v = !r.confirmed; setRow(i, { confirmed: v }); persist(r, { confirmed: v }); }}
+                  style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 5, height: 32, padding: '0 12px', borderRadius: 99, fontSize: 13, fontWeight: 700, border: r.confirmed ? 'none' : '1px solid var(--border)', background: r.confirmed ? '#1E8E3E' : '#fff', color: r.confirmed ? '#fff' : 'var(--text-secondary)' }}
+                >
+                  <Icon name="check" size={14} color={r.confirmed ? '#fff' : 'var(--text-tertiary)'} stroke={2.6} />
+                  {r.confirmed ? 'Confirmed' : 'Confirm'}
+                </button>
+              </div>
+              {/* editable date + time */}
+              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                <input type="date" value={r.date} onChange={e => { setRow(i, { date: e.target.value }); persist(r, { date: e.target.value }); }}
+                  style={{ flex: 1, border: '1px solid var(--border)', borderRadius: 10, padding: '8px 10px', fontSize: 14, fontFamily: 'inherit', outline: 'none', background: '#fff' }} />
+                <input type="time" value={r.time} onChange={e => { setRow(i, { time: e.target.value }); persist(r, { time: e.target.value }); }}
+                  style={{ width: 118, border: '1px solid var(--border)', borderRadius: 10, padding: '8px 10px', fontSize: 14, fontFamily: 'inherit', outline: 'none', background: '#fff' }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
 
 function CheckoutScreen({ entryId }) {
   const router = useRouter();
@@ -248,27 +331,8 @@ function CheckoutScreen({ entryId }) {
           </div>
         </div>
 
-        {/* appointments */}
-        {c.appointments && c.appointments.length > 0 && (
-          <>
-            <SectionHeader right={<span className="t-meta">Auto-scheduled</span>}>Next appointments</SectionHeader>
-            <div className="card" style={{ overflow: 'hidden', marginBottom: 16 }}>
-              {c.appointments.map((a, i) => {
-                const d = parseDate(a.date);
-                return (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, minHeight: 56, padding: '10px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none' }}>
-                    <div style={{ width: 40, textAlign: 'center', flexShrink: 0 }}>
-                      <div style={{ fontSize: 10, color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>{MONTHS[d.getMonth()]}</div>
-                      <div className="tnum" style={{ fontSize: 20, fontWeight: 700, lineHeight: 1 }}>{d.getDate()}</div>
-                    </div>
-                    <div style={{ flex: 1 }}><div style={{ fontSize: 15, fontWeight: 600 }}>{a.purpose}</div><div className="t-meta">{DAYS[d.getDay()]} · {formatTime(a.time).label}</div></div>
-                    <Chip label="Scheduled" tone="neutral" />
-                  </div>
-                );
-              })}
-            </div>
-          </>
-        )}
+        {/* next visits — AI-suggested, editable & confirmable; hidden when none */}
+        <NextAppointments initial={c.appointments} showToast={showToast} />
 
         {/* prescription */}
         {c.medicines && c.medicines.length > 0 && (

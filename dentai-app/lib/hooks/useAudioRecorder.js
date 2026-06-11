@@ -19,7 +19,11 @@ export function useAudioRecorder() {
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
   const timerRef = useRef(null);
-  const resolveRef = useRef(null);
+  // Every caller awaiting this recording's stop. Using a LIST (not a single ref) means
+  // a second stopRecording() call — e.g. an unmount/cleanup racing the user's Stop tap —
+  // can never overwrite and orphan the promise the recorder is actually awaiting. That
+  // orphaning was what left the consult drawer stuck on "Understanding…".
+  const resolversRef = useRef([]);
 
   const startRecording = useCallback(async () => {
     setError(null);
@@ -66,10 +70,10 @@ export function useAudioRecorder() {
         stream.getTracks().forEach((t) => t.stop());
         clearInterval(timerRef.current);
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' });
-        if (resolveRef.current) {
-          resolveRef.current(blob);
-          resolveRef.current = null;
-        }
+        // Resolve EVERY awaiting caller with the same blob, then clear the list.
+        const pending = resolversRef.current;
+        resolversRef.current = [];
+        pending.forEach((resolve) => resolve(blob));
       };
 
       recorder.start(250); // collect data every 250 ms
@@ -96,10 +100,14 @@ export function useAudioRecorder() {
 
   const stopRecording = useCallback(() => {
     return new Promise((resolve) => {
-      resolveRef.current = resolve;
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      const mr = mediaRecorderRef.current;
+      if (mr && mr.state !== 'inactive') {
+        // Queue this caller for onstop, then stop once. A concurrent call (state already
+        // 'inactive') falls to the else branch and resolves empty — it never steals the
+        // real blob from the caller waiting on onstop.
+        resolversRef.current.push(resolve);
         setIsRecording(false);
-        mediaRecorderRef.current.stop();
+        mr.stop();
       } else {
         resolve(new Blob([], { type: 'audio/webm' }));
       }

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
-import { getTreatmentPlan, createTreatmentPlan, updateTreatmentPlan } from '@/lib/services/treatment-plan.service';
+import { getTreatmentPlan, createTreatmentPlan, updateTreatmentPlan, getPendingTreatmentPlans } from '@/lib/services/treatment-plan.service';
 import { createPrescription, getPrescription } from '@/lib/services/prescription.service';
-import { recordPayment, getPatientPayments } from '@/lib/services/payment.service';
+import { recordPayment, getPatientPayments, getPaymentStats } from '@/lib/services/payment.service';
 import { getLabOrders, getPatientLabOrders, createLabOrder, updateLabOrder } from '@/lib/services/lab.service';
 import { apiClient } from '@/lib/api/client';
 
@@ -21,6 +21,9 @@ export const useClinicalStore = create((set, get) => ({
   bills: [],
   prescriptions: [],
   clinicAccounts: [],
+  // Finance screen (API-backed): clinic-wide collection totals + plans still owed on.
+  paymentStats: { today: 0, month: 0, total: 0 },
+  pendingPlans: [],
   loading: false,
   error: null,
 
@@ -209,7 +212,9 @@ export const useClinicalStore = create((set, get) => ({
         date: (p.payment_date || p.paymentDate || '').slice(0, 10),
         type: 'income',
         category: 'Treatment',
-        description: p.patients?.name ? `Payment · ${p.patients.name}` : 'Payment received',
+        description: p.patients?.name || 'Payment received',
+        // What the payment was for — the linked plan's procedure (e.g. "RCT").
+        procedure: p.treatment_plans?.procedure_name || 'Consultation',
         amount: parseFloat(p.amount) || 0,
         patientId: p.patient_id || p.patientId,
         method: p.payment_method || p.paymentMethod || null,
@@ -217,6 +222,46 @@ export const useClinicalStore = create((set, get) => ({
       set({ clinicAccounts: entries });
     } catch (e) {
       console.warn('[ClinicalStore] loadClinicPayments failed', e?.response?.status);
+    }
+  },
+
+  // Today / this-month / all-time collection totals for the finance header.
+  loadPaymentStats: async () => {
+    try {
+      const stats = await getPaymentStats();
+      set({
+        paymentStats: {
+          today: parseFloat(stats?.today) || 0,
+          month: parseFloat(stats?.month) || 0,
+          total: parseFloat(stats?.total) || 0,
+        },
+      });
+    } catch (e) {
+      console.warn('[ClinicalStore] loadPaymentStats failed', e?.response?.status);
+    }
+  },
+
+  // Treatment plans with money still owed — the finance "pending payments" list.
+  loadPendingPlans: async () => {
+    try {
+      const plans = await getPendingTreatmentPlans();
+      set({
+        pendingPlans: plans.map((p) => ({
+          id: p.id,
+          patientId: p.patient_id || p.patients?.id,
+          patientName: p.patients?.name || 'Patient',
+          procedure: p.procedure_name || 'Treatment',
+          estimatedCost: parseFloat(p.estimated_cost) || 0,
+          collectedAmount: parseFloat(p.collected_amount) || 0,
+          pendingAmount: p.pending_amount != null
+            ? parseFloat(p.pending_amount) || 0
+            : Math.max(0, (parseFloat(p.estimated_cost) || 0) - (parseFloat(p.collected_amount) || 0)),
+          createdAt: (p.created_at || '').slice(0, 10),
+          status: p.status,
+        })).filter((p) => p.pendingAmount > 0),
+      });
+    } catch (e) {
+      console.warn('[ClinicalStore] loadPendingPlans failed', e?.response?.status);
     }
   },
 

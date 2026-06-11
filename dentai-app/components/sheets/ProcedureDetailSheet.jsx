@@ -36,7 +36,7 @@ export default function ProcedureDetailSheet({ params, onClose }) {
       {procVisits.length === 0 ? <div className="card"><EmptyState icon="calendar" title="No visits logged" /></div> : (
         <div className="card" style={{ overflow: 'hidden' }}>
           {procVisits.map((v, i) => (
-            <button key={v.id} onClick={() => { onClose(); router.push('/appointments/' + v.id); }} className="rowtap" style={{ width: '100%', minHeight: 48, display: 'flex', alignItems: 'center', gap: 12, padding: '8px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left' }}>
+            <button key={v.id} onClick={() => { onClose(); router.push('/patients/' + (v.patientId || proc.patientId)); }} className="rowtap" style={{ width: '100%', minHeight: 48, display: 'flex', alignItems: 'center', gap: 12, padding: '8px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left' }}>
               <span className="t-meta" style={{ width: 56 }}>{formatDate(v.date)}</span>
               <span style={{ flex: 1, fontSize: 14 }}>Visit {v.visitNumber} of {v.totalVisits}</span>
               <StatusChip status={v.status} />

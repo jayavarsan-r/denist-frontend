@@ -52,8 +52,9 @@ function ConsultModeScreen() {
   const hasRx = p && prescriptions.some((r) => r.patientId === p.id);
   const flags = p ? clinicianFlags(p) : [];
 
-  // Open the record → review → checkout drawer (ConsultRecordSheet).
-  const openRecorder = () => { if (current) { ensureDraft(current.id); openSheet('consultRecord'); } };
+  // Open the record → review → checkout drawer (ConsultRecordSheet). The tap on
+  // Record IS the gesture — the drawer opens already recording.
+  const openRecorder = () => { if (current) { ensureDraft(current.id); openSheet('consultRecord', { autoStart: true }); } };
   const openManual = () => { if (current) { startManual(current.id); openSheet('consultRecord'); } };
 
   /* ─── Call in / swap ─── */

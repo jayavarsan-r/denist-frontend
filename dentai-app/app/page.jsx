@@ -185,7 +185,7 @@ function HomeScreen() {
             {todays.map((v, i) => {
               const p = pById(v.patientId); const proc = procById(v.procedureId); const t = formatTime(v.startTime);
               return (
-                <button key={v.id} onClick={() => router.push('/appointments/' + v.id)} className="rowtap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '12px 0', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left' }}>
+                <button key={v.id} onClick={() => router.push('/patients/' + v.patientId)} className="rowtap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '12px 0', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left' }}>
                   <div style={{ width: 52, flexShrink: 0 }}>
                     <div className="tnum" style={{ fontSize: 15, fontWeight: 700, lineHeight: 1.05 }}>{t.h12}:{String(t.m).padStart(2, '0')}</div>
                     <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', fontWeight: 600 }}>{t.ampm}</div>

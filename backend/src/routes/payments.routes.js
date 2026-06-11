@@ -37,6 +37,24 @@ router.get('/', auth, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// GET /api/payments/stats — clinic-wide collection totals for the finance screen:
+// today, this calendar month, and all time.
+router.get('/stats', auth, async (req, res, next) => {
+  try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
+    const today = new Date().toISOString().split('T')[0];
+    const monthStart = today.slice(0, 8) + '01';
+    const sum = (rows) => (rows || []).reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
+    const [{ data: all, error }, { data: month }, { data: day }] = await Promise.all([
+      supabase.from('payments').select('amount').eq('clinic_id', req.clinicId),
+      supabase.from('payments').select('amount').eq('clinic_id', req.clinicId).gte('payment_date', monthStart),
+      supabase.from('payments').select('amount').eq('clinic_id', req.clinicId).eq('payment_date', today),
+    ]);
+    if (error) throw error;
+    res.json({ today: sum(day), month: sum(month), total: sum(all) });
+  } catch (e) { next(e); }
+});
+
 // GET /api/payments/patient/:patientId
 router.get('/patient/:patientId', auth, async (req, res, next) => {
   try {

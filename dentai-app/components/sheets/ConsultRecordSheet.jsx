@@ -1,29 +1,17 @@
 'use client';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { usePatientStore } from '@/store/usePatientStore';
 import { useQueueStore } from '@/store/useQueueStore';
 import { useClinicalStore } from '@/store/useClinicalStore';
 import { useConsultStore } from '@/store/useConsultStore';
-import Icon from '@/components/icons';
 import ConsultReview from '@/components/consultation/ConsultReview';
+import ConsultRecorder from '@/components/consultation/ConsultRecorder';
 import { useAudioRecorder } from '@/lib/hooks/useAudioRecorder';
 import { useTranscription } from '@/lib/hooks/useTranscription';
 import { useGenerateNote } from '@/lib/hooks/useGenerateNote';
 import { extractPrescription } from '@/lib/services/ai.service';
 import { mergeMedicinesByName } from '@/store/consultDraft.mjs';
-
-/* Accent waveform — consistent with VoiceSheet (dark bars, not red). */
-function Waveform({ bars = 22, color = 'var(--accent)' }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3, height: 56 }}>
-      {Array.from({ length: bars }, (_, i) => {
-        const peak = 10 + Math.round(Math.abs(Math.sin(i * 1.7)) * 30);
-        return <div key={i} style={{ width: 3, borderRadius: 3, background: color, '--peak': peak + 'px', height: peak, animation: `wave ${0.4 + (i % 5) * 0.14}s ease-in-out ${i * 0.04}s infinite` }} />;
-      })}
-    </div>
-  );
-}
 
 // Best-effort continuation inference: if the patient already has an active plan,
 // default this consult to "continuing" it (the doctor can correct on the review).
@@ -51,15 +39,16 @@ const mapRxMed = (m) => ({
 });
 
 /**
- * ConsultRecordSheet — the whole capture → review → checkout flow in one bottom
- * drawer. Replaces the old full-page recording/review screens.
+ * ConsultRecordSheet — the queue consult: capture → review → checkout in one drawer.
  *
- * Self-contained: it reads the in-chair patient from the queue and reads/writes
- * the same useConsultStore draft (keyed by queue-entry id), so a hand-edited
- * review survives a patient swap and a re-open. Internal views: ready → recording
- * → processing → review. Closing mid-record releases the mic.
+ * Self-contained: it reads the in-chair patient from the queue and reads/writes the
+ * same useConsultStore draft (keyed by queue-entry id), so a hand-edited review
+ * survives a patient swap and a re-open. The record/review UI is shared with the
+ * patient-profile consult (ConsultRecorder / ConsultReview) so both entry points look
+ * identical. Confirming sends the patient to the receptionist's checkout — the doctor
+ * never handles cash here. With params.autoStart it opens already recording.
  */
-export default function ConsultRecordSheet({ onClose }) {
+export default function ConsultRecordSheet({ params = {}, onClose }) {
   const showToast = useAppStore((s) => s.showToast);
   const queue = useQueueStore((s) => s.queue);
   const completeConsult = useQueueStore((s) => s.completeConsult);
@@ -96,10 +85,22 @@ export default function ConsultRecordSheet({ onClose }) {
   const [fixPhase, setFixPhase] = useState('idle');
   const [completing, setCompleting] = useState(false);
 
-  // Release the mic if the drawer is dismissed mid-recording.
-  useEffect(() => () => {
-    if (recorder.isRecording) recorder.stopRecording().catch(() => {});
-  }, [recorder.isRecording]);
+  // Release the mic on unmount (drawer dismissed). Depending on isRecording made this
+  // fire on every Stop and double-called stopRecording — orphaning the awaited stop
+  // promise and freezing the screen on "Understanding…". stopRecording self-guards when
+  // already inactive, so an unconditional call here is safe.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => () => { recorder.stopRecording().catch(() => {}); }, []);
+
+  // The Record button was the tap — open already recording (unless a hand-edited
+  // review is waiting, which must never be clobbered).
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (!params.autoStart || autoStarted.current || !current || !p) return;
+    if (view !== 'ready' || (draft?.phase === 'review' && draft?.extraction)) return;
+    autoStarted.current = true;
+    handleStartRecording();
+  }, [params.autoStart, current?.id, !!p]);
 
   if (!current || !p) {
     return (
@@ -180,7 +181,9 @@ export default function ConsultRecordSheet({ onClose }) {
     catch (e) { showToast(e.message || 'Could not start recording'); }
   };
 
-  /* ─── Checkout ─── */
+  /* ─── Confirm & send to front desk — the doctor's last step. Payment/cash is the
+     receptionist's job, so there's no amount step here: completing the consult moves
+     the patient into the receptionist's "Ready for checkout" list. ─── */
   const handleComplete = async () => {
     if (completing) return;
     const ex = draft?.extraction || {};
@@ -188,7 +191,7 @@ export default function ConsultRecordSheet({ onClose }) {
     try {
       await completeConsult(id, { ...ex, transcript: draft?.transcript || ex.transcript || '' });
       resetDraft(id);
-      showToast(`${p?.name?.split(' ')[0] || 'Patient'} done · sent to front desk`);
+      showToast(`${p?.name?.split(' ')[0] || 'Patient'} sent to front desk for checkout`);
       onClose();
     } catch (e) {
       showToast('Failed to save — try again');
@@ -196,14 +199,6 @@ export default function ConsultRecordSheet({ onClose }) {
       setCompleting(false);
     }
   };
-
-  /* ─── Render ─── */
-  const PatientHeader = (
-    <div className="card" style={{ margin: '0 20px 16px', padding: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
-      <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'var(--accent)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 }}>{p.name[0]}</div>
-      <div><div style={{ fontSize: 15, fontWeight: 700 }}>{p.name}</div><div className="t-meta">Token #{current.tokenNumber}</div></div>
-    </div>
-  );
 
   if (view === 'review') {
     return (
@@ -220,49 +215,21 @@ export default function ConsultRecordSheet({ onClose }) {
         onRerecord={() => { setError(id, null); setView('ready'); }}
         onComplete={handleComplete}
         completing={completing}
+        completeLabel="Confirm & send to front desk"
       />
     );
   }
 
   return (
-    <div style={{ paddingBottom: 28, minHeight: 280 }}>
-      {PatientHeader}
-
-      {view === 'ready' && (
-        <div style={{ padding: '8px 24px 0', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-          <button onClick={handleStartRecording} className="tap" style={{ width: 96, height: 96, borderRadius: '50%', background: 'var(--accent)', color: 'var(--accent-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--elevation-2)' }}>
-            <Icon name="mic" size={42} color="var(--accent-ink)" />
-          </button>
-          <div style={{ fontSize: 18, fontWeight: 700, marginTop: 18 }}>Tap to record</div>
-          <div style={{ fontSize: 14, color: 'var(--text-secondary)', textAlign: 'center', marginTop: 4, lineHeight: 1.4, maxWidth: 280 }}>
-            Speak your findings — the plan, prescription and next visits file themselves.
-          </div>
-          <button onClick={handleManual} style={{ marginTop: 22, fontSize: 14, color: 'var(--blue)', fontWeight: 600 }}>or fill in manually ›</button>
-        </div>
-      )}
-
-      {view === 'recording' && (
-        <div style={{ padding: '8px 24px 0' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: 17, fontWeight: 600 }}>Recording for {p.name.split(' ')[0]}</span>
-            <button onClick={handleStop} style={{ color: 'var(--blue)', fontSize: 16, fontWeight: 600 }}>Stop</button>
-          </div>
-          <div style={{ padding: '24px 0 8px' }}><Waveform /></div>
-          <div className="tnum" style={{ textAlign: 'center', fontSize: 20, fontWeight: 600 }}>0:{String(recorder.seconds).padStart(2, '0')}</div>
-          {recorder.seconds >= 25 && (
-            <div style={{ marginTop: 18, fontSize: 12.5, color: 'var(--text-tertiary)', textAlign: 'center', lineHeight: 1.5 }}>
-              Long note — it'll transcribe in parts. No 30-second limit, no error.
-            </div>
-          )}
-        </div>
-      )}
-
-      {view === 'processing' && (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '54px 0' }}>
-          <div style={{ fontSize: 17, fontWeight: 600, marginBottom: 16 }}>Understanding…</div>
-          <div style={{ display: 'flex', gap: 6 }}>{[0, 1, 2].map((i) => <div key={i} style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--accent)', animation: `dots 1.2s ease-in-out ${i * 0.18}s infinite` }} />)}</div>
-        </div>
-      )}
-    </div>
+    <ConsultRecorder
+      patientName={p.name}
+      headerSub={`Token #${current.tokenNumber}`}
+      view={view}
+      seconds={recorder.seconds}
+      onStart={handleStartRecording}
+      onStop={handleStop}
+      onManual={handleManual}
+      processingLabel="Understanding…"
+    />
   );
 }

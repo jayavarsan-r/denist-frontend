@@ -5,6 +5,12 @@ export async function recordPayment(paymentData) {
   return data;
 }
 
+// Clinic-wide collection totals: { today, month, total }
+export async function getPaymentStats() {
+  const { data } = await apiClient.get('/api/payments/stats');
+  return data;
+}
+
 export async function getPatientPayments(patientId) {
   const { data } = await apiClient.get(`/api/payments/patient/${patientId}`);
   return data;

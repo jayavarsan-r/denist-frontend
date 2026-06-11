@@ -73,6 +73,7 @@ export default function ConsultReview({
   onRerecord,
   onComplete,
   completing = false,
+  completeLabel = 'Complete consult',
   error,
 }) {
   if (!ex) return null;
@@ -169,7 +170,7 @@ export default function ConsultReview({
       </div>
 
       <PrimaryButton onClick={completing ? undefined : onComplete} style={completing ? { opacity: 0.6 } : undefined}>
-        {completing ? 'Saving…' : 'Complete consult'}
+        {completing ? 'Saving…' : completeLabel}
       </PrimaryButton>
     </div>
   );

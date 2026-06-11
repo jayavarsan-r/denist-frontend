@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const supabase = require('../config/supabase');
 const auth = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const v = require('../validators');
@@ -18,6 +19,24 @@ router.post('/', auth, validate(v.createTreatmentPlan), async (req, res, next) =
     });
     res.status(201).json({ plan });
   } catch (err) { next(err); }
+});
+
+// GET /api/treatment-plans — clinic-wide list (with patient names) for the finance
+// screen. ?pending=1 keeps only plans the patient still owes money on.
+router.get('/', auth, async (req, res, next) => {
+  try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
+    let q = supabase.from('treatment_plans')
+      .select('*, patients(id, name)')
+      .eq('clinic_id', req.clinicId)
+      .order('created_at', { ascending: false })
+      .limit(200);
+    if (req.query.pending) q = q.gt('pending_amount', 0).neq('status', 'cancelled');
+    const { data, error } = await q;
+    if (error) throw error;
+    // deleted_at may not exist on the live DB (pre-migration-004) — filter in JS.
+    res.json({ plans: (data || []).filter(p => !p.deleted_at) });
+  } catch (e) { next(e); }
 });
 
 router.get('/:id', auth, async (req, res, next) => {

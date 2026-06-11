@@ -117,6 +117,10 @@ export const useQueueStore = create((set, get) => ({
         notes:         consult?.instructions || '',
         medicines:     consult?.medicines || [],
         followUp:      consult?.followUp || '',
+        // AI-suggested return visits (resolved dates) → backend assigns each a free time.
+        appointments:  Array.isArray(consult?.appointments)
+          ? consult.appointments.filter(a => a && /^\d{4}-\d{2}-\d{2}$/.test(String(a.date || '').trim()))
+          : [],
       });
     } catch {
       get().loadQueue();
@@ -138,14 +142,14 @@ export const useQueueStore = create((set, get) => ({
 
   /* ─── Add patient to queue ─── */
   addToQueue: async ({ patientId, chiefComplaint, priority, xrays }) => {
-    try {
-      const data = await apiAddToQueue({ patientId, chiefComplaint, priority: priority || 'normal' });
-      const entry = normaliseEntry(data.entry || data);
-      set((s) => ({ queue: [...s.queue, entry] }));
-      return entry;
-    } catch (e) {
-      throw e;
-    }
+    const data = await apiAddToQueue({ patientId, chiefComplaint, priority: priority || 'normal' });
+    const entry = normaliseEntry(data.entry || data);
+    // Idempotent on the backend: it may return an existing active entry. Don't add a
+    // duplicate row to the local queue in that case.
+    set((s) => (s.queue.some((e) => e.id === entry.id)
+      ? { queue: s.queue.map((e) => (e.id === entry.id ? entry : e)) }
+      : { queue: [...s.queue, entry] }));
+    return entry;
   },
 
   /* ─── Remove from queue ─── */

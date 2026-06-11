@@ -26,9 +26,10 @@ Extract structured information from the dentist's voice note and return ONLY val
   "remainingSittings": "number or null — remaining sittings after today",
   "isMultiSitting": "boolean — true if procedure requires multiple visits or dentist mentions sittings",
   "treatmentPlanSuggested": "boolean — true if the note suggests creating a treatment plan",
-  "assignedDoctor": "string or null — name of doctor assigned to this procedure if mentioned (e.g. 'This will be handled by Dr Priya' → 'Dr Priya', 'Refer to Dr Rajkumar' → 'Dr Rajkumar'). null if not mentioned."
+  "assignedDoctor": "string or null — name of doctor assigned to this procedure if mentioned (e.g. 'This will be handled by Dr Priya' → 'Dr Priya', 'Refer to Dr Rajkumar' → 'Dr Rajkumar'). null if not mentioned.",
+  "followUpAppointments": "array — ONE object per FUTURE visit the dentist wants the patient to come back for. Each: { \"date\": \"YYYY-MM-DD\", \"purpose\": \"short English label e.g. 'RCT — Session 2'\" }. Return [] if the dentist does NOT ask the patient to return. RULES: (a) If the dentist mentions multiple sittings (e.g. '4 sittings') but no specific dates, create one entry per REMAINING sitting spaced ~7 days apart starting next week, numbered Session 2, Session 3, …. (b) If specific timing is said ('come back Thursday', 'review after 3 months', 'next week'), resolve it to an absolute date from today ${today}. (c) Never invent a return visit the dentist didn't ask for — a one-off completed cleaning with no recall = []."
 }
-If a follow-up is mentioned (e.g. 'follow up in 7 days', 'next appointment in 2 weeks'), calculate the exact date from today ${today}.
+If a follow-up is mentioned (e.g. 'follow up in 7 days', 'next appointment in 2 weeks'), calculate the exact date from today ${today} and also include it as an entry in followUpAppointments.
 For FDI tooth numbers: if the dentist says 'tooth 6' or 'upper right 6', map to FDI '16'. If 'lower left molar' or 'tooth 36', use '36'. Always output standard FDI two-digit numbers.
 Return ONLY the JSON object, no markdown, no explanation, no code blocks.`;
 };

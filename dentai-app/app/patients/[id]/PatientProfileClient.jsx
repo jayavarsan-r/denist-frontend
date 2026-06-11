@@ -1,6 +1,6 @@
 'use client';
-import React, { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAppStore } from '@/store/useAppStore';
 import { usePatientStore } from '@/store/usePatientStore';
 import { useVisitStore } from '@/store/useVisitStore';
@@ -15,14 +15,17 @@ import { getToothHistory, getPatientCaseSheet } from '@/lib/services/patient.ser
 import { getPatientXrays, uploadXray, uploadPatientPhoto } from '@/lib/services/xray.service';
 import BeforeAfterCapture from '@/components/sheets/BeforeAfterCapture';
 
-function VoiceToolbar({ onClick, label = 'Add voice entry' }) {
+/* Floating mic — a side FAB (not a full-width bar). Tapping it opens the consult
+   drawer already recording, identical to the consultation page. */
+function StartConsultFab({ onClick }) {
   return (
-    <button onClick={onClick} className="rowtap" style={{
-      flexShrink: 0, height: 48, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-      background: 'var(--surface)', borderTop: '1px solid var(--border-light)', color: 'var(--text-secondary)',
-    }}>
-      <Icon name="mic" size={20} />
-      <span style={{ fontSize: 14, fontWeight: 500 }}>{label}</span>
+    <button
+      onClick={onClick}
+      className="tap"
+      aria-label="Start consultation"
+      style={{ position: 'absolute', right: 18, bottom: 22, zIndex: 20, width: 60, height: 60, borderRadius: '50%', background: 'var(--accent)', color: 'var(--accent-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--elevation-2)', border: 'none' }}
+    >
+      <Icon name="mic" size={26} color="var(--accent-ink)" />
     </button>
   );
 }
@@ -83,7 +86,7 @@ function OverviewTab({ p, caseSheet, toothHistory, teeth, activePlan, activeTeet
   return (
     <div>
       {/* ── NEXT ACTION — the single strongest, operational CTA ── */}
-      <button onClick={() => openSheet('patientConsult', { patientId: p.id })} className="tap" style={{
+      <button onClick={() => openSheet('patientConsult', { patientId: p.id, autoStart: true })} className="tap" style={{
         width: '100%', display: 'flex', alignItems: 'center', gap: 14, background: '#1C1C1E', color: '#fff',
         borderRadius: 18, padding: '18px 20px', textAlign: 'left', marginBottom: 18, boxShadow: 'var(--elevation-2)',
       }}>
@@ -501,6 +504,9 @@ function LabTab({ p, labOrders, openSheet, markLabReceived }) {
 function BillingTab({ p, prescriptions, openSheet, toothHistory, caseSheet }) {
   const summary = caseSheet?.summary || {};
   const payments = (toothHistory?.payments || []).slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  // What each payment was for — resolved from its linked treatment plan.
+  const planProcedure = new Map((toothHistory?.treatmentPlans || []).map(tp => [tp.id, tp.procedure]));
+  const paymentFor = (pay) => planProcedure.get(pay.treatmentPlanId) || 'Consultation fee';
   const collected = payments.reduce((s, pay) => s + (parseFloat(pay.amount) || 0), 0) || (summary.totalCollected || 0);
   const billed = toothHistory?.totalBilled ?? summary.totalBilled ?? 0;
   const planned = summary.totalPlannedCost ?? 0;
@@ -539,8 +545,8 @@ function BillingTab({ p, prescriptions, openSheet, toothHistory, caseSheet }) {
             <div key={pay.id || i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none' }}>
               <div style={{ width: 34, height: 34, borderRadius: '50%', background: 'rgba(48,209,88,0.14)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="rupee" size={16} color="#1E8E3E" /></div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 15, fontWeight: 600 }}>{pay.date ? formatDate(pay.date) : 'Payment'}</div>
-                {pay.method && <div className="t-meta" style={{ textTransform: 'capitalize' }}>{pay.method}</div>}
+                <div style={{ fontSize: 15, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{paymentFor(pay)}</div>
+                <div className="t-meta" style={{ textTransform: 'capitalize' }}>{[pay.date && formatDate(pay.date), pay.method].filter(Boolean).join(' · ')}</div>
               </div>
               <span className="tnum" style={{ fontSize: 15, fontWeight: 700, color: '#1E8E3E' }}>+{formatCurrency(parseFloat(pay.amount) || 0)}</span>
             </div>
@@ -1021,7 +1027,7 @@ function PatientProfile({ patientId, initialTab }) {
   };
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)', position: 'relative' }}>
       <NavBar title="Patient" onBack={() => router.back()} right={<button onClick={() => openSheet('editPatient', { id: p.id })} style={{ color: 'var(--blue)', display: 'flex' }}><Icon name="pencil" size={20} /></button>} />
       <div className="scroll" style={{ flex: 1 }}>
         {/* hero */}
@@ -1075,7 +1081,7 @@ function PatientProfile({ patientId, initialTab }) {
           ))}
         </div>
 
-        <div style={{ padding: '18px 20px 24px' }}>
+        <div style={{ padding: '18px 20px 96px' }}>
           {tab === 'Overview' && <OverviewTab p={p} caseSheet={caseSheet} toothHistory={toothHistory} teeth={mergedTeeth} activePlan={activePlan} activeTeeth={activeTeeth} openSheet={openSheet} router={router} setTab={setTab} />}
           {tab === 'Cases' && <CasesTab p={p} procedures={procedures} caseSheet={caseSheet} clinicalVisits={clinicalVisits} toothHistory={toothHistory} openSheet={openSheet} />}
           {tab === 'Tooth Map' && <ToothMapTab p={{ ...p, teeth: mergedTeeth }} bills={bills} openSheet={openSheet} toothHistory={toothHistory} toothLoading={toothLoading} />}
@@ -1083,9 +1089,23 @@ function PatientProfile({ patientId, initialTab }) {
           {tab === 'Billing' && <BillingTab p={p} prescriptions={prescriptions} openSheet={openSheet} toothHistory={toothHistory} caseSheet={caseSheet} />}
         </div>
       </div>
-      <VoiceToolbar onClick={() => openSheet('patientConsult', { patientId: p.id })} />
+      <StartConsultFab onClick={() => openSheet('patientConsult', { patientId: p.id, autoStart: true })} />
     </div>
   );
 }
 
-export default PatientProfile;
+// Reads ?tab=Billing (etc.) so other screens — e.g. finance — can deep-link straight
+// to a profile tab. useSearchParams needs a Suspense boundary under static export.
+function PatientProfileWithParams({ patientId }) {
+  const searchParams = useSearchParams();
+  const tab = searchParams.get('tab');
+  return <PatientProfile patientId={patientId} initialTab={PROFILE_TABS.includes(tab) ? tab : undefined} />;
+}
+
+export default function PatientProfileClient({ patientId }) {
+  return (
+    <Suspense fallback={null}>
+      <PatientProfileWithParams patientId={patientId} />
+    </Suspense>
+  );
+}

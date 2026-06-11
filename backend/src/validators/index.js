@@ -114,6 +114,13 @@ const completeConsult = z.object({
   transcript: optStr,
   notes: optStr,
   followUp: optStr, // doctor's recommended follow-up (date YYYY-MM-DD or free text)
+  // AI-suggested return visits (resolved dates). The transaction assigns each a free
+  // time and falls back to sittings/follow-up when this is empty.
+  appointments: z.array(z.object({
+    date: z.string().trim(),
+    session: z.coerce.number().int().optional().nullable(),
+    purpose: optStr,
+  })).optional().nullable(),
 });
 
 // ── Payments ──────────────────────────────────────────────────────────────

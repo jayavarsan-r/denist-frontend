@@ -97,6 +97,12 @@ router.get('/history', auth, async (req, res, next) => {
 });
 
 // POST /api/queue — add patient to queue
+const QUEUE_SELECT = `
+  *,
+  patients(id, name, phone, age, gender),
+  treatment_plans(id, procedure_name, total_sittings, completed_sittings)
+`;
+
 router.post('/', auth, validate(v.addToQueue), async (req, res, next) => {
   try {
     if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
@@ -105,33 +111,62 @@ router.post('/', auth, validate(v.addToQueue), async (req, res, next) => {
 
     const today = new Date().toISOString().split('T')[0];
 
+    // Idempotent check-in: if this patient already has an ACTIVE entry today, return it
+    // instead of failing/duplicating. This is what makes "add an existing patient again"
+    // succeed cleanly (it was surfacing as "Check-in failed") and also sidesteps any
+    // unique constraint a drifted DB might carry.
+    const { data: existing } = await supabase.from('queue_entries')
+      .select(QUEUE_SELECT)
+      .eq('clinic_id', req.clinicId).eq('queue_date', today).eq('patient_id', patientId)
+      .in('status', ['waiting', 'in_consultation', 'ready_for_checkout'])
+      .order('created_at', { ascending: false }).limit(1).maybeSingle();
+    if (existing) return res.status(200).json({ entry: existing, alreadyInQueue: true });
+
     const { count } = await supabase
       .from('queue_entries')
       .select('id', { count: 'exact', head: true })
       .eq('clinic_id', req.clinicId)
       .eq('queue_date', today);
 
-    const nextToken = (count || 0) + 1;
+    // Full row, then progressively smaller fallbacks so a schema-drifted DB (missing an
+    // optional column) can't turn check-in into a hard failure. Token collisions (23505)
+    // recompute and retry once.
+    const insertEntry = async (tokenNumber) => {
+      const full = {
+        clinic_id:         req.clinicId,
+        patient_id:        patientId,
+        treatment_plan_id: treatmentPlanId || null,
+        added_by:          req.staffId || null,
+        assigned_doctor:   assignedDoctor || null,
+        chief_complaint:   chiefComplaint || null,
+        visit_reason:      visitReason || null,
+        priority:          priority || 'normal',
+        queue_date:        today,
+        token_number:      tokenNumber,
+        sort_order:        tokenNumber,
+        status:            'waiting',
+      };
+      const minimal = {
+        clinic_id: req.clinicId, patient_id: patientId, chief_complaint: chiefComplaint || null,
+        priority: priority || 'normal', queue_date: today, token_number: tokenNumber, status: 'waiting',
+      };
+      let { data, error } = await supabase.from('queue_entries').insert(full).select(QUEUE_SELECT).single();
+      if (error && /column|schema|does not exist/i.test(error.message || '')) {
+        ({ data, error } = await supabase.from('queue_entries').insert(minimal).select(QUEUE_SELECT).single());
+      }
+      return { data, error };
+    };
 
-    const { data, error } = await supabase.from('queue_entries').insert({
-      clinic_id:         req.clinicId,
-      patient_id:        patientId,
-      treatment_plan_id: treatmentPlanId || null,
-      added_by:          req.staffId || null,
-      assigned_doctor:   assignedDoctor || null,
-      chief_complaint:   chiefComplaint || null,
-      visit_reason:      visitReason || null,
-      priority:          priority || 'normal',
-      queue_date:        today,
-      token_number:      nextToken,
-      sort_order:        nextToken,
-      status:            'waiting',
-    }).select(`
-      *,
-      patients(id, name, phone, age, gender),
-      treatment_plans(id, procedure_name, total_sittings, completed_sittings)
-    `).single();
-
+    let tok = (count || 0) + 1;
+    let { data, error } = await insertEntry(tok);
+    if (error && error.code === '23505') {
+      // Token raced with another check-in — recompute from the current max and retry once.
+      const { data: maxRow } = await supabase.from('queue_entries')
+        .select('token_number').eq('clinic_id', req.clinicId).eq('queue_date', today)
+        .order('token_number', { ascending: false }).limit(1).maybeSingle();
+      tok = ((maxRow?.token_number) || tok) + 1;
+      ({ data, error } = await insertEntry(tok));
+    }
     if (error) throw error;
     res.status(201).json({ entry: data });
   } catch (e) { next(e); }
@@ -253,7 +288,7 @@ router.get('/:id/checkout-summary', auth, async (req, res, next) => {
         estimatedCost: plan?.estimated_cost != null ? parseFloat(plan.estimated_cost) : 0,
         collectedAmount: plan?.collected_amount != null ? parseFloat(plan.collected_amount) : 0,
         pendingAmount: plan?.pending_amount != null ? parseFloat(plan.pending_amount) : 0,
-        appointments: appts.map(a => ({ date: a.appointment_date, time: a.appointment_time, purpose: a.purpose, status: a.status, sittingNumber: a.sitting_number })),
+        appointments: appts.map(a => ({ id: a.id, date: a.appointment_date, time: a.appointment_time, purpose: a.purpose, status: a.status, sittingNumber: a.sitting_number })),
         medicines: Array.isArray(presc?.medicines) ? presc.medicines.map(m => ({
           name: m.name || '', dose: m.dose || m.dosage || '', frequency: m.frequency || '',
           duration: m.duration || '', timing: m.timing || '',
@@ -272,7 +307,7 @@ router.post('/:id/complete-consult', auth, validate(v.completeConsult), async (r
   try {
     if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
     let { patientId } = req.body;
-    const { procedure, diagnosis, toothNumber, toothNumbers, totalSittings, estimatedCost, transcript, notes, followUp } = req.body;
+    const { procedure, diagnosis, toothNumber, toothNumbers, totalSittings, estimatedCost, transcript, notes, followUp, appointments } = req.body;
 
     // The queue entry already knows the patient — default from it so the client
     // never has to resend patientId (was a silent 400 trap).
@@ -286,7 +321,7 @@ router.post('/:id/complete-consult', auth, validate(v.completeConsult), async (r
     const result = await transaction.completeConsultation({
       clinicId: req.clinicId, dentistId: req.dentistId, staffId: req.staffId, requestId: req.id,
       queueId: req.params.id,
-      patientId, procedure, diagnosis, toothNumber, toothNumbers, totalSittings, estimatedCost, transcript, notes, followUp,
+      patientId, procedure, diagnosis, toothNumber, toothNumbers, totalSittings, estimatedCost, transcript, notes, followUp, appointments,
     });
     res.status(201).json(result);
   } catch (e) { next(e); }

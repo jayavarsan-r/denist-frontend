@@ -61,7 +61,7 @@ function ApptBlock({ v, patients, procedures, colW, onDragMove, onOpen, dragging
   );
 }
 
-function WeekView({ visits, patients, procedures, openSheet }) {
+function WeekView({ visits, patients, procedures, goToPatient }) {
   const days = weekDays(TODAY);
   const pById = id => patients.find(p => p.id === id);
   const procById = id => procedures.find(p => p.id === id);
@@ -93,7 +93,7 @@ function WeekView({ visits, patients, procedures, openSheet }) {
                   {dayVisits.map((v, i) => {
                     const p = pById(v.patientId); const purpose = v.purpose || 'Consultation'; const t = formatTime(v.startTime);
                     return (
-                      <button key={v.id} onClick={() => openSheet('apptPeek', { id: v.id })} className="rowtap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '11px 0', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left', opacity: isPast ? 0.62 : 1 }}>
+                      <button key={v.id} onClick={() => goToPatient(v.patientId)} className="rowtap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '11px 0', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left', opacity: isPast ? 0.62 : 1 }}>
                         <div style={{ width: 58, flexShrink: 0 }}>
                           <div className="tnum" style={{ fontSize: 15, fontWeight: 700, lineHeight: 1.05 }}>{t.h12}:{String(t.m).padStart(2, '0')}</div>
                           <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', fontWeight: 600 }}>{t.ampm}</div>
@@ -117,7 +117,7 @@ function WeekView({ visits, patients, procedures, openSheet }) {
   );
 }
 
-function DayView({ visits, patients, procedures, openSheet, date, setDate }) {
+function DayView({ visits, patients, procedures, goToPatient, date, setDate }) {
   const iso = date || TODAY;
   const isToday = iso === TODAY;
   const dayVisits = visits.filter(v => v.date === iso).sort((a, b) => a.startTime.localeCompare(b.startTime));
@@ -149,7 +149,7 @@ function DayView({ visits, patients, procedures, openSheet, date, setDate }) {
           </div>
         ))}
         <div style={{ position: 'absolute', top: 0, left: 0, width: colW, height: '100%' }}>
-          {dayVisits.map(v => <ApptBlock key={v.id} v={v} patients={patients} procedures={procedures} colW={colW} onDragMove={() => {}} onOpen={(vv) => openSheet('apptPeek', { id: vv.id })} dragging={false} />)}
+          {dayVisits.map(v => <ApptBlock key={v.id} v={v} patients={patients} procedures={procedures} colW={colW} onDragMove={() => {}} onOpen={(vv) => goToPatient(vv.patientId)} dragging={false} />)}
         </div>
         {nowFrac != null && (
           <div style={{ position: 'absolute', top: nowFrac, left: 0, width: colW, zIndex: 30 }}>
@@ -163,7 +163,7 @@ function DayView({ visits, patients, procedures, openSheet, date, setDate }) {
 
 const MONTHS_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
-function MonthView({ visits, patients, openSheet }) {
+function MonthView({ visits, patients, goToPatient }) {
   const [base, setBase] = React.useState(() => parseDate(TODAY));   // month being shown
   const [selected, setSelected] = React.useState(TODAY);           // selected day
   const first = new Date(base.getFullYear(), base.getMonth(), 1);
@@ -221,7 +221,7 @@ function MonthView({ visits, patients, openSheet }) {
         ) : selVisits.map((v, i) => {
           const p = pById(v.patientId); const col = getProcedureColor(v.purpose || 'Other'); const t = formatTime(v.startTime);
           return (
-            <button key={v.id} onClick={() => openSheet('apptPeek', { id: v.id })} className="rowtap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 0', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left' }}>
+            <button key={v.id} onClick={() => goToPatient(v.patientId)} className="rowtap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 0', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left' }}>
               <div style={{ width: 3, alignSelf: 'stretch', minHeight: 36, borderRadius: 2, background: col.border, flexShrink: 0 }} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 15.5, fontWeight: 600 }}>{p ? p.name : 'Patient'}</div>
@@ -239,7 +239,7 @@ function MonthView({ visits, patients, openSheet }) {
 const STATUS_COLOR = { confirmed: 'var(--blue)', arrived: 'var(--yellow)', done: 'var(--green)', completed: 'var(--green)', no_show: 'var(--red)', scheduled: 'var(--blue)' };
 const STATUS_LABEL = { confirmed: 'Confirmed', arrived: 'Arrived', done: 'Done', completed: 'Completed', no_show: 'No-show', scheduled: 'Scheduled' };
 
-function HistoryView({ visits, clinicalVisits, patients, procedures, openSheet }) {
+function HistoryView({ visits, clinicalVisits, patients, procedures, goToPatient }) {
   const pById = (id) => patients.find(p => p.id === id);
 
   // Combine appointments (all) and clinical consultation records
@@ -300,7 +300,7 @@ function HistoryView({ visits, clinicalVisits, patients, procedures, openSheet }
                   return (
                     <button
                       key={e.id + e._kind}
-                      onClick={() => isConsult ? openSheet('visitRecord', { id: e.id }) : openSheet('apptPeek', { id: e.id })}
+                      onClick={() => goToPatient(e.patientId)}
                       className="rowtap"
                       style={{ width: '100%', display: 'flex', alignItems: 'flex-start', gap: 12, padding: '13px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left', opacity: isPast && !isToday ? 0.85 : 1 }}
                     >
@@ -359,6 +359,8 @@ function ScheduleScreen() {
 
   const view = scheduleView;
   const isHistory = view === 'History';
+  // Tapping any patient row opens their full detail page (no peek drawer).
+  const goToPatient = (patientId) => { if (patientId) router.push('/patients/' + patientId); };
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--surface)' }}>
@@ -375,7 +377,7 @@ function ScheduleScreen() {
       </div>
 
       {isHistory ? (
-        <HistoryView visits={visits} clinicalVisits={clinicalVisits} patients={patients} procedures={procedures} openSheet={openSheet} />
+        <HistoryView visits={visits} clinicalVisits={clinicalVisits} patients={patients} procedures={procedures} goToPatient={goToPatient} />
       ) : loading && visits.length === 0 ? (
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
@@ -385,11 +387,11 @@ function ScheduleScreen() {
         </div>
       ) : view === 'Month' ? (
         // Every view shows its own structure (grid / week list / day timeline) even when empty.
-        <MonthView visits={visits} patients={patients} openSheet={openSheet} />
+        <MonthView visits={visits} patients={patients} goToPatient={goToPatient} />
       ) : view === 'Week' ? (
-        <WeekView visits={visits} patients={patients} procedures={procedures} openSheet={openSheet} />
+        <WeekView visits={visits} patients={patients} procedures={procedures} goToPatient={goToPatient} />
       ) : (
-        <DayView visits={visits} patients={patients} procedures={procedures} openSheet={openSheet} date={dayDate} setDate={setDayDate} />
+        <DayView visits={visits} patients={patients} procedures={procedures} goToPatient={goToPatient} date={dayDate} setDate={setDayDate} />
       )}
     </div>
   );

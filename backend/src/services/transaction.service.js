@@ -31,6 +31,33 @@ function makeDisplayId(city) {
   return `DENT-${prefix}-${String(Math.floor(100 + Math.random() * 900))}`;
 }
 
+const _toMin = (hhmm) => { const [h, m] = String(hhmm).slice(0, 5).split(':').map(Number); return h * 60 + (m || 0); };
+const _toHHMM = (mins) => `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
+
+// Pick the first open 30-min-aligned time on `date` inside clinic hours, skipping
+// existing (non-cancelled) appointments so a suggested visit lands on a real, free
+// slot rather than a null time. Best-effort: any failure returns a sensible default.
+async function firstFreeTime(clinicId, date, durationMins = 30, alreadyPicked = []) {
+  const OPEN = 10 * 60, CLOSE = 18 * 60; // 10:00–18:00 default working window
+  try {
+    const { data: appts } = await supabase.from('appointments')
+      .select('appointment_time, duration_minutes')
+      .eq('clinic_id', clinicId).eq('appointment_date', date).neq('status', 'cancelled');
+    const booked = [
+      ...(appts || []).filter(a => a.appointment_time).map(a => {
+        const s = _toMin(a.appointment_time); return [s, s + (a.duration_minutes || 30)];
+      }),
+      // Times we just assigned to earlier suggested sessions on this same date.
+      ...alreadyPicked.map(t => { const s = _toMin(t); return [s, s + durationMins]; }),
+    ];
+    for (let t = OPEN; t + durationMins <= CLOSE; t += 30) {
+      const clash = booked.some(([s, e]) => t < e && t + durationMins > s);
+      if (!clash) return _toHHMM(t);
+    }
+  } catch { /* non-fatal — fall through to default */ }
+  return _toHHMM(OPEN);
+}
+
 // ── completeConsultation ──────────────────────────────────────────────────
 async function completeConsultation(ctx) {
   const { clinicId, dentistId, staffId, requestId, queueId,
@@ -92,30 +119,48 @@ async function completeConsultation(ctx) {
     } catch (e) { /* non-fatal — table may not exist pre-migration */ }
   }
 
-  // 3. Recommended appointments (non-fatal):
-  //    - multi-sitting → one suggested stub per remaining session (weekly)
-  //    - single-sitting with a follow-up date → one follow-up appointment
+  // 3. Recommended appointments (non-fatal). Each is given a REAL free time on its
+  //    date (availability-checked) so the receptionist sees a concrete slot to confirm
+  //    or edit — not a blank time. Source of the dates, in priority order:
+  //    (a) explicit dates the dentist dictated (ctx.appointments, resolved by Gemini),
+  //    (b) multi-sitting → one suggested session per remaining sitting (weekly),
+  //    (c) single-sitting with a follow-up date → one follow-up appointment.
   const appointments = [];
-  const apptInserts = [];
-  if (sittings > 1) {
+  let plan_specs = [];
+  const aiAppts = Array.isArray(ctx.appointments)
+    ? ctx.appointments.filter(a => a && /^\d{4}-\d{2}-\d{2}$/.test(String(a.date || '').trim()))
+    : [];
+  if (aiAppts.length) {
+    plan_specs = aiAppts.map((a, i) => ({
+      date: String(a.date).trim(),
+      sitting: Number(a.session || a.sitting) || i + 2,
+      purpose: (a.purpose || `${procedure} — Session ${i + 2}`).trim(),
+    }));
+  } else if (sittings > 1) {
     for (let i = 2; i <= sittings; i++) {
-      const d = new Date();
-      d.setDate(d.getDate() + (i - 1) * 7);
-      apptInserts.push({
-        patient_id: patientId, dentist_id: dentistId, clinic_id: clinicId || null,
-        appointment_date: d.toISOString().split('T')[0], appointment_time: null,
-        sitting_number: i, purpose: `${procedure} — Session ${i}`, status: 'suggested',
-      });
+      const d = new Date(); d.setDate(d.getDate() + (i - 1) * 7);
+      plan_specs.push({ date: d.toISOString().split('T')[0], sitting: i, purpose: `${procedure} — Session ${i}` });
     }
   } else if (followUpDate) {
-    apptInserts.push({
-      patient_id: patientId, dentist_id: dentistId, clinic_id: clinicId || null,
-      appointment_date: followUpDate, appointment_time: null,
-      sitting_number: 2, purpose: `${procedure} — Follow-up`, status: 'suggested',
-    });
+    plan_specs.push({ date: followUpDate, sitting: 2, purpose: `${procedure} — Follow-up` });
   }
-  if (apptInserts.length) {
-    const { data: apptData } = await supabase.from('appointments').insert(apptInserts).select();
+
+  if (plan_specs.length) {
+    const pickedByDate = {};
+    const apptInserts = [];
+    for (const spec of plan_specs) {
+      const time = await firstFreeTime(clinicId, spec.date, 30, pickedByDate[spec.date] || []);
+      (pickedByDate[spec.date] = pickedByDate[spec.date] || []).push(time);
+      apptInserts.push({
+        patient_id: patientId, dentist_id: dentistId, clinic_id: clinicId || null,
+        appointment_date: spec.date, appointment_time: time,
+        sitting_number: spec.sitting, purpose: spec.purpose, status: 'suggested',
+      });
+    }
+    // duration_minutes may not exist pre-migration-008 — retry without it.
+    let { data: apptData, error: apptErr } = await supabase
+      .from('appointments').insert(apptInserts.map(a => ({ ...a, duration_minutes: 30 }))).select();
+    if (apptErr) ({ data: apptData } = await supabase.from('appointments').insert(apptInserts).select());
     if (apptData) appointments.push(...apptData);
   }
 

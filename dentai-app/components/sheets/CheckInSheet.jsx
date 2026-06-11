@@ -220,7 +220,10 @@ export default function CheckInSheet({ onClose }) {
       showToast('Added to queue');
       onClose();
     } catch (e) {
-      showToast(e?.response?.data?.message || 'Check-in failed. Try again.');
+      // Surface the REAL reason — the backend envelope nests it under error.message,
+      // which the old `e.response.data.message` path never read (so every failure looked
+      // like a generic "try again").
+      showToast(e?.apiError?.message || e?.message || 'Check-in failed. Try again.');
     } finally {
       setLoading(false);
     }
