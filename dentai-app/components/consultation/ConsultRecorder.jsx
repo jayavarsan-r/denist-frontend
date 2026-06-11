@@ -57,15 +57,17 @@ export default function ConsultRecorder({
       )}
 
       {view === 'recording' && (
-        <div style={{ padding: '8px 24px 0' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: 17, fontWeight: 600 }}>Recording for {first}</span>
-            <button onClick={onStop} style={{ color: 'var(--blue)', fontSize: 16, fontWeight: 600 }}>Stop</button>
-          </div>
-          <div style={{ padding: '24px 0 8px' }}><Waveform /></div>
-          <div className="tnum" style={{ textAlign: 'center', fontSize: 20, fontWeight: 600 }}>{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}</div>
+        <div style={{ padding: '8px 24px 0', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+          <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--red)' }}>Recording for {first}</div>
+          <div style={{ padding: '18px 0 6px', width: '100%' }}><Waveform color="var(--red)" /></div>
+          <div className="tnum" style={{ fontSize: 22, fontWeight: 700, marginBottom: 18 }}>{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}</div>
+          {/* Big red stop button — same prominent control as the check-in page */}
+          <button onClick={onStop} className="tap" aria-label="Stop recording" style={{ width: 72, height: 72, borderRadius: '50%', background: 'var(--red)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--elevation-2)', border: 'none' }}>
+            <Icon name="stop" size={28} color="#fff" />
+          </button>
+          <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-secondary)', marginTop: 12 }}>Tap to stop</div>
           {seconds >= 25 && (
-            <div style={{ marginTop: 18, fontSize: 12.5, color: 'var(--text-tertiary)', textAlign: 'center', lineHeight: 1.5 }}>
+            <div style={{ marginTop: 14, fontSize: 12.5, color: 'var(--text-tertiary)', textAlign: 'center', lineHeight: 1.5 }}>
               Long note — it'll transcribe in parts. No 30-second limit, no error.
             </div>
           )}
