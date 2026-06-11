@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAppStore } from '@/store/useAppStore';
 import { usePatientStore } from '@/store/usePatientStore';
@@ -62,7 +62,12 @@ function HomeScreen() {
   bills.filter(b => b.outstanding > 0).forEach(b => { if (!alerts.some(a => a.pid === b.patientId && a.kind === 'pay')) alerts.push({ pid: b.patientId, kind: 'pay', text: formatCurrency(b.outstanding) + ' pending', name: b.patientName }); });
 
   const firstName = (clinic.doctorName || 'Doctor').replace(/^Dr\.?\s*/i, 'Dr. ');
-  const greeting = useMemo(() => getGreeting(), []);
+  // getGreeting() is time- AND random-based, so it must run only on the client.
+  // Computing it during SSR (the static export freezes it at build time) produced a
+  // different string than the client at runtime → hydration mismatch. Start empty so
+  // the server HTML and first client render agree, then fill it in after mount.
+  const [greeting, setGreeting] = useState('');
+  useEffect(() => { setGreeting(getGreeting()); }, []);
 
   return (
     <div className="scroll" style={{ flex: 1, background: 'var(--surface)' }}>

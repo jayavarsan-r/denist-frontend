@@ -104,7 +104,10 @@ export default function LoginPage() {
       await sendOtp(cleaned);
       setPhase('otp');
     } catch (e) {
-      setError(e?.response?.data?.error || e?.response?.data?.message || 'Failed to send OTP. Try again.');
+      // The API envelope nests the message under error.message; the client also puts
+      // it on e.message/e.apiError. Never store the raw error OBJECT — it renders as
+      // "[object]" and crashes React (Objects are not valid as a React child).
+      setError(e?.apiError?.message || e?.message || 'Failed to send OTP. Try again.');
     } finally {
       setSending(false);
     }
@@ -138,7 +141,7 @@ export default function LoginPage() {
         router.replace('/');
       }
     } catch (e) {
-      setError(e?.response?.data?.error || e?.response?.data?.message || 'Invalid OTP. Try again.');
+      setError(e?.apiError?.message || e?.message || 'Invalid OTP. Try again.');
       setOtp('');
     } finally {
       setVerifying(false);

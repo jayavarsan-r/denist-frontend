@@ -127,7 +127,7 @@ export default function NewPatientSheet({ onClose }) {
         setTimeout(() => setVoicePhase('idle'), 1800);
       } catch (err) {
         const code = err?.apiError?.code;
-        const msg = err?.apiError?.message || err?.response?.data?.error || err?.message || '';
+        const msg = err?.apiError?.message || err?.response?.data?.error?.message || err?.message || '';
         setVoiceError(
           code === 'RATE_LIMITED' || /rate limit|quota|exhaust/i.test(msg)
             ? 'AI is busy (free-tier limit) — wait a few seconds and retry, or type below'
@@ -161,7 +161,7 @@ export default function NewPatientSheet({ onClose }) {
       showToast(`Patient created · ${displayId}`);
       onClose();
     } catch (e) {
-      showToast(e?.response?.data?.error || 'Could not create patient');
+      showToast(e?.apiError?.message || e?.message || 'Could not create patient');
     } finally { setSaving(false); }
   };
 

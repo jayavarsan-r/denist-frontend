@@ -47,7 +47,9 @@ async function generateClinicalNote(transcript, current) {
 async function extractPrescription(transcript) {
   let raw;
   if (gemini.hasKey()) {
-    raw = await gemini.generate(prescriptionPrompt(), transcript, { temperature: 0.15, maxOutputTokens: 1500 });
+    // temperature 0: a prescription is a transcription task, not a creative one —
+    // determinism here is what keeps Gemini from inventing a "typical" tablet.
+    raw = await gemini.generate(prescriptionPrompt(), transcript, { temperature: 0, maxOutputTokens: 1500 });
   } else if (isDev()) {
     logger.warn('GEMINI_API_KEY missing — mock prescription (dev)');
     raw = mock.prescription();

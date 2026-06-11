@@ -16,7 +16,6 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 const { validateEnv } = require('./config/env');
-const requestId = require('./middleware/requestId');
 const { responseEnvelope } = require('./utils/response');
 
 // Fail fast in production if critical env is missing (throws before listen).
@@ -29,7 +28,6 @@ app.use(helmet());
 // Allow all origins — Capacitor APK makes requests from capacitor://localhost
 // and the Authorization header handles security (not CORS)
 app.use(cors({ origin: true }));
-app.use(requestId);
 app.use(morgan('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));

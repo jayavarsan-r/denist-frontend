@@ -27,6 +27,7 @@ import PhotoViewerSheet from '@/components/sheets/PhotoViewerSheet';
 import TreatmentPlanSheet from '@/components/sheets/TreatmentPlanSheet';
 import PatientPickerSheet from '@/components/sheets/PatientPickerSheet';
 import PatientConsultSheet from '@/components/sheets/PatientConsultSheet';
+import ConsultRecordSheet from '@/components/sheets/ConsultRecordSheet';
 
 const SHEETS = {
   account: AccountSettingsSheet,
@@ -55,6 +56,7 @@ const SHEETS = {
   treatmentPlan: TreatmentPlanSheet,
   patientPicker: PatientPickerSheet,
   patientConsult: PatientConsultSheet,
+  consultRecord: ConsultRecordSheet,
 };
 
 export default function SheetHost() {

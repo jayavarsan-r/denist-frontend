@@ -58,3 +58,22 @@ export function withRemovedMedicine(extraction, index) {
   const meds = (extraction?.medicines || []).filter((_, i) => i !== index);
   return { ...(extraction || {}), medicines: meds };
 }
+
+// Smart-merge voice-dictated medicines into an existing list, matched by name
+// (case-insensitive). A spoken medicine that matches an existing one updates only
+// its non-empty fields; an unmatched one is appended. Existing medicines the
+// correction never mentions are left untouched. Used by fix-by-voice so the doctor
+// can say "add Ibuprofen" or "make the Amoxicillin 500" without losing the rest.
+// Removing a medicine stays a manual action (tap ×).
+export function mergeMedicinesByName(existing = [], incoming = []) {
+  const result = (existing || []).map((m) => ({ ...m }));
+  for (const inc of incoming || []) {
+    const name = (inc?.name || '').trim();
+    if (!name) continue;
+    const idx = result.findIndex((m) => (m.name || '').trim().toLowerCase() === name.toLowerCase());
+    const nonEmpty = Object.fromEntries(Object.entries(inc).filter(([, v]) => v !== '' && v != null));
+    if (idx === -1) result.push({ ...inc });
+    else result[idx] = { ...result[idx], ...nonEmpty };
+  }
+  return result;
+}

@@ -2,6 +2,7 @@ const repos = require('../repositories');
 const supabase = require('../config/supabase');
 const { overlaps } = require('../utils/slot-overlap');
 const { conflict } = require('../utils/errors');
+const { ok, fail } = require('../utils/response');
 
 const SELECT = '*, patients(id, name, phone)';
 const scopeOf = (req) => ({ clinicId: req.clinicId, dentistId: req.dentistId });

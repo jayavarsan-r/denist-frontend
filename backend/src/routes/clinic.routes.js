@@ -3,7 +3,6 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const auth = require('../middleware/auth');
 const requireRole = require('../middleware/requireRole');
-<<<<<<< HEAD
 const validate = require('../middleware/validate');
 const v = require('../validators');
 
@@ -22,32 +21,21 @@ async function uniqueJoinCode() {
   }
   return code;
 }
-=======
-const { ok, fail } = require('../utils/response');
->>>>>>> origin/main
 
 // GET /api/clinic
 router.get('/', auth, async (req, res, next) => {
   try {
-    if (!req.clinicId) return fail(res, 404, 'NOT_FOUND', 'No clinic');
-    // Exclude join_code from general staff view — only owner should share it explicitly
-    const { data, error } = await supabase.from('clinics')
-      .select('id, name, city, address, phone, open_time, close_time, working_days, display_id, owner_staff_id')
-      .eq('id', req.clinicId).single();
+    if (!req.clinicId) return res.status(404).json({ error: 'No clinic' });
+    const { data, error } = await supabase.from('clinics').select('*').eq('id', req.clinicId).single();
     if (error) throw error;
-    return ok(res, { clinic: data });
+    res.json({ clinic: data });
   } catch (e) { next(e); }
 });
 
-<<<<<<< HEAD
 // PATCH /api/clinic — clinic settings are doctor/owner managed (not reception)
 router.patch('/', auth, requireRole('doctor'), validate(v.updateClinic), async (req, res, next) => {
-=======
-// PATCH /api/clinic — doctor only
-router.patch('/', auth, requireRole(['doctor']), async (req, res, next) => {
->>>>>>> origin/main
   try {
-    if (!req.clinicId) return fail(res, 403, 'FORBIDDEN', 'No clinic context');
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
     const { name, city, address, phone, openTime, closeTime, workingDays } = req.body;
     const updates = {};
     if (name !== undefined) updates.name = name;
@@ -57,24 +45,10 @@ router.patch('/', auth, requireRole(['doctor']), async (req, res, next) => {
     if (openTime !== undefined) updates.open_time = openTime;
     if (closeTime !== undefined) updates.close_time = closeTime;
     if (workingDays !== undefined) updates.working_days = workingDays;
-    if (Object.keys(updates).length === 0) return fail(res, 400, 'VALIDATION_ERROR', 'No valid fields to update');
+    if (Object.keys(updates).length === 0) return res.json({ clinic: null });
     const { data, error } = await supabase.from('clinics').update(updates).eq('id', req.clinicId).select().single();
     if (error) throw error;
-    return ok(res, { clinic: data });
-  } catch (e) { next(e); }
-});
-
-// POST /api/clinic/regenerate-join-code — doctor only
-// Replaces the side-effect that was previously in GET /api/auth/me
-router.post('/regenerate-join-code', auth, requireRole(['doctor']), async (req, res, next) => {
-  try {
-    if (!req.clinicId) return fail(res, 403, 'FORBIDDEN', 'No clinic context');
-    const newCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const { data, error } = await supabase.from('clinics')
-      .update({ join_code: newCode }).eq('id', req.clinicId)
-      .select('join_code').single();
-    if (error) throw error;
-    return ok(res, { joinCode: data.join_code });
+    res.json({ clinic: data });
   } catch (e) { next(e); }
 });
 

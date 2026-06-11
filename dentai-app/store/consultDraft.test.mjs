@@ -9,6 +9,7 @@ import {
   withAddedMedicine,
   withEditedMedicine,
   withRemovedMedicine,
+  mergeMedicinesByName,
 } from './consultDraft.mjs';
 
 let passed = 0;
@@ -77,6 +78,34 @@ t('withRemovedMedicine drops the medicine at the index', () => {
   const next = withRemovedMedicine(ex, 0);
   assert.equal(next.medicines.length, 1);
   assert.equal(next.medicines[0].name, 'B');
+});
+
+t('mergeMedicinesByName adds a new medicine (fix-by-voice "add X")', () => {
+  const existing = [{ name: 'Amoxicillin', dose: '500mg' }];
+  const next = mergeMedicinesByName(existing, [{ name: 'Ibuprofen', dose: '400mg' }]);
+  assert.equal(next.length, 2);
+  assert.equal(next[1].name, 'Ibuprofen');
+  assert.equal(existing.length, 1, 'original must be untouched');
+});
+
+t('mergeMedicinesByName updates a matching medicine, case-insensitively', () => {
+  const existing = [{ name: 'Amoxicillin', dose: '250mg', frequency: 'BD' }];
+  const next = mergeMedicinesByName(existing, [{ name: 'amoxicillin', dose: '500mg' }]);
+  assert.equal(next.length, 1, 'no duplicate row');
+  assert.equal(next[0].dose, '500mg', 'spoken value wins');
+  assert.equal(next[0].frequency, 'BD', 'unspoken field preserved');
+});
+
+t('mergeMedicinesByName ignores empty incoming fields and nameless meds', () => {
+  const existing = [{ name: 'Amoxicillin', dose: '500mg' }];
+  const next = mergeMedicinesByName(existing, [{ name: 'Amoxicillin', dose: '' }, { name: '' }]);
+  assert.equal(next.length, 1);
+  assert.equal(next[0].dose, '500mg', 'empty dose must not overwrite');
+});
+
+t('mergeMedicinesByName with no incoming keeps the list intact', () => {
+  const existing = [{ name: 'Amoxicillin' }];
+  assert.deepEqual(mergeMedicinesByName(existing, []), existing);
 });
 
 console.log(`\n${passed} assertions passed.`);

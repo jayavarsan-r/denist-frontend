@@ -174,7 +174,6 @@ Recording: ${transcript}`;
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { temperature: 0.1, maxOutputTokens: 256 },
     }, { headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiKey }, timeout: 15000 });
-    }, { headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiKey }, timeout: 15000 });
 
     let text = (response.data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
     text = text.replace(/^```json?\n?/i, '').replace(/```$/, '').trim();

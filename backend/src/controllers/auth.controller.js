@@ -1,6 +1,7 @@
 const supabase = require('../config/supabase');
 const jwt = require('jsonwebtoken');
 const transaction = require('../services/transaction.service');
+const { ok, fail } = require('../utils/response');
 
 function signToken(payload) {
   return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '30d' });
