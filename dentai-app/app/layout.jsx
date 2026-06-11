@@ -56,7 +56,15 @@ function AppShell({ children }) {
   const pathname = usePathname();
   const router = useRouter();
   const role = useAppStore((s) => s.role);
+  const started = useAppStore((s) => s.started);
   const toast = useAppStore((s) => s.toast);
+
+  // Once authenticated, request files/camera/mic up front (native only, once) so voice
+  // and X-ray capture are ready to use without an in-task permission wall.
+  useEffect(() => {
+    if (!started) return;
+    import('@/lib/services/permissions').then(({ primePermissions }) => primePermissions()).catch(() => {});
+  }, [started]);
 
   const normPath = pathname !== '/' ? pathname.replace(/\/$/, '') : '/';
 

@@ -189,6 +189,20 @@ function normaliseEntry(e) {
     assignedDoctorName: e.assigned_doctor_staff?.name ?? e.assignedDoctorName ?? null,
     assignedDoctorRole: e.assigned_doctor_staff?.role ?? e.assignedDoctorRole ?? null,
     patientName: e.patients?.name ?? e.patientName ?? null,
+    // The entry's own joined patient — so the queue can render a row even when the
+    // local patients store hasn't loaded that patient yet (was making checked-in
+    // patients silently disappear from the receptionist's queue).
+    patient: e.patients
+      ? {
+          id: e.patients.id,
+          name: e.patients.name,
+          phone: e.patients.phone || '',
+          age: e.patients.age ?? null,
+          gender: e.patients.gender ?? null,
+          allergies: Array.isArray(e.patients.allergies) ? e.patients.allergies : [],
+          flags: e.patients.clinical_flags ?? e.patients.flags ?? null,
+        }
+      : (e.patient ?? null),
     xrays: e.xrays || [],
     outcome: e.consultation_outcome ?? e.outcome ?? null,
     consult: e.outcome_metadata ?? e.consult ?? null,

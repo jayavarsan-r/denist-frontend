@@ -212,6 +212,11 @@ frontend-only; backend changes are additive and preserve existing schema, routes
 - Removed the in-drawer `ConsultCheckout` step + its component (now unused), and the associated payment state/imports from both consult sheets. `dentai-app/components/sheets/ConsultRecordSheet.jsx`, `dentai-app/components/sheets/PatientConsultSheet.jsx`, deleted `dentai-app/components/consultation/ConsultCheckout.jsx`.
 - **Verified:** `next build` clean.
 
+## 19. Mobile: point at deployed backend + request permissions after login (2026-06-11)
+- **Frontend → deployed backend.** `.env.local` and `.env.production` now use `https://denist-frontend.onrender.com` (the `build:mobile` script already baked this in). `dentai-app/.env.local`, `dentai-app/.env.production`
+- **Permissions requested up front, once, after login** (native only) so voice/X-rays work without an in-task wall: order is files/photos → camera → microphone. Added `@capacitor/camera@8.2.0` for the native files+camera prompts; the mic prompt comes from a one-shot `getUserMedia({audio})`. `dentai-app/lib/services/permissions.js` (primed from `app/layout.jsx` on `started`). Declared `RECORD_AUDIO`, `MODIFY_AUDIO_SETTINGS`, `CAMERA`, `READ_MEDIA_IMAGES`, `READ_EXTERNAL_STORAGE(maxSdk32)` + optional camera/mic features in `android/app/src/main/AndroidManifest.xml`.
+- **APK rebuilt** (`build:mobile` → `cap sync` → `gradlew assembleDebug`; Capacitor CLI needs Node ≥22, used the Homebrew Node 25). Verified the baked permissions with `aapt dump permissions`. Copied to `~/Desktop/DentWay.apk` (+ a timestamped copy). Debug build (~10 MB) for sideloading/testing.
+
 ## Still recommended (not done)
 - Surface a visible error in `CheckInSheet` instead of silently swallowing extraction failures.
 - Throttle the aggressive `/api/queue` polling (or rely on Supabase realtime).
