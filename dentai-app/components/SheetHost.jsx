@@ -19,7 +19,6 @@ import ApptPeekSheet from '@/components/sheets/ApptPeekSheet';
 import EndVisitSheet from '@/components/sheets/EndVisitSheet';
 import CheckInSheet from '@/components/sheets/CheckInSheet';
 import RemoveQueueSheet from '@/components/sheets/RemoveQueueSheet';
-import RecordDiagnosisSheet from '@/components/sheets/RecordDiagnosisSheet';
 import QueueActionsSheet from '@/components/sheets/QueueActionsSheet';
 import VisitRecordSheet from '@/components/sheets/VisitRecordSheet';
 import PrescriptionDesignSheet from '@/components/sheets/PrescriptionDesignSheet';
@@ -48,7 +47,6 @@ const SHEETS = {
   endVisit: EndVisitSheet,
   checkin: CheckInSheet,
   removeQueue: RemoveQueueSheet,
-  recordDiagnosis: RecordDiagnosisSheet,
   queueActions: QueueActionsSheet,
   visitRecord: VisitRecordSheet,
   prescriptionDesign: PrescriptionDesignSheet,

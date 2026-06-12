@@ -8,9 +8,31 @@ export async function transcribeAudio(audioBlob, filename, recordingType = 'gene
   return data;
 }
 
-export async function generateNote(transcript, current) {
-  // `current` (optional): existing structured note → backend merges transcript as a correction.
-  const { data } = await apiClient.post('/api/ai/generate-note', current ? { transcript, current } : { transcript });
+// ── Async voice pipeline (Phase 2) ──────────────────────────────────────────
+// The consult voice flow no longer calls transcribe/generate-note synchronously:
+// audio goes to start-voice, the backend worker fills a consultation_draft, and
+// the Verification Card subscribes to that draft row.
+
+// Profile consult (no queue entry) — returns { draft_id, job_id }.
+export async function startPatientVoice(patientId, audioBlob, filename = 'recording.webm') {
+  const formData = new FormData();
+  formData.append('audio', audioBlob, filename);
+  const { data } = await apiClient.post(`/api/patients/${patientId}/start-voice`, formData);
+  return data;
+}
+
+// Polling fallback + initial fetch for the Verification Card.
+export async function getDraft(draftId) {
+  const { data } = await apiClient.get(`/api/consultation-drafts/${draftId}`);
+  return data.draft || data;
+}
+
+// Lightweight review for non-queue drafts (profile consult confirm + reject).
+export async function reviewDraft(draftId, { status, confirmedData }) {
+  const { data } = await apiClient.patch(`/api/consultation-drafts/${draftId}`, {
+    status,
+    confirmed_data: confirmedData ?? null,
+  });
   return data;
 }
 

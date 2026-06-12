@@ -1,8 +1,46 @@
 'use client';
-import React from 'react';
+import React, { useState } from 'react';
 import Icon from '@/components/icons';
 import { SectionHeader, PrimaryButton } from '@/components/ui';
 import { formatDate } from '@/lib/data/utils';
+
+const FLAG_COLORS = {
+  high:   { bg: 'rgba(255,59,48,0.08)', fg: 'var(--red)' },
+  medium: { bg: 'rgba(255,159,10,0.10)', fg: 'var(--amber)' },
+  low:    { bg: 'rgba(60,60,67,0.06)', fg: 'var(--text-secondary)' },
+};
+
+// Safety-net output. High flags must be explicitly acknowledged before the
+// confirm button unlocks — the doctor stays the gate, but can't miss a red flag.
+function SafetyFlags({ flags, acked, onAck }) {
+  if (!flags?.length) return null;
+  const order = { high: 0, medium: 1, low: 2 };
+  const sorted = [...flags].sort((a, b) => (order[a.severity] ?? 3) - (order[b.severity] ?? 3));
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+      {sorted.map((f, i) => {
+        const c = FLAG_COLORS[f.severity] || FLAG_COLORS.low;
+        const key = `${f.type}-${i}`;
+        return (
+          <div key={key} style={{ background: c.bg, borderRadius: 12, padding: '10px 14px', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+            <span style={{ fontSize: 13, color: c.fg, flex: 1, fontWeight: f.severity === 'high' ? 600 : 500 }}>{f.message}</span>
+            {f.severity === 'high' && (
+              <button
+                onClick={() => onAck(key)}
+                style={{
+                  flexShrink: 0, fontSize: 12, fontWeight: 700, borderRadius: 8, padding: '4px 10px',
+                  background: acked.has(key) ? 'var(--green)' : 'var(--red)', color: '#fff',
+                }}
+              >
+                {acked.has(key) ? 'Reviewed ✓' : 'Review'}
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 /**
  * ConsultReview — the editable consult review.
@@ -76,9 +114,15 @@ export default function ConsultReview({
   completeLabel = 'Complete consult',
   error,
 }) {
+  const [ackedFlags, setAckedFlags] = useState(() => new Set());
   if (!ex) return null;
   const meds = ex.medicines || [];
   const teethLabel = (ex.teeth && ex.teeth.length) ? ex.teeth.join(', ') : (ex.tooth != null ? String(ex.tooth) : '');
+  const safetyFlags = ex.safetyFlags || [];
+  const order = { high: 0, medium: 1, low: 2 };
+  const highKeys = [...safetyFlags].sort((a, b) => (order[a.severity] ?? 3) - (order[b.severity] ?? 3))
+    .map((f, i) => ({ f, key: `${f.type}-${i}` })).filter(({ f }) => f.severity === 'high').map(({ key }) => key);
+  const blockedByFlags = highKeys.some((k) => !ackedFlags.has(k));
 
   return (
     <div style={{ padding: '4px 20px 28px' }}>
@@ -91,8 +135,14 @@ export default function ConsultReview({
         <div style={{ background: 'rgba(255,59,48,0.08)', borderRadius: 12, padding: '10px 14px', marginBottom: 12, fontSize: 13, color: 'var(--red)' }}>{error}</div>
       )}
 
-      {/* Fix by voice — consistent with the rest of the voice UI */}
-      <button
+      <SafetyFlags
+        flags={safetyFlags}
+        acked={ackedFlags}
+        onAck={(key) => setAckedFlags((s) => { const n = new Set(s); n.add(key); return n; })}
+      />
+
+      {/* Fix by voice — only for flows that still support it */}
+      {onFixByVoice && <button
         onClick={onFixByVoice}
         disabled={fixPhase === 'processing'}
         style={{
@@ -116,7 +166,7 @@ export default function ConsultReview({
             {fixPhase === 'recording' ? `${fixSeconds}s · speak the change` : 'Say just the change — "3 sittings, ₹4500"'}
           </div>
         </div>
-      </button>
+      </button>}
 
       {/* Core fields — all editable */}
       <div className="card" style={{ overflow: 'hidden', marginBottom: 14 }}>
@@ -164,13 +214,32 @@ export default function ConsultReview({
               </div>
               <MealSlots slots={m.slots} onToggle={(key, val) => onEditMedicine(i, { slots: { ...(m.slots || {}), [key]: val } })} />
             </div>
-            {m.uncertain && <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 4 }}>● Please double-check this one</div>}
+            {(m.resolvedName || m.price != null) && (
+              <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginTop: 4 }}>
+                {m.resolvedName ? `Matched: ${m.resolvedName}${m.resolvedStrength ? ' ' + m.resolvedStrength : ''}` : ''}
+                {m.price != null ? `${m.resolvedName ? ' · ' : ''}₹${m.price}/unit` : ''}
+              </div>
+            )}
+            {m.uncertain && <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 4 }}>● Not matched to the clinic list — please double-check</div>}
           </div>
         ))}
       </div>
 
-      <PrimaryButton onClick={completing ? undefined : onComplete} style={completing ? { opacity: 0.6 } : undefined}>
-        {completing ? 'Saving…' : completeLabel}
+      {/* Anything the AI could not parse — shown verbatim so nothing is silently lost */}
+      {(ex.unclearSpans || []).length > 0 && (
+        <div style={{ background: 'rgba(60,60,67,0.05)', borderRadius: 12, padding: '10px 14px', marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 4 }}>I wasn't sure about:</div>
+          {ex.unclearSpans.map((s, i) => (
+            <div key={i} style={{ fontSize: 13, color: 'var(--text-secondary)' }}>· “{s}”</div>
+          ))}
+        </div>
+      )}
+
+      <PrimaryButton
+        onClick={(completing || blockedByFlags) ? undefined : onComplete}
+        style={(completing || blockedByFlags) ? { opacity: 0.6 } : undefined}
+      >
+        {completing ? 'Saving…' : blockedByFlags ? 'Review the red flags first' : completeLabel}
       </PrimaryButton>
     </div>
   );

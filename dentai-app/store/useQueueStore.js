@@ -82,14 +82,16 @@ export const useQueueStore = create((set, get) => ({
     }
   },
 
-  /* ─── Complete consult ─── */
-  completeConsult: async (id, consult) => {
-    const entry = get().queue.find(e => e.id === id);
+  /* ─── Complete consult — Phase 2: confirms an AI draft from the Verification
+     Card. The sheet maps the edited extraction to confirmed_data (draftMapping)
+     and passes { draftId, confirmedData }; this is the doctor's explicit gate —
+     no clinical record exists until this call succeeds. ─── */
+  completeConsult: async (id, { draftId, confirmedData }) => {
     // Optimistic update
     set((s) => {
       let next = s.queue.map((e) =>
         e.id === id
-          ? { ...e, status: 'ready_for_checkout', outcome: 'treatment_done', readyAt: nowTime(), consult }
+          ? { ...e, status: 'ready_for_checkout', outcome: 'treatment_done', readyAt: nowTime() }
           : e
       );
       const waiting = next
@@ -103,27 +105,10 @@ export const useQueueStore = create((set, get) => ({
       return { queue: next };
     });
     try {
-      await apiCompleteConsult(id, {
-        patientId:     entry?.patientId || '',
-        procedure:     consult?.procedure || '',
-        diagnosis:     consult?.diagnosis || '',
-        toothNumber:   consult?.tooth ? String(consult.tooth) : null,
-        toothNumbers:  Array.isArray(consult?.teeth) && consult.teeth.length
-          ? consult.teeth.map(String)
-          : (consult?.tooth ? [String(consult.tooth)] : []),
-        totalSittings: consult?.totalSittings || 1,
-        estimatedCost: consult?.estimatedCost || 0,
-        transcript:    consult?.transcript || '',
-        notes:         consult?.instructions || '',
-        medicines:     consult?.medicines || [],
-        followUp:      consult?.followUp || '',
-        // AI-suggested return visits (resolved dates) → backend assigns each a free time.
-        appointments:  Array.isArray(consult?.appointments)
-          ? consult.appointments.filter(a => a && /^\d{4}-\d{2}-\d{2}$/.test(String(a.date || '').trim()))
-          : [],
-      });
-    } catch {
+      await apiCompleteConsult(id, { draftId, confirmedData });
+    } catch (e) {
       get().loadQueue();
+      throw e; // the sheet shows the failure — a silent revert looked like success
     }
   },
 

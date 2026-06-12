@@ -8,10 +8,9 @@ import { useConsultStore } from '@/store/useConsultStore';
 import ConsultReview from '@/components/consultation/ConsultReview';
 import ConsultRecorder from '@/components/consultation/ConsultRecorder';
 import { useAudioRecorder } from '@/lib/hooks/useAudioRecorder';
-import { useTranscription } from '@/lib/hooks/useTranscription';
-import { useGenerateNote } from '@/lib/hooks/useGenerateNote';
-import { extractPrescription } from '@/lib/services/ai.service';
-import { mergeMedicinesByName } from '@/store/consultDraft.mjs';
+import { useVoiceJob } from '@/lib/hooks/useVoiceJob';
+import { startManualDraft } from '@/lib/services/queue.service';
+import { toFrontendExtraction, toConfirmedData } from '@/lib/voice/draftMapping';
 
 // Best-effort continuation inference: if the patient already has an active plan,
 // default this consult to "continuing" it (the doctor can correct on the review).
@@ -28,25 +27,16 @@ function inferContinuation(extraction, activeProc) {
   };
 }
 
-// extractPrescription → the frontend medicine shape ConsultReview edits.
-const mapRxMed = (m) => ({
-  name: m.name || '',
-  dose: m.dose || m.dosage || '',
-  frequency: m.frequency || '',
-  duration: m.duration || '',
-  slots: m.meal_timing_slots || m.slots || {},
-  uncertain: m.uncertain || false,
-});
-
 /**
  * ConsultRecordSheet — the queue consult: capture → review → checkout in one drawer.
  *
- * Self-contained: it reads the in-chair patient from the queue and reads/writes the
- * same useConsultStore draft (keyed by queue-entry id), so a hand-edited review
- * survives a patient swap and a re-open. The record/review UI is shared with the
- * patient-profile consult (ConsultRecorder / ConsultReview) so both entry points look
- * identical. Confirming sends the patient to the receptionist's checkout — the doctor
- * never handles cash here. With params.autoStart it opens already recording.
+ * Phase 2: the voice pipeline is ASYNC. Stopping the recording uploads the audio to
+ * the backend (start-voice) and a worker does STT → context-aware extraction →
+ * safety checks. We hear back on the consultation_draft row via Supabase Realtime
+ * (useVoiceJob) and show the Verification Card (ConsultReview). Confirming posts
+ * { draft_id, confirmed_data } to complete-consult — the only path that turns AI
+ * output into clinical records. Manual ("type notes") entries flow through the same
+ * gate via an empty manual draft.
  */
 export default function ConsultRecordSheet({ params = {}, onClose }) {
   const showToast = useAppStore((s) => s.showToast);
@@ -65,7 +55,6 @@ export default function ConsultRecordSheet({ params = {}, onClose }) {
   const setPhase = useConsultStore((s) => s.setPhase);
   const setError = useConsultStore((s) => s.setError);
   const setExtraction = useConsultStore((s) => s.setExtraction);
-  const mergeExtraction = useConsultStore((s) => s.mergeExtraction);
   const startManual = useConsultStore((s) => s.startManual);
   const editField = useConsultStore((s) => s.editField);
   const addMedicine = useConsultStore((s) => s.addMedicine);
@@ -74,23 +63,35 @@ export default function ConsultRecordSheet({ params = {}, onClose }) {
   const resetDraft = useConsultStore((s) => s.resetDraft);
 
   const recorder = useAudioRecorder();
-  const { transcribe } = useTranscription('diagnosis');
-  const { generateFromTranscript } = useGenerateNote();
+  const voiceJob = useVoiceJob({ queueEntryId: current?.id || null });
 
   // A hand-edited review (phase 'review' with an extraction) re-opens straight to
   // the review; recording/processing are transient and reset to the ready screen.
   const [view, setView] = useState(
     draft?.phase === 'review' && draft?.extraction ? 'review' : 'ready',
   );
-  const [fixPhase, setFixPhase] = useState('idle');
   const [completing, setCompleting] = useState(false);
 
-  // Release the mic on unmount (drawer dismissed). Depending on isRecording made this
-  // fire on every Stop and double-called stopRecording — orphaning the awaited stop
-  // promise and freezing the screen on "Understanding…". stopRecording self-guards when
+  // Release the mic on unmount (drawer dismissed). stopRecording self-guards when
   // already inactive, so an unconditional call here is safe.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => () => { recorder.stopRecording().catch(() => {}); }, []);
+
+  // The worker finished (or failed): surface the draft as the Verification Card.
+  const id = current?.id;
+  useEffect(() => {
+    if (!id) return;
+    if (voiceJob.state === 'draft_ready' && voiceJob.draft) {
+      setExtraction(id, inferContinuation(toFrontendExtraction(voiceJob.draft), activeProc));
+      setPhase(id, 'review');
+      setView('review');
+    }
+    if (voiceJob.state === 'error') {
+      setError(id, voiceJob.error || 'Processing failed — type your notes, or re-record');
+      handleManual();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voiceJob.state]);
 
   // The Record button was the tap — open already recording (unless a hand-edited
   // review is waiting, which must never be clobbered).
@@ -100,6 +101,7 @@ export default function ConsultRecordSheet({ params = {}, onClose }) {
     if (view !== 'ready' || (draft?.phase === 'review' && draft?.extraction)) return;
     autoStarted.current = true;
     handleStartRecording();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.autoStart, current?.id, !!p]);
 
   if (!current || !p) {
@@ -110,87 +112,51 @@ export default function ConsultRecordSheet({ params = {}, onClose }) {
       </div>
     );
   }
-  const id = current.id;
 
   /* ─── ready → recording ─── */
   const handleStartRecording = async () => {
     setError(id, null);
+    voiceJob.reset();
     try { await recorder.startRecording(); setView('recording'); }
     catch (e) { showToast(e.message || 'Could not start recording'); }
   };
 
-  const handleManual = () => { startManual(id); setView('review'); };
+  /* ─── manual entry — same confirm gate via an empty draft ─── */
+  const handleManual = async () => {
+    startManual(id);
+    setView('review');
+    try {
+      const { draft_id } = await startManualDraft(id);
+      editField(id, '_draftId', draft_id);
+    } catch {
+      // No draft id yet — confirm will retry creating one.
+    }
+  };
 
-  /* ─── recording → review ─── */
+  /* ─── recording → async processing (the worker takes it from here) ─── */
   const handleStop = async () => {
     setView('processing');
     try {
       const blob = await recorder.stopRecording();
-      const { text: transcript, warning } = await transcribe(blob);
-      if (!transcript) {
-        setError(id, warning || "Couldn't transcribe — type your notes, or re-record");
-        startManual(id);
-        setView('review');
-        return;
-      }
-      const note = await generateFromTranscript(transcript);
-      let medicines = note.medicines || [];
-      try {
-        const rx = await extractPrescription(transcript);
-        if (Array.isArray(rx.medicines) && rx.medicines.length) medicines = rx.medicines.map(mapRxMed);
-      } catch { /* prescription optional */ }
-      setExtraction(id, inferContinuation({ ...note, medicines, transcript }, activeProc));
-      setPhase(id, 'review');
-      setView('review');
+      await voiceJob.submitRecording(blob);
+      // draft_ready / error arrive via the useEffect above.
     } catch (e) {
-      setError(id, e.message || 'AI processing failed — type your notes, or re-record');
-      startManual(id);
-      setView('review');
+      setError(id, e.message || 'Recording failed — type your notes, or re-record');
+      handleManual();
     }
   };
 
-  /* ─── Fix by voice — merges core fields AND the prescription ─── */
-  const handleFixByVoice = async () => {
-    if (fixPhase === 'recording') {
-      setFixPhase('processing');
-      setError(id, null);
-      try {
-        const blob = await recorder.stopRecording();
-        const { text: transcript, warning } = await transcribe(blob);
-        if (!transcript) { setError(id, warning || "Couldn't hear the correction — try again"); setFixPhase('idle'); return; }
-        const raw = draft?.extraction?._raw || null;
-        const [merged, rx] = await Promise.all([
-          generateFromTranscript(transcript, raw),
-          extractPrescription(transcript).catch(() => ({ medicines: [] })),
-        ]);
-        // Smart-merge by name: spoken meds update/add; if none spoken, keep existing.
-        const spoken = (Array.isArray(rx?.medicines) ? rx.medicines : []).map(mapRxMed);
-        const existing = draft?.extraction?.medicines || [];
-        const medicines = spoken.length ? mergeMedicinesByName(existing, spoken) : existing;
-        mergeExtraction(id, { ...merged, medicines });
-        setFixPhase('idle');
-        showToast('Correction applied');
-      } catch (e) {
-        setError(id, e.message || 'Could not apply correction');
-        setFixPhase('idle');
-      }
-      return;
-    }
-    setError(id, null);
-    try { await recorder.startRecording(); setFixPhase('recording'); }
-    catch (e) { showToast(e.message || 'Could not start recording'); }
-  };
-
-  /* ─── Confirm & send to front desk — the doctor's last step. Payment/cash is the
-     receptionist's job, so there's no amount step here: completing the consult moves
-     the patient into the receptionist's "Ready for checkout" list. ─── */
+  /* ─── Confirm & send to front desk — the doctor's last step ─── */
   const handleComplete = async () => {
     if (completing) return;
     const ex = draft?.extraction || {};
     setCompleting(true);
     try {
-      await completeConsult(id, { ...ex, transcript: draft?.transcript || ex.transcript || '' });
+      let draftId = ex._draftId;
+      if (!draftId) ({ draft_id: draftId } = await startManualDraft(id)); // manual fallback
+      await completeConsult(id, { draftId, confirmedData: toConfirmedData(ex) });
       resetDraft(id);
+      voiceJob.reset();
       showToast(`${p?.name?.split(' ')[0] || 'Patient'} sent to front desk for checkout`);
       onClose();
     } catch (e) {
@@ -209,10 +175,7 @@ export default function ConsultRecordSheet({ params = {}, onClose }) {
         onAddMedicine={() => addMedicine(id)}
         onEditMedicine={(i, patch) => editMedicine(id, i, patch)}
         onRemoveMedicine={(i) => removeMedicine(id, i)}
-        onFixByVoice={handleFixByVoice}
-        fixPhase={fixPhase}
-        fixSeconds={recorder.seconds}
-        onRerecord={() => { setError(id, null); setView('ready'); }}
+        onRerecord={() => { setError(id, null); voiceJob.reset(); setView('ready'); }}
         onComplete={handleComplete}
         completing={completing}
         completeLabel="Confirm & send to front desk"
@@ -229,7 +192,7 @@ export default function ConsultRecordSheet({ params = {}, onClose }) {
       onStart={handleStartRecording}
       onStop={handleStop}
       onManual={handleManual}
-      processingLabel="Understanding…"
+      processingLabel="Analysing recording…"
     />
   );
 }

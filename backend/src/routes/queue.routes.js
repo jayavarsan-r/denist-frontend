@@ -5,6 +5,7 @@ const auth = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const v = require('../validators');
 const transaction = require('../services/transaction.service');
+const voice = require('../controllers/voice.controller');
 const { parsePagination, pageMeta } = require('../utils/pagination');
 
 // GET /api/queue — today's queue for the clinic
@@ -302,30 +303,47 @@ router.get('/:id/checkout-summary', auth, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// POST /api/queue/:id/complete-consult — orchestrated by the transaction service:
-// treatment plan + visit + suggested appointments + prescription + queue link + audit.
-router.post('/:id/complete-consult', auth, validate(v.completeConsult), async (req, res, next) => {
+// POST /api/queue/:id/start-voice — async voice pipeline intake: uploads the audio,
+// creates a consultation_draft (status 'processing') and enqueues the voice job.
+// The Verification Card subscribes to the draft row; the queue board sees
+// recording_processing → draft_ready | voice_error on the entry.
+router.post('/:id/start-voice', auth, voice.uploadMiddleware, voice.startVoiceForQueue);
+
+// POST /api/queue/:id/manual-draft — manual ("type notes") entry point: an empty
+// draft so hand-typed consults pass through the same confirm gate as voice ones.
+router.post('/:id/manual-draft', auth, voice.createManualDraft);
+
+// POST /api/queue/:id/complete-consult — Phase 2: confirms an AI draft from the
+// Verification Card. Body: { draft_id, confirmed_data }. The URL is unchanged so
+// the frontend route doesn't break, but this is now the draft-confirm gate —
+// nothing clinical commits without it. The transaction marks the draft confirmed
+// (409 on double-submit), then creates plan + visit + teeth + appointments +
+// prescription, computes the corrections diff, and moves the entry to checkout.
+router.post('/:id/complete-consult', auth, validate(v.confirmDraft), async (req, res, next) => {
   try {
     if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
-    let { patientId } = req.body;
-    const { procedure, diagnosis, toothNumber, toothNumbers, totalSittings, estimatedCost, transcript, notes, followUp, appointments } = req.body;
+    const { draft_id: draftId, confirmed_data: confirmedData } = req.body;
 
-    // The queue entry already knows the patient — default from it so the client
-    // never has to resend patientId (was a silent 400 trap).
-    if (!patientId) {
-      const { data: entry } = await supabase.from('queue_entries')
-        .select('patient_id').eq('id', req.params.id).eq('clinic_id', req.clinicId).maybeSingle();
-      if (!entry) return res.status(404).json({ error: 'Queue entry not found' });
-      patientId = entry.patient_id;
+    const { data: draft } = await supabase.from('consultation_drafts')
+      .select('*')
+      .eq('id', draftId).eq('clinic_id', req.clinicId).eq('queue_entry_id', req.params.id)
+      .maybeSingle();
+    if (!draft) return res.status(404).json({ error: 'draft_not_found' });
+    if (draft.status !== 'pending_review') {
+      return res.status(409).json({ error: 'draft_already_processed', status: draft.status });
     }
 
-    const result = await transaction.completeConsultation({
+    const result = await transaction.confirmConsultationDraft({
       clinicId: req.clinicId, dentistId: req.dentistId, staffId: req.staffId, requestId: req.id,
-      queueId: req.params.id,
-      patientId, procedure, diagnosis, toothNumber, toothNumbers, totalSittings, estimatedCost, transcript, notes, followUp, appointments,
+      queueId: req.params.id, draft, confirmedData,
     });
     res.status(201).json(result);
-  } catch (e) { next(e); }
+  } catch (e) {
+    if (e.message === 'draft_already_processed') {
+      return res.status(409).json({ error: 'draft_already_processed' });
+    }
+    next(e);
+  }
 });
 
 // POST /api/queue/:id/checkout — mark completed + optional payment (transaction service)

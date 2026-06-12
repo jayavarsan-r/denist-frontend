@@ -101,38 +101,34 @@ const patchQueue = z.object({
   sortOrder: z.coerce.number().int().optional(),
   notes: optStr,
 });
-const completeConsult = z.object({
-  patientId: uuid.optional().nullable(), // defaults from the queue entry in the route
-  // Optional: the doctor must be able to finish/checkout even when the AI didn't extract
-  // a clear procedure (or was rate-limited). The transaction defaults it to 'Consultation'.
-  procedure: optStr,
+// Phase 2: complete-consult confirms an AI draft from the Verification Card.
+// confirmed_data is the (possibly doctor-edited) extraction in the DraftSchema
+// shape, plus optional UI extras (total_sittings, estimated_cost, diagnosis).
+// Inner objects are passthrough on purpose: the card edits every field and the
+// payload lands in jsonb — the transaction maps only the columns it knows.
+const confirmedDataSchema = z.object({
+  treatments:    z.array(z.object({}).passthrough()).optional().default([]),
+  prescriptions: z.array(z.object({}).passthrough()).optional().default([]),
+  follow_up: z.object({
+    in_days: z.coerce.number().int().positive().optional().nullable(),
+    reason:  optStr,
+  }).optional().nullable(),
+  lab_case_suggestion: z.object({}).passthrough().optional().nullable(),
+  clinical_notes: optStr,
+  total_sittings: z.coerce.number().int().min(1).optional().nullable(),
+  estimated_cost: z.coerce.number().optional().nullable(),
   diagnosis: optStr,
-  toothNumber: optStr,
-  toothNumbers: z.array(z.string().trim()).optional().nullable(), // multi-tooth procedure
-  totalSittings: z.coerce.number().int().min(1).optional().nullable(),
-  estimatedCost: z.coerce.number().optional().nullable(),
-  transcript: optStr,
-  notes: optStr,
-  // Doctor's recommended follow-up. Three shapes are accepted (transaction service
-  // normalises all of them into a concrete appointment date):
-  //   'YYYY-MM-DD' / free text · days-from-today number · { date | inDays/in_days, reason }
-  followUp: z.union([
-    z.string().trim(),
-    z.coerce.number(),
-    z.object({
-      date:    z.string().trim().optional().nullable(),
-      inDays:  z.coerce.number().optional().nullable(),
-      in_days: z.coerce.number().optional().nullable(),
-      reason:  optStr,
-    }),
-  ]).optional().nullable(),
-  // AI-suggested return visits (resolved dates). The transaction assigns each a free
-  // time and falls back to sittings/follow-up when this is empty.
-  appointments: z.array(z.object({
-    date: z.string().trim(),
-    session: z.coerce.number().int().optional().nullable(),
-    purpose: optStr,
-  })).optional().nullable(),
+}).passthrough();
+
+const confirmDraft = z.object({
+  draft_id: uuid,
+  confirmed_data: confirmedDataSchema,
+});
+
+// PATCH /api/consultation-drafts/:id — profile-consult confirm + reject path.
+const reviewDraft = z.object({
+  status: z.enum(['confirmed', 'rejected']),
+  confirmed_data: confirmedDataSchema.optional().nullable(),
 });
 
 // ── Payments ──────────────────────────────────────────────────────────────
@@ -280,7 +276,7 @@ module.exports = {
   createPatient, updatePatient,
   createAppointment, updateAppointment, recurringAppointments,
   createVisit, updateVisit,
-  addToQueue, patchQueue, completeConsult,
+  addToQueue, patchQueue, confirmDraft, reviewDraft,
   recordPayment,
   createTreatmentPlan, updateTreatmentPlan,
   createPaymentPlan, updatePaymentPlan,

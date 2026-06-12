@@ -191,6 +191,10 @@ router.put('/:id/tooth-chart/:toothNumber', validate(v.toothChartUpsert), async 
   } catch (e) { next(e); }
 });
 
+// Profile consult (no queue entry): async voice pipeline keyed on the patient.
+const voice = require('../controllers/voice.controller');
+router.post('/:id/start-voice', voice.uploadMiddleware, voice.startVoiceForPatient);
+
 router.get('/:id', ctrl.getById);
 router.put('/:id', validate(v.updatePatient), ctrl.update);
 router.delete('/:id', ctrl.remove);

@@ -8,7 +8,6 @@
 const sarvam = require('./providers/sarvam.provider');
 const gemini = require('./providers/gemini.provider');
 const mock = require('./providers/mock.provider');
-const consultationPrompt = require('./prompts/consultation.prompt');
 const prescriptionPrompt = require('./prompts/prescription.prompt');
 const receptionistPrompt = require('./prompts/receptionist.prompt');
 const schedulePrompt = require('./prompts/schedule.prompt');
@@ -29,21 +28,9 @@ async function transcribeAudio(filePath, opts = {}) {
   throw noStt();
 }
 
-// generateClinicalNote(transcript, current?) — when `current` (an existing structured
-// note) is provided, the transcript is treated as a CORRECTION and merged on top:
-// only the fields the doctor mentions change; everything else is preserved.
-async function generateClinicalNote(transcript, current) {
-  const userContent = current
-    ? `CURRENT NOTE (JSON):\n${JSON.stringify(current)}\n\n` +
-      `DOCTOR'S SPOKEN CORRECTION (apply on top of the current note):\n${transcript}\n\n` +
-      `Return the FULL updated note in the exact same JSON schema. Change ONLY the fields the correction explicitly mentions; keep every other field EXACTLY as in CURRENT NOTE. Do not invent or reset unmentioned fields.`
-    : transcript;
-  if (gemini.hasKey()) {
-    return gemini.generate(consultationPrompt(), userContent, { temperature: 0.1, maxOutputTokens: 1024 });
-  }
-  if (isDev()) { logger.warn('GEMINI_API_KEY missing — mock clinical note (dev)'); return mock.clinicalNote(transcript); }
-  throw noLlm();
-}
+// (generateClinicalNote was the old sync consult flow — deleted in Phase 2.
+// The consult pipeline now lives in services/gemini-extraction.service.js,
+// called from workers/voice.worker.js with injected clinic/patient context.)
 
 async function extractPrescription(transcript) {
   let raw;
@@ -85,7 +72,6 @@ async function parseScheduleIntent(transcript) {
 
 module.exports = {
   transcribeAudio,
-  generateClinicalNote,
   extractPrescription,
   extractQueueContext,
   parseScheduleIntent,

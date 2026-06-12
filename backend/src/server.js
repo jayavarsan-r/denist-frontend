@@ -62,14 +62,39 @@ app.use('/api/clinic', require('./routes/clinic.routes'));
 app.use('/api/payments', require('./routes/payments.routes'));
 app.use('/api/payment-plans', require('./routes/payment-plans.routes'));
 app.use('/api/notifications', require('./routes/notifications.routes'));
+app.use('/api/consultation-drafts', require('./routes/consultation-drafts.routes'));
 
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 app.use(require('./middleware/errorHandler'));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, async () => {
   console.log(`DentAI Backend running on port ${PORT}`);
   const { runAudioCleanup } = require('./jobs/cleanup.job');
   setTimeout(() => runAudioCleanup(18).catch(console.error), 30000);
   setInterval(() => runAudioCleanup(18).catch(console.error), 24 * 60 * 60 * 1000);
+
+  // pg-boss job queue + workers. startQueue() is a no-op (with a loud warning)
+  // when DATABASE_URL is missing in dev — voice endpoints then answer 503 while
+  // everything else keeps working.
+  try {
+    const { startQueue } = require('./jobs/queue');
+    const boss = await startQueue();
+    if (boss) {
+      await require('./workers/voice.worker').registerVoiceWorker();
+    }
+  } catch (e) {
+    console.error('[pg-boss] failed to start:', e.message);
+    if (process.env.NODE_ENV === 'production') process.exit(1);
+  }
 });
+
+// Graceful shutdown: stop taking jobs, finish in-flight ones, then exit.
+async function shutdown(signal) {
+  console.log(`${signal} received — shutting down`);
+  try { await require('./jobs/queue').stopQueue(); } catch { /* already stopped */ }
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 12000).unref();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

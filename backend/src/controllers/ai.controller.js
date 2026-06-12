@@ -79,17 +79,6 @@ exports.transcribe = async (req, res, next) => {
   }
 };
 
-// POST /api/ai/generate-note — Gemini structuring of a doctor's transcript.
-exports.generateNote = async (req, res, next) => {
-  try {
-    const { transcript, current } = req.body;
-    if (!transcript) return res.status(400).json({ error: 'Transcript required' });
-    // `current` (optional): an existing structured note → merge the transcript as a correction.
-    const structured = await aiService.generateClinicalNote(transcript, current || null);
-    res.json({ structured });
-  } catch (e) { next(e); }
-};
-
 // POST /api/ai/parse-schedule — natural language → structured scheduling intent ONLY.
 // No booking, no availability, no slot choice (the deterministic engine handles those).
 exports.parseSchedule = async (req, res, next) => {

@@ -21,29 +21,38 @@ describe('validators', () => {
     expect(v.addToQueue.safeParse({ patientId: 'not-a-uuid' }).success).toBe(false);
   });
 
-  test('completeConsult: patientId and procedure are both optional (doctor can always finish)', () => {
-    expect(v.completeConsult.safeParse({ procedure: 'RCT' }).success).toBe(true);
-    expect(v.completeConsult.safeParse({}).success).toBe(true);              // nothing required
-    expect(v.completeConsult.safeParse({ procedure: '' }).success).toBe(true); // empty allowed → transaction defaults to 'Consultation'
-    expect(v.completeConsult.safeParse({ patientId: 'not-a-uuid' }).success).toBe(false); // but a provided patientId must be a real uuid
+  // Phase 2: complete-consult confirms an AI draft — body is { draft_id, confirmed_data }.
+  const uid = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11';
+
+  test('confirmDraft: requires a draft_id uuid and a confirmed_data object', () => {
+    expect(v.confirmDraft.safeParse({ draft_id: uid, confirmed_data: {} }).success).toBe(true);
+    expect(v.confirmDraft.safeParse({ confirmed_data: {} }).success).toBe(false);     // no draft_id
+    expect(v.confirmDraft.safeParse({ draft_id: 'nope', confirmed_data: {} }).success).toBe(false);
+    expect(v.confirmDraft.safeParse({ draft_id: uid }).success).toBe(false);          // no confirmed_data
   });
 
-  test('completeConsult: followUp accepts a date string, a days number, and an {in_days, reason} object', () => {
-    expect(v.completeConsult.safeParse({ followUp: '2026-07-01' }).success).toBe(true);
-    expect(v.completeConsult.safeParse({ followUp: 7 }).success).toBe(true);
-    expect(v.completeConsult.safeParse({ followUp: { in_days: 7, reason: 'RCT review' } }).success).toBe(true);
-    expect(v.completeConsult.safeParse({ followUp: { inDays: 7 } }).success).toBe(true);
-    expect(v.completeConsult.safeParse({ followUp: null }).success).toBe(true);
-  });
-
-  test('completeConsult: appointments + toothNumbers survive validation', () => {
-    const parsed = v.completeConsult.safeParse({
-      toothNumbers: ['36', '37'],
-      appointments: [{ date: '2026-07-01', purpose: 'Session 2', session: 2 }],
+  test('confirmDraft: confirmed_data carries treatments/prescriptions/follow_up through', () => {
+    const parsed = v.confirmDraft.safeParse({
+      draft_id: uid,
+      confirmed_data: {
+        treatments: [{ procedure_name_span: 'root canal', tooth_fdi: 36, sitting_action: 'started' }],
+        prescriptions: [{ medicine_name_span: 'amoxicillin', frequency: 'TID', duration_days: 5 }],
+        follow_up: { in_days: 7, reason: 'RCT review' },
+        clinical_notes: 'Deep caries 36',
+        total_sittings: 3,
+        estimated_cost: 6000,
+      },
     });
     expect(parsed.success).toBe(true);
-    expect(parsed.data.toothNumbers).toEqual(['36', '37']);
-    expect(parsed.data.appointments).toHaveLength(1);
+    expect(parsed.data.confirmed_data.treatments).toHaveLength(1);
+    expect(parsed.data.confirmed_data.follow_up.in_days).toBe(7);
+    expect(parsed.data.confirmed_data.total_sittings).toBe(3);
+  });
+
+  test('reviewDraft: confirm needs a valid status; reject needs no confirmed_data', () => {
+    expect(v.reviewDraft.safeParse({ status: 'rejected' }).success).toBe(true);
+    expect(v.reviewDraft.safeParse({ status: 'confirmed', confirmed_data: { clinical_notes: 'x' } }).success).toBe(true);
+    expect(v.reviewDraft.safeParse({ status: 'pending_review' }).success).toBe(false);
   });
 
   test('gender is case-insensitive and trimmed', () => {

@@ -2,8 +2,11 @@ const router = require('express').Router();
 const ctrl = require('../controllers/ai.controller');
 const auth = require('../middleware/auth');
 
+// NOTE: /transcribe stays for the NON-consult voice features (check-in complaint,
+// patient registration, standalone prescription). The consult pipeline is async:
+// POST /api/queue/:id/start-voice → worker → consultation_drafts.
+// (/generate-note was the old sync consult flow — deleted in Phase 2.)
 router.post('/transcribe', auth, ctrl.uploadMiddleware, ctrl.transcribe);
-router.post('/generate-note', auth, ctrl.generateNote);
 router.post('/extract-prescription', auth, ctrl.extractPrescription);
 router.post('/extract-patient', auth, ctrl.extractPatient);
 // Merged receptionist extraction (new canonical) + deprecated aliases.
