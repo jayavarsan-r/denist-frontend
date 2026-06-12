@@ -27,9 +27,14 @@ Return ONLY this JSON, no markdown, no extra text:
 }
 
 Extraction rules:
-- Name: any language name spoken — capitalize each word (e.g. "ravi kumar" → "Ravi Kumar")
-- Age: spoken as "28 years", "28 வயது", "28 saal" — extract the number
-- Phone: any 10 consecutive digits spoken (ignore country code +91)
+- CRITICAL — strip label/filler words: people naturally say the FIELD LABEL before the value in their own language. These label words are NOT part of the value — drop them and keep only the actual value. This applies to EVERY language, not just one:
+  • "name" labels → Tamil "peru", Telugu "peru", Hindi/Urdu "naam", Malayalam "per"/"peru", Kannada "hesaru", English "name is"/"the name is"/"patient name"
+  • "age" labels → Tamil "vayasu"/"வயது", Hindi "umar"/"saal", English "age is"/"aged"
+  • "phone" labels → "number", "mobile", "phone", "ph", Tamil "number", Hindi "number"
+  • Examples: "peru prasanna" → name "Prasanna" (NOT "Peru Prasanna"); "naam Ravi Kumar" → "Ravi Kumar"; "patient name is Anita" → "Anita"; "hesaru Suresh" → "Suresh"; "vayasu 28" → age 28
+- Name: any language name spoken — after stripping any label word, capitalize each remaining word (e.g. "ravi kumar" → "Ravi Kumar"). Never include a label word like peru/naam/hesaru/per in the name.
+- Age: spoken as "28 years", "28 வயது", "vayasu 28", "28 saal" — extract only the number
+- Phone: any 10 consecutive digits spoken (ignore country code +91 and any "number"/"mobile" label word)
 - Complaint: translate to English if spoken in any other language
   • "பல் வலி" or "dant dard" or "tooth pain" → "Tooth pain"
   • "வாய் புண்" → "Mouth ulcer"
