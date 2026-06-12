@@ -295,6 +295,9 @@ router.get('/:id/checkout-summary', auth, async (req, res, next) => {
           name: m.name || '', dose: m.dose || m.dosage || '', frequency: m.frequency || '',
           duration: m.duration || '', timing: m.timing || '',
           slots: m.meal_timing_slots || m.slots || { breakfast: false, lunch: false, dinner: false },
+          // Inventory link (Phase 3): lets checkout offer a Dispense toggle with price.
+          item_id: m.item_id || null,
+          price_per_unit: m.price_per_unit ?? null,
         })) : [],
         instructions: presc?.instructions || '',
         prescriptionId: presc?.id || null,
@@ -346,13 +349,16 @@ router.post('/:id/complete-consult', auth, validate(v.confirmDraft), async (req,
   }
 });
 
-// POST /api/queue/:id/checkout — mark completed + optional payment (transaction service)
+// POST /api/queue/:id/checkout — mark completed + optional payment + optional
+// medicine dispensing (stock decrement; non-blocking).
+// Body: { payment?, medicines_dispensed?: [{ item_id|resolved_item_id, qty_dispensed }] }
 router.post('/:id/checkout', auth, async (req, res, next) => {
   try {
     if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
     const result = await transaction.completeCheckout({
       clinicId: req.clinicId, staffId: req.staffId, requestId: req.id,
       queueId: req.params.id, payment: req.body?.payment || null,
+      medicinesDispensed: Array.isArray(req.body?.medicines_dispensed) ? req.body.medicines_dispensed : null,
     });
     res.json(result);
   } catch (e) { next(e); }

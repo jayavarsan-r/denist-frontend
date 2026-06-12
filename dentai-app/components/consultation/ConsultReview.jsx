@@ -215,9 +215,17 @@ export default function ConsultReview({
               <MealSlots slots={m.slots} onToggle={(key, val) => onEditMedicine(i, { slots: { ...(m.slots || {}), [key]: val } })} />
             </div>
             {(m.resolvedName || m.price != null) && (
-              <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginTop: 4 }}>
-                {m.resolvedName ? `Matched: ${m.resolvedName}${m.resolvedStrength ? ' ' + m.resolvedStrength : ''}` : ''}
-                {m.price != null ? `${m.resolvedName ? ' · ' : ''}₹${m.price}/unit` : ''}
+              <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginTop: 4, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <span>
+                  {m.resolvedName ? `Matched: ${m.resolvedName}${m.resolvedStrength ? ' ' + m.resolvedStrength : ''}` : ''}
+                  {m.price != null ? `${m.resolvedName ? ' · ' : ''}₹${m.price}/unit` : ''}
+                </span>
+                {m.stock != null && Number(m.stock) <= 0 && (
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 6, background: 'rgba(255,59,48,0.10)', color: 'var(--red)' }}>OUT OF STOCK</span>
+                )}
+                {m.stock != null && Number(m.stock) > 0 && m.lowThreshold != null && Number(m.stock) <= Number(m.lowThreshold) && (
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 6, background: 'rgba(255,159,10,0.12)', color: 'var(--amber)' }}>LOW STOCK · {Number(m.stock)}</span>
+                )}
               </div>
             )}
             {m.uncertain && <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 4 }}>● Not matched to the clinic list — please double-check</div>}

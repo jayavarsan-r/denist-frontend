@@ -115,6 +115,18 @@ function FinanceScreen() {
           )}
         </div>
 
+        {/* inventory — medicine prices + stock, managed on its own page */}
+        <div style={{ padding: '28px 22px 0' }}>
+          <button onClick={() => router.push('/finance/inventory')} className="card tap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', textAlign: 'left' }}>
+            <div style={{ width: 40, height: 40, borderRadius: 11, background: 'rgba(48,209,88,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="pill" size={20} color="#1E8E3E" /></div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 16, fontWeight: 600 }}>Inventory</div>
+              <div className="t-meta">Medicine prices · stock levels · low-stock alerts</div>
+            </div>
+            <Icon name="chevRight" size={16} color="var(--text-tertiary)" />
+          </button>
+        </div>
+
         {/* lab payments — operational states, not a ledger */}
         <div style={{ padding: '28px 22px 0' }}>
           <Eyebrow action={<button onClick={() => router.push('/finance/lab')} style={{ fontSize: 13, fontWeight: 600, color: 'var(--blue)' }}>All orders</button>}>

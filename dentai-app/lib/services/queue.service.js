@@ -51,6 +51,17 @@ export async function getCheckoutSummary(id) {
   return data.summary || data;
 }
 
+// Checkout: marks the entry completed; optionally decrements stock for medicines
+// the receptionist marked as dispensed (non-blocking on the backend).
+export async function checkoutQueueEntry(id, { medicinesDispensed } = {}) {
+  const body = {};
+  if (Array.isArray(medicinesDispensed) && medicinesDispensed.length) {
+    body.medicines_dispensed = medicinesDispensed;
+  }
+  const { data } = await apiClient.post(`/api/queue/${id}/checkout`, body);
+  return data;
+}
+
 export async function removeFromQueue(id) {
   const { data } = await apiClient.delete(`/api/queue/${id}`);
   return data;

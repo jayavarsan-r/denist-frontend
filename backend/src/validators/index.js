@@ -252,6 +252,40 @@ const toothChartUpsert = z.object({
   notes: optStr,
 });
 
+// ── Inventory ─────────────────────────────────────────────────────────────
+const INVENTORY_CATEGORIES = ['medicine', 'consumable', 'equipment'];
+const createInventoryItem = z.object({
+  category: z.enum(INVENTORY_CATEGORIES).optional().default('medicine'),
+  name: z.string().trim().min(1, 'name required'),
+  strength: optStr,
+  unit: z.string().trim().min(1).optional().default('tablet'),
+  price_per_unit: z.coerce.number().nonnegative().optional().nullable(),
+  stock_qty: z.coerce.number().nonnegative().optional().default(0),
+  low_stock_threshold: z.coerce.number().nonnegative().optional().default(10),
+  notes: optStr,
+});
+const updateInventoryItem = z.object({
+  name: z.string().trim().min(1).optional(),
+  strength: optStr,
+  unit: z.string().trim().min(1).optional(),
+  price_per_unit: z.coerce.number().nonnegative().optional().nullable(),
+  low_stock_threshold: z.coerce.number().nonnegative().optional(),
+  notes: optStr,
+  active: z.coerce.boolean().optional(),
+  // stock_qty deliberately absent — stock changes go through stock-in/adjustment
+  // so the movements ledger stays the source of truth.
+});
+const stockIn = z.object({
+  qty: z.coerce.number().positive('qty must be positive'),
+  notes: optStr,
+});
+const stockAdjust = z.object({
+  qty: z.coerce.number().positive('qty must be positive'),
+  direction: z.enum(['in', 'out']),
+  reason: z.enum(['adjustment', 'expired', 'return', 'purchase']).optional().default('adjustment'),
+  notes: optStr,
+});
+
 // ── Staff ─────────────────────────────────────────────────────────────────
 const updateStaff = z.object({
   name: z.string().trim().min(1).optional(),
@@ -284,6 +318,7 @@ module.exports = {
   createClinic, joinClinic, lookupClinic,
   updateStaff,
   createLabOrder, updateLabOrder,
+  createInventoryItem, updateInventoryItem, stockIn, stockAdjust, INVENTORY_CATEGORIES,
   sendNotification, notifyReminder, notifyPaymentDue, notifyRecall,
   toothChartUpsert, TOOTH_CONDITIONS,
   APPOINTMENT_STATUS, LAB_STATUS,

@@ -8,6 +8,7 @@ const sarvam = require('../services/ai/providers/sarvam.provider');
 const { buildConsultationContext } = require('../services/consultation-context.service');
 const { extractFromTranscript } = require('../services/gemini-extraction.service');
 const { runSafetyChecks } = require('../services/safety-net.service');
+const { resolveMedicineSpan } = require('../services/inventory.service');
 
 const QUEUE_NAME = 'voice-processing';
 
@@ -68,30 +69,12 @@ async function handleVoiceJob(data) {
     // 5. Deterministic safety net
     const safetyFlags = runSafetyChecks(extracted, ctx);
 
-    // 6. Resolve medicine spans against the clinic inventory (Phase 3 table —
-    //    resolution_confident=false until it exists, the card shows spans amber).
-    const prescriptions = await Promise.all((extracted.prescriptions || []).map(async (rx) => {
-      let match = null;
-      try {
-        const firstWord = (rx.medicine_name_span || '').trim().split(/\s+/)[0];
-        if (firstWord) {
-          const { data: rows } = await supabase.from('inventory_items')
-            .select('id, name, strength, unit, price_per_unit, stock_qty')
-            .eq('clinic_id', clinicId).eq('category', 'medicine').eq('active', true)
-            .ilike('name', `%${firstWord}%`).limit(1);
-          match = rows?.[0] || null;
-        }
-      } catch { /* table may not exist yet */ }
-      return {
-        ...rx,
-        resolved_item_id:     match?.id ?? null,
-        resolved_name:        match?.name ?? rx.medicine_name_span,
-        resolved_strength:    match?.strength ?? null,
-        price_per_unit:       match?.price_per_unit ?? null,
-        stock_qty:            match?.stock_qty ?? null,
-        resolution_confident: !!match,
-      };
-    }));
+    // 6. Resolve medicine spans against the clinic inventory: exact match →
+    //    first-word prefix → strength disambiguation (inventory.service). The
+    //    card shows price/stock for confident matches and amber otherwise.
+    const prescriptions = await Promise.all(
+      (extracted.prescriptions || []).map((rx) => resolveMedicineSpan(clinicId, rx))
+    );
 
     // 7. Draft ready → Verification Card (realtime UPDATE on this row)
     await supabase.from('consultation_drafts')

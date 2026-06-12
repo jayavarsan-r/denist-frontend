@@ -40,6 +40,8 @@ export function toFrontendExtraction(draft) {
     resolvedName: rx.resolved_name && rx.resolved_name !== rx.medicine_name_span ? rx.resolved_name : null,
     resolvedStrength: rx.resolved_strength || null,
     price: rx.price_per_unit ?? null,
+    stock: rx.stock_qty ?? null,
+    lowThreshold: rx.low_stock_threshold ?? null,
     _rx: rx, // original entry — resolution fields survive an untouched confirm
   }));
 

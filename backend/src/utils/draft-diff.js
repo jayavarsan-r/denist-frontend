@@ -11,7 +11,8 @@ function stripDerived(value) {
   if (value && typeof value === 'object') {
     const out = {};
     for (const [k, v] of Object.entries(value)) {
-      if (k.startsWith('resolved_') || k === 'resolution_confident' || k === 'price_per_unit' || k === 'stock_qty') continue;
+      if (k.startsWith('resolved_') || k === 'resolution_confident' || k === 'price_per_unit'
+        || k === 'stock_qty' || k === 'low_stock_threshold') continue;
       out[k] = stripDerived(v);
     }
     return out;

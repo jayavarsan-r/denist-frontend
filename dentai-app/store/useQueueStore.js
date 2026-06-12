@@ -4,6 +4,7 @@ import {
   addToQueue as apiAddToQueue,
   updateQueueEntry,
   completeConsult as apiCompleteConsult,
+  checkoutQueueEntry as apiCheckout,
   removeFromQueue as apiRemoveFromQueue,
   reorderQueue as apiReorderQueue,
 } from '@/lib/services/queue.service';
@@ -112,14 +113,14 @@ export const useQueueStore = create((set, get) => ({
     }
   },
 
-  /* ─── Checkout patient ─── */
-  checkout: async (id, summary) => {
+  /* ─── Checkout patient — optionally decrements stock for dispensed medicines ─── */
+  checkout: async (id, summary, medicinesDispensed) => {
     set((s) => ({
       queue: s.queue.map((e) => (e.id === id ? { ...e, status: 'checked_out' } : e)),
       checkoutsToday: [{ ...summary, time: nowTime() }, ...s.checkoutsToday],
     }));
     try {
-      await updateQueueEntry(id, { status: 'completed' });
+      await apiCheckout(id, { medicinesDispensed });
     } catch {
       get().loadQueue();
     }

@@ -351,20 +351,45 @@ async function createTreatmentPlan(ctx) {
 }
 
 // ── completeCheckout ──────────────────────────────────────────────────────
-// Marks a queue entry completed and optionally records a payment in one step.
+// Marks a queue entry completed, optionally records a payment, and decrements
+// stock for medicines the receptionist marked as dispensed. Dispensing is
+// NON-BLOCKING: stock accuracy matters, the patient walking out matters more —
+// failures (e.g. insufficient stock) come back as warnings, never errors.
 async function completeCheckout(ctx) {
-  const { clinicId, staffId, requestId, queueId, payment: pay } = ctx;
+  const { clinicId, staffId, requestId, queueId, payment: pay, medicinesDispensed } = ctx;
   let payment = null;
   if (pay && pay.amount) {
     payment = await recordPayment({ clinicId, staffId, requestId, queueEntryId: queueId, ...pay });
   }
+
+  let dispensing = [];
+  if (Array.isArray(medicinesDispensed) && medicinesDispensed.length) {
+    try {
+      const { dispenseMedicinesAtCheckout } = require('./inventory.service');
+      // The visit was created at draft-confirm — find it via the entry's draft
+      // so the stock movement references the right visit (best-effort).
+      let visitId = null;
+      try {
+        const { data: draft } = await supabase.from('consultation_drafts')
+          .select('visit_id').eq('queue_entry_id', queueId).eq('clinic_id', clinicId)
+          .eq('status', 'confirmed').order('confirmed_at', { ascending: false })
+          .limit(1).maybeSingle();
+        visitId = draft?.visit_id || null;
+      } catch { /* drafts table may not exist yet */ }
+      dispensing = await dispenseMedicinesAtCheckout({
+        clinicId, visitId, medicines: medicinesDispensed, staffId,
+      });
+    } catch (e) { /* never block checkout on inventory */ }
+  }
+
   const { data: queueEntry } = await supabase.from('queue_entries')
     .update({ status: 'completed', updated_at: new Date().toISOString() })
     .eq('id', queueId).eq('clinic_id', clinicId).select().maybeSingle();
 
+  const stockWarnings = dispensing.filter((d) => d.error);
   audit.log({ clinicId, staffId, requestId, action: 'CHECKOUT', entityType: 'queue_entry',
-    entityId: queueId, metadata: { hasPayment: !!payment } });
-  return { queueEntry, payment };
+    entityId: queueId, metadata: { hasPayment: !!payment, dispensed: dispensing.filter((d) => !d.error).length, stockWarnings: stockWarnings.length } });
+  return { queueEntry, payment, dispensing, stockWarnings };
 }
 
 // ── createClinic ──────────────────────────────────────────────────────────
