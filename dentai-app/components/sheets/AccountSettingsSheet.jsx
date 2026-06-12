@@ -1,8 +1,8 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { apiClient } from '@/lib/api/client';
-import { updateClinic, updateClinicSettings } from '@/lib/services/clinic.service';
+import { updateClinic, updateClinicSettings, uploadClinicLogo } from '@/lib/services/clinic.service';
 import Icon from '@/components/icons';
 import { SheetHeader, Chip } from '@/components/ui';
 
@@ -51,25 +51,55 @@ function ClinicInfoPanel({ showToast }) {
   const [city, setCity] = useState(clinic.city || '');
   const [address, setAddress] = useState(clinic.address || '');
   const [phone, setPhone] = useState(clinic.phone || '');
+  const [registrationNumber, setRegistrationNumber] = useState(clinic.registrationNumber || '');
+  const [logoUrl, setLogoUrl] = useState(clinic.logoUrl || null);
+  const [logoUploading, setLogoUploading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const logoInputRef = useRef(null);
 
   const save = async () => {
     setSaving(true);
     try {
-      await updateClinic({ name, city, address, phone });
-      updateClinicLocal({ clinicName: name, city, address, phone });
+      await updateClinic({ name, city, address, phone, registrationNumber });
+      updateClinicLocal({ clinicName: name, city, address, phone, registrationNumber });
       showToast('Clinic info saved');
     } catch {
       showToast('Failed to save — check connection');
     } finally { setSaving(false); }
   };
 
+  const onLogoPick = async (e) => {
+    const file = (e.target.files || [])[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!/png|jpe?g/i.test(file.type)) { showToast('Logo must be PNG or JPEG'); return; }
+    setLogoUploading(true);
+    try {
+      const { logoUrl: url } = await uploadClinicLogo(file);
+      if (url) { setLogoUrl(url); updateClinicLocal({ logoUrl: url }); }
+      showToast('Logo updated');
+    } catch {
+      showToast('Logo upload failed — try again');
+    } finally { setLogoUploading(false); }
+  };
+
   return (
     <div>
+      {/* Logo — shown on every clinic PDF (case sheet, prescription, statement, lab) */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>
+        <div style={{ width: 56, height: 56, borderRadius: 12, background: 'rgba(60,60,67,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 }}>
+          {logoUrl ? <img src={logoUrl} alt="Clinic logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> : <Icon name="image" size={22} color="var(--text-tertiary)" />}
+        </div>
+        <input ref={logoInputRef} type="file" accept="image/png,image/jpeg" style={{ display: 'none' }} onChange={onLogoPick} />
+        <button onClick={() => logoInputRef.current?.click()} disabled={logoUploading} style={{ height: 36, padding: '0 16px', borderRadius: 10, border: '1px solid var(--border)', background: '#fff', fontSize: 14, fontWeight: 600, color: 'var(--blue)' }}>
+          {logoUploading ? 'Uploading…' : logoUrl ? 'Change logo' : 'Upload logo'}
+        </button>
+      </div>
       <Field label="Clinic name" value={name} onChange={setName} placeholder="e.g. Smile Care Dental" />
       <Field label="City" value={city} onChange={setCity} placeholder="e.g. Chennai" />
       <Field label="Address" value={address} onChange={setAddress} placeholder="Full clinic address" />
       <Field label="Phone" value={phone} onChange={setPhone} placeholder="+91 98765 43210" type="tel" />
+      <Field label="Registration number" value={registrationNumber} onChange={setRegistrationNumber} placeholder="Clinic / council reg. no." />
       <SaveBtn onClick={save} saving={saving} />
     </div>
   );

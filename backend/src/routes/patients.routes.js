@@ -5,6 +5,8 @@ const supabase = require('../config/supabase');
 const validate = require('../middleware/validate');
 const v = require('../validators');
 const { getSignedUrl } = require('../services/storage.service');
+const { generateCaseSheetPdf, generateStatementPdf } = require('../services/pdf');
+const { loadBrandingContext } = require('../services/pdf/branding.data');
 
 // A patient is clinic-scoped, so anyone who can see the patient can see their data.
 // Returns the patient row if the caller's clinic (or legacy dentist) owns it, else null.
@@ -244,57 +246,102 @@ router.get('/:id/xrays', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Shared aggregate used by BOTH the case-sheet JSON route and the case-sheet PDF route,
+// so the document and the screen always reflect the exact same data. Returns null when
+// the patient is out of scope / not found.
+async function buildCaseSheet(patientId, req) {
+  const today = new Date().toISOString().split('T')[0];
+
+  // Clinic-scoped, not dentist-scoped: a doctor consulting a receptionist-checked-in
+  // patient (different dentist_id) must still see the full case sheet. Match clinic_id
+  // OR dentist_id (legacy rows) so nothing is hidden across staff in the same clinic.
+  const scope = (q) => (req.clinicId ? q.or(`clinic_id.eq.${req.clinicId},dentist_id.eq.${req.dentistId}`) : q.eq('dentist_id', req.dentistId));
+
+  // lab_orders may not exist before migration 007 — keep it non-fatal.
+  const safeLab = scope(supabase.from('lab_orders').select('*').eq('patient_id', patientId)).is('deleted_at', null).order('created_at', { ascending: false })
+    .then(r => r.data || []).catch(() => []);
+
+  const [patientRes, plansRes, visitsRes, prescRes, xraysRes, apptRes, labOrders] = await Promise.all([
+    scope(supabase.from('patients').select('*').eq('id', patientId)).single(),
+    scope(supabase.from('treatment_plans').select('*').eq('patient_id', patientId)).order('created_at', { ascending: false }),
+    scope(supabase.from('visits').select(`*, visit_notes(*)`).eq('patient_id', patientId)).order('visit_date', { ascending: false }),
+    scope(supabase.from('prescriptions').select('*').eq('patient_id', patientId)).order('created_at', { ascending: false }),
+    supabase.from('xrays').select('id, xray_type, date_taken, created_at, tooth_number, notes, storage_path').eq('patient_id', patientId).is('deleted_at', null).order('created_at', { ascending: false }),
+    // Include 'suggested' (consult-created) appointments, not just 'scheduled'.
+    scope(supabase.from('appointments').select('*').eq('patient_id', patientId)).gte('appointment_date', today).neq('status', 'cancelled').order('appointment_date', { ascending: true }).limit(3),
+    safeLab,
+  ]);
+
+  if (patientRes.error || !patientRes.data) return null;
+
+  const totalBilled = (visitsRes.data || []).reduce((s, v) => s + (parseFloat(v.cost) || 0), 0);
+  const totalPlannedCost = (plansRes.data || []).reduce((s, p) => s + (parseFloat(p.estimated_cost) || 0), 0);
+  const totalCollected = (plansRes.data || []).reduce((s, p) => s + (parseFloat(p.collected_amount) || 0), 0);
+  const activePlans = (plansRes.data || []).filter(p => p.status === 'active');
+
+  return {
+    patient: patientRes.data,
+    activeTreatmentPlans: activePlans,
+    allTreatmentPlans: plansRes.data || [],
+    visits: visitsRes.data || [],
+    prescriptions: prescRes.data || [],
+    xrays: xraysRes.data || [],
+    labOrders: labOrders || [],
+    upcomingAppointments: apptRes.data || [],
+    summary: {
+      totalVisits: (visitsRes.data || []).length,
+      totalBilled,
+      totalPlannedCost,
+      totalCollected,
+      pendingAmount: totalPlannedCost - totalCollected,
+      totalXrays: (xraysRes.data || []).length,
+      totalPrescriptions: (prescRes.data || []).length,
+    },
+  };
+}
+
 router.get('/:id/case-sheet', async (req, res, next) => {
   try {
-    const patientId = req.params.id;
-    const today = new Date().toISOString().split('T')[0];
+    const caseSheet = await buildCaseSheet(req.params.id, req);
+    if (!caseSheet) return res.status(404).json({ error: 'Patient not found' });
+    res.json(caseSheet);
+  } catch (e) { next(e); }
+});
 
-    // Clinic-scoped, not dentist-scoped: a doctor consulting a receptionist-checked-in
-    // patient (different dentist_id) must still see the full case sheet. Match clinic_id
-    // OR dentist_id (legacy rows) so nothing is hidden across staff in the same clinic.
+// GET /api/patients/:id/case-sheet/pdf — same data as the JSON route, rendered to PDF.
+router.get('/:id/case-sheet/pdf', async (req, res, next) => {
+  try {
+    const caseSheet = await buildCaseSheet(req.params.id, req);
+    if (!caseSheet || !caseSheet.patient) return res.status(404).json({ error: 'Patient not found' });
+    const { clinic, dentist } = await loadBrandingContext(req);
+    const date = new Date().toISOString().split('T')[0];
+    const buf = await generateCaseSheetPdf({ clinic, dentist, date, caseSheet });
+    const fname = `CaseSheet_${(caseSheet.patient.name || 'patient').replace(/\s+/g, '_')}_${date}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${fname}"`);
+    res.setHeader('Content-Length', buf.length);
+    res.send(buf);
+  } catch (e) { next(e); }
+});
+
+// GET /api/patients/:id/statement/pdf — patient statement (charges + payments + balance).
+router.get('/:id/statement/pdf', async (req, res, next) => {
+  try {
     const scope = (q) => (req.clinicId ? q.or(`clinic_id.eq.${req.clinicId},dentist_id.eq.${req.dentistId}`) : q.eq('dentist_id', req.dentistId));
-
-    // lab_orders may not exist before migration 007 — keep it non-fatal.
-    const safeLab = scope(supabase.from('lab_orders').select('*').eq('patient_id', patientId)).is('deleted_at', null).order('created_at', { ascending: false })
-      .then(r => r.data || []).catch(() => []);
-
-    const [patientRes, plansRes, visitsRes, prescRes, xraysRes, apptRes, labOrders] = await Promise.all([
-      scope(supabase.from('patients').select('*').eq('id', patientId)).single(),
-      scope(supabase.from('treatment_plans').select('*').eq('patient_id', patientId)).order('created_at', { ascending: false }),
-      scope(supabase.from('visits').select(`*, visit_notes(*)`).eq('patient_id', patientId)).order('visit_date', { ascending: false }),
-      scope(supabase.from('prescriptions').select('*').eq('patient_id', patientId)).order('created_at', { ascending: false }),
-      supabase.from('xrays').select('id, xray_type, date_taken, created_at, tooth_number, notes, storage_path').eq('patient_id', patientId).is('deleted_at', null).order('created_at', { ascending: false }),
-      // Include 'suggested' (consult-created) appointments, not just 'scheduled'.
-      scope(supabase.from('appointments').select('*').eq('patient_id', patientId)).gte('appointment_date', today).neq('status', 'cancelled').order('appointment_date', { ascending: true }).limit(3),
-      safeLab,
+    const { data: patient } = await scope(supabase.from('patients').select('name, phone').eq('id', req.params.id)).maybeSingle();
+    if (!patient) return res.status(404).json({ error: 'Patient not found' });
+    const [paymentsRes, plansRes] = await Promise.all([
+      supabase.from('payments').select('payment_date, amount, payment_method').eq('patient_id', req.params.id).order('payment_date', { ascending: false }),
+      scope(supabase.from('treatment_plans').select('procedure_name, estimated_cost').eq('patient_id', req.params.id)).order('created_at', { ascending: false }),
     ]);
-
-    if (patientRes.error || !patientRes.data) return res.status(404).json({ error: 'Patient not found' });
-
-    const totalBilled = (visitsRes.data || []).reduce((s, v) => s + (parseFloat(v.cost) || 0), 0);
-    const totalPlannedCost = (plansRes.data || []).reduce((s, p) => s + (parseFloat(p.estimated_cost) || 0), 0);
-    const totalCollected = (plansRes.data || []).reduce((s, p) => s + (parseFloat(p.collected_amount) || 0), 0);
-    const activePlans = (plansRes.data || []).filter(p => p.status === 'active');
-
-    res.json({
-      patient: patientRes.data,
-      activeTreatmentPlans: activePlans,
-      allTreatmentPlans: plansRes.data || [],
-      visits: visitsRes.data || [],
-      prescriptions: prescRes.data || [],
-      xrays: xraysRes.data || [],
-      labOrders: labOrders || [],
-      upcomingAppointments: apptRes.data || [],
-      summary: {
-        totalVisits: (visitsRes.data || []).length,
-        totalBilled,
-        totalPlannedCost,
-        totalCollected,
-        pendingAmount: totalPlannedCost - totalCollected,
-        totalXrays: (xraysRes.data || []).length,
-        totalPrescriptions: (prescRes.data || []).length,
-      },
-    });
+    const { clinic, dentist } = await loadBrandingContext(req);
+    const date = new Date().toISOString().split('T')[0];
+    const buf = await generateStatementPdf({ clinic, dentist, date, patient, payments: paymentsRes.data || [], plans: plansRes.data || [] });
+    const fname = `Statement_${(patient.name || 'patient').replace(/\s+/g, '_')}_${date}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${fname}"`);
+    res.setHeader('Content-Length', buf.length);
+    res.send(buf);
   } catch (e) { next(e); }
 });
 

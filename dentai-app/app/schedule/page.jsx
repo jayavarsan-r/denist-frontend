@@ -54,7 +54,7 @@ function ApptBlock({ v, patients, procedures, colW, onDragMove, onOpen, dragging
         boxShadow: dragging ? 'var(--elevation-2)' : 'none', transform: dragging ? 'scale(1.03)' : 'none',
         opacity: dragging ? 0.85 : 1, zIndex: dragging ? 50 : 1, transition: dragging ? 'none' : 'box-shadow .15s',
       }}>
-      <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.2 }}>{p ? p.name.split(' ')[0] : 'Patient'}</div>
+      <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.2 }}>{(p?.name || v.patientName) ? (p?.name || v.patientName).split(' ')[0] : 'Patient'}</div>
       {h > 50 && <div style={{ fontSize: 10, color: 'var(--text-secondary)', overflow: 'hidden', whiteSpace: 'nowrap' }}>{purpose}</div>}
       {h > 66 && v.tooth && <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>Tooth {v.tooth}</div>}
     </div>
@@ -100,7 +100,7 @@ function WeekView({ visits, patients, procedures, goToPatient }) {
                         </div>
                         <div style={{ width: 3, alignSelf: 'stretch', minHeight: 30, borderRadius: 2, background: getProcedureColor(purpose).border, flexShrink: 0 }} />
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 16, fontWeight: 600 }}>{p ? p.name : 'Patient'}</div>
+                          <div style={{ fontSize: 16, fontWeight: 600 }}>{p?.name || v.patientName || 'Patient'}</div>
                           <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{purpose}{v.tooth ? ' · Tooth ' + v.tooth : ''}</div>
                         </div>
                         <span style={{ width: 7, height: 7, borderRadius: '50%', background: dot[v.status] || 'var(--text-tertiary)', flexShrink: 0 }} />
@@ -224,7 +224,7 @@ function MonthView({ visits, patients, goToPatient }) {
             <button key={v.id} onClick={() => goToPatient(v.patientId)} className="rowtap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 0', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left' }}>
               <div style={{ width: 3, alignSelf: 'stretch', minHeight: 36, borderRadius: 2, background: col.border, flexShrink: 0 }} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 15.5, fontWeight: 600 }}>{p ? p.name : 'Patient'}</div>
+                <div style={{ fontSize: 15.5, fontWeight: 600 }}>{p?.name || v.patientName || 'Patient'}</div>
                 <div className="t-meta">{v.purpose || 'Consultation'}{v.tooth ? ' · Tooth ' + v.tooth : ''}</div>
               </div>
               <span className="tnum" style={{ fontSize: 13.5, color: 'var(--text-secondary)', fontWeight: 600, flexShrink: 0 }}>{t.label}</span>
@@ -311,7 +311,7 @@ function HistoryView({ visits, clinicalVisits, patients, procedures, goToPatient
 
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-                          <div style={{ fontSize: 16, fontWeight: 700, lineHeight: 1.2 }}>{p ? p.name : 'Unknown Patient'}</div>
+                          <div style={{ fontSize: 16, fontWeight: 700, lineHeight: 1.2 }}>{p?.name || e.patientName || 'Unknown Patient'}</div>
                           <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.03em', textTransform: 'uppercase', color: STATUS_COLOR[e.status] || 'var(--text-tertiary)', flexShrink: 0 }}>
                             {STATUS_LABEL[e.status] || e.status || ''}
                           </span>

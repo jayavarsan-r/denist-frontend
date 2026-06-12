@@ -10,6 +10,14 @@ export async function updateClinic(patch) {
   return data;
 }
 
+// Upload the clinic logo (PNG/JPEG). Backend stores the path and returns a preview URL.
+export async function uploadClinicLogo(file) {
+  const fd = new FormData();
+  fd.append('logo', file);
+  const { data } = await apiClient.post('/api/clinic/logo', fd);
+  return data; // { logoPath, logoUrl }
+}
+
 // Doctor-only clinic preferences (jsonb), e.g. { receptionistCanAddMedicines: true }.
 export async function updateClinicSettings(patch) {
   const { data } = await apiClient.patch('/api/clinic/settings', patch);

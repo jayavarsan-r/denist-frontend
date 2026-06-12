@@ -4,10 +4,11 @@ import { useAppStore } from '@/store/useAppStore';
 import { usePatientStore } from '@/store/usePatientStore';
 import { useClinicalStore } from '@/store/useClinicalStore';
 import Icon from '@/components/icons';
-import { SheetHeader, SectionHeader, PrimaryButton, SelectPill, Field, VoiceButton } from '@/components/ui';
+import { SheetHeader, SectionHeader, PrimaryButton, SelectPill, Field, VoiceButton, DocumentActions } from '@/components/ui';
 import { TODAY, FREQUENT_MEDICINES } from '@/lib/data/patients';
 import { formatDate } from '@/lib/data/utils';
-import { createPrescription, getPrescription, getPrescriptionPdfUrl } from '@/lib/services/prescription.service';
+import { createPrescription, getPrescription } from '@/lib/services/prescription.service';
+import { fetchDocBlob, viewDocument, shareDocument, docFilename } from '@/lib/documents/export';
 import { extractPrescription } from '@/lib/services/ai.service';
 import { useAudioRecorder } from '@/lib/hooks/useAudioRecorder';
 import { useTranscription } from '@/lib/hooks/useTranscription';
@@ -30,6 +31,7 @@ export default function PrescriptionSheet({ params, onClose }) {
   const [dictateMode, setDictateMode] = useState('full');
   const [transcript, setTranscript] = useState('');
   const [expanded, setExpanded] = useState(null);
+  const [savedRxId, setSavedRxId] = useState(existing?.id || null);
 
   const recorder = useAudioRecorder();
   const { transcribe } = useTranscription();
@@ -107,8 +109,10 @@ export default function PrescriptionSheet({ params, onClose }) {
         instructions,
         followUpDays: followUp,
       });
+      const newId = result.id || result.prescription_id || ('rx' + Date.now());
+      setSavedRxId(newId);
       // Also persist in local store for UI consistency
-      saveRx({ id: result.id || result.prescription_id || ('rx' + Date.now()), patientId: params.patientId, patientName: p ? p.name : '', date: TODAY, medicines: meds, instructions, followUpDays: followUp });
+      saveRx({ id: newId, patientId: params.patientId, patientName: p ? p.name : '', date: TODAY, medicines: meds, instructions, followUpDays: followUp });
       showToast('Prescription saved');
       onClose();
     } catch(e) {
@@ -116,37 +120,27 @@ export default function PrescriptionSheet({ params, onClose }) {
     }
   };
 
-  const printPrescription = async () => {
+  // Ensure the prescription is saved (so it has a real id) then export the PDF as a
+  // file through the shared util. Replaces the old navigator.share({ url }) which shared
+  // an auth-protected backend URL the recipient could never open.
+  const exportRx = async (kind) => {
     try {
-      let rxId = existing?.id;
+      let rxId = existing?.id || savedRxId;
       if (!rxId) {
-        const result = await createPrescription({
-          patientId: params.patientId,
-          medicines: meds,
-          instructions,
-          followUpDays: followUp,
-        });
+        const result = await createPrescription({ patientId: params.patientId, medicines: meds, instructions, followUpDays: followUp });
         rxId = result.id || result.prescription_id;
+        if (rxId) {
+          setSavedRxId(rxId);
+          saveRx({ id: rxId, patientId: params.patientId, patientName: p ? p.name : '', date: TODAY, medicines: meds, instructions, followUpDays: followUp });
+        }
       }
       if (!rxId) { showToast('Could not generate prescription'); return; }
-
-      const pdfUrl = getPrescriptionPdfUrl(rxId);
-      const patientName = p ? p.name : 'Patient';
-
-      if (typeof navigator !== 'undefined' && navigator.share) {
-        try {
-          await navigator.share({
-            title: `Prescription — ${patientName}`,
-            text: `Prescription for ${patientName}`,
-            url: pdfUrl,
-          });
-          return;
-        } catch {}
-      }
-      // Fallback: open in browser
-      window.open(pdfUrl, '_blank');
-    } catch(e) {
-      showToast(e?.response?.data?.message || 'Could not generate PDF');
+      const blob = await fetchDocBlob('prescription', rxId);
+      const filename = docFilename('prescription', p?.name);
+      if (kind === 'view') await viewDocument(blob, filename);
+      else await shareDocument({ blob, filename, title: 'Prescription', text: `Prescription${p?.name ? ' — ' + p.name : ''}`, fallbackPhone: p?.phone });
+    } catch (e) {
+      if (e?.name !== 'AbortError') showToast(kind === 'view' ? "Couldn't open the PDF" : "Couldn't share");
     }
   };
 
@@ -156,7 +150,12 @@ export default function PrescriptionSheet({ params, onClose }) {
 
   return (
     <div style={{ padding: '0 20px 28px' }}>
-      <SheetHeader title="Prescription" onClose={onClose} />
+      <SheetHeader title="Prescription" onClose={onClose} right={
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {savedRxId && <DocumentActions docType="prescription" id={savedRxId} patientName={p?.name} patientPhone={p?.phone} />}
+          <button onClick={onClose} style={{ color: 'var(--text-secondary)', display: 'flex' }}><Icon name="x" size={24} /></button>
+        </div>
+      } />
       {p && (
         <div className="card" style={{ padding: 14, marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={{ fontSize: 16, fontWeight: 600 }}>{p.name}</span>
@@ -222,7 +221,10 @@ export default function PrescriptionSheet({ params, onClose }) {
       </div>
 
       <PrimaryButton onClick={save}>Save</PrimaryButton>
-      <button onClick={printPrescription} style={{ width: '100%', textAlign: 'center', color: 'var(--blue)', fontSize: 15, fontWeight: 500, padding: '14px 0 2px' }}>Print / Share</button>
+      <div style={{ display: 'flex', gap: 18, justifyContent: 'center', padding: '14px 0 2px' }}>
+        <button onClick={() => exportRx('view')} style={{ color: 'var(--blue)', fontSize: 15, fontWeight: 500 }}>View PDF</button>
+        <button onClick={() => exportRx('share')} style={{ color: 'var(--blue)', fontSize: 15, fontWeight: 500 }}>Share</button>
+      </div>
     </div>
   );
 }
