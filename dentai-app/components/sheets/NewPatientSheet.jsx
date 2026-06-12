@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { usePatientStore } from '@/store/usePatientStore';
 import Icon from '@/components/icons';
-import { SheetHeader, PrimaryButton } from '@/components/ui';
+import { SheetHeader, PrimaryButton, VoiceButton } from '@/components/ui';
 import { useAudioRecorder } from '@/lib/hooks/useAudioRecorder';
 import { useTranscription } from '@/lib/hooks/useTranscription';
 import { extractPatientInfo } from '@/lib/services/ai.service';
@@ -23,20 +23,6 @@ function generatePatientId() {
   let id = 'PT-';
   for (let i = 0; i < 5; i++) id += chars[Math.floor(Math.random() * chars.length)];
   return id;
-}
-
-function RecordingWave() {
-  const peaks = [4, 8, 14, 6, 20, 10, 24, 16, 22, 12, 24, 10, 20, 8, 16, 6, 18, 10, 14, 8, 6];
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, height: 32, width: '100%' }}>
-      {peaks.map((h, i) => (
-        <div key={i} style={{
-          width: 4, borderRadius: 4, background: 'rgba(255,255,255,0.9)', height: h,
-          animation: `wave ${0.5 + (i % 5) * 0.1}s ease-in-out ${i * 0.04}s infinite alternate`,
-        }} />
-      ))}
-    </div>
-  );
 }
 
 /* Single field row inside the grouped card */
@@ -165,17 +151,7 @@ export default function NewPatientSheet({ onClose }) {
     } finally { setSaving(false); }
   };
 
-  const btnLabel = voicePhase === 'transcribing' ? 'Transcribing…'
-    : voicePhase === 'extracting' ? 'Filling fields…'
-    : voicePhase === 'done' ? 'All done'
-    : isRecording ? `${recorder.seconds}s  ·  Tap to finish`
-    : (name || phone) ? 'Speak to add more'
-    : 'Speak patient details';
-
-  const btnSub = isProcessing ? null
-    : voicePhase === 'done' ? 'Review and edit below'
-    : isRecording ? 'Name · phone · age · complaint'
-    : 'Fill everything hands-free';
+  const vPhase = isRecording ? 'recording' : isProcessing ? 'processing' : voicePhase === 'done' ? 'done' : 'idle';
 
   return (
     <div style={{ padding: '0 20px 32px' }}>
@@ -192,52 +168,19 @@ export default function NewPatientSheet({ onClose }) {
         }}>{displayId}</span>
       </div>
 
-      {/* ── Voice button ── */}
-      <button
-        onClick={handleVoiceTap}
-        disabled={isProcessing}
-        style={{
-          width: '100%', borderRadius: 99,
-          background: voicePhase === 'done' ? '#16A34A' : isRecording ? '#C0392B' : 'var(--accent)',
-          border: 'none', cursor: isProcessing ? 'default' : 'pointer',
-          transition: 'background .25s ease', marginBottom: voiceError ? 8 : 20,
-          /* layout switches between recording and idle */
-          display: 'flex',
-          flexDirection: isRecording ? 'column' : 'row',
-          alignItems: 'center',
-          justifyContent: isRecording ? 'center' : 'flex-start',
-          gap: isRecording ? 6 : 14,
-          padding: isRecording ? '18px 20px 14px' : '16px 18px',
-        }}
-      >
-        {isRecording ? (
-          /* Recording — waveform full-width, timer + hint below */
-          <>
-            <RecordingWave />
-            <div style={{ fontSize: 15, fontWeight: 700, color: '#fff' }}>
-              {recorder.seconds}s · Tap to finish
-            </div>
-            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.65)' }}>
-              Name · phone · age · complaint
-            </div>
-          </>
-        ) : (
-          /* Idle / processing / done — icon + text side by side */
-          <>
-            <div style={{ width: 46, height: 46, borderRadius: '50%', background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              {isProcessing
-                ? <div style={{ width: 20, height: 20, borderRadius: '50%', border: '2.5px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', animation: 'spin .7s linear infinite' }} />
-                : voicePhase === 'done'
-                ? <Icon name="check" size={24} color="#fff" stroke={2.5} />
-                : <Icon name="mic" size={24} color="#fff" />}
-            </div>
-            <div style={{ flex: 1, textAlign: 'left' }}>
-              <div style={{ fontSize: 16, fontWeight: 700, color: '#fff' }}>{btnLabel}</div>
-              {btnSub && <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.72)', marginTop: 2 }}>{btnSub}</div>}
-            </div>
-          </>
-        )}
-      </button>
+      {/* ── Voice button (shared, consistent across the app) ── */}
+      <div style={{ marginBottom: voiceError ? 8 : 20 }}>
+        <VoiceButton
+          phase={vPhase}
+          seconds={recorder.seconds}
+          onTap={handleVoiceTap}
+          idleTitle={(name || phone) ? 'Speak to add more' : 'Speak patient details'}
+          idleHint="Name · phone · age · complaint"
+          recordingHint="Name · phone · age · complaint"
+          doneTitle="All done"
+          doneHint="Review and edit below"
+        />
+      </div>
 
       {voiceError && <p style={{ fontSize: 12.5, color: 'var(--red)', margin: '0 0 14px 2px' }}>{voiceError}</p>}
 

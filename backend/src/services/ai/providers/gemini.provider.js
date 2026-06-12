@@ -7,15 +7,20 @@ const GEMINI_URL =
 
 // Collect every configured Gemini key, in priority order:
 //   GEMINI_API_KEYS   — comma-separated list (preferred for many keys)
-//   GEMINI_API_KEY_1 … GEMINI_API_KEY_12  — numbered keys
+//   GEMINI_API_KEY_1 … GEMINI_API_KEY_12  — numbered keys (underscore)
+//   GEMINI_API_KEY1  … GEMINI_API_KEY12   — numbered keys (no underscore — common typo)
 //   GEMINI_API_KEY    — the legacy single key
 // De-duplicated, placeholders ("your_…") dropped. Read live each call so a key added
 // to the environment is picked up without a redeploy.
+//
+// NOTE: both `GEMINI_API_KEY_1` and `GEMINI_API_KEY1` are accepted on purpose — a
+// mismatch here silently disables Gemini entirely (the app falls back to mock data in
+// dev), so we recognise the obvious naming variant rather than fail closed.
 function getKeys() {
   const raw = [];
   if (process.env.GEMINI_API_KEYS) raw.push(...process.env.GEMINI_API_KEYS.split(','));
   for (let i = 1; i <= 12; i++) {
-    const k = process.env[`GEMINI_API_KEY_${i}`];
+    const k = process.env[`GEMINI_API_KEY_${i}`] || process.env[`GEMINI_API_KEY${i}`];
     if (k) raw.push(k);
   }
   if (process.env.GEMINI_API_KEY) raw.push(process.env.GEMINI_API_KEY);
@@ -33,10 +38,20 @@ let cursor = 0;
 function parseResponse(res) {
   let text = res.data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
   if (!text) throw new AppError('AI_PARSE_ERROR', 'Empty response from AI');
+  // JSON mode (responseMimeType) makes this clean, but stay defensive: strip any
+  // ```json fences the model still emits…
   text = text.replace(/^```json?\n?/i, '').replace(/```$/, '').trim();
   try {
     return JSON.parse(text);
   } catch {
+    // …and as a last resort pull out the first balanced { … } block, in case prose
+    // got prepended/appended. A parse failure means ZERO fields fill on the screen,
+    // so it's worth this extra recovery rather than throwing.
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start !== -1 && end > start) {
+      try { return JSON.parse(text.slice(start, end + 1)); } catch { /* fall through */ }
+    }
     throw new AppError('AI_PARSE_ERROR', 'AI returned unparseable output');
   }
 }
@@ -59,6 +74,10 @@ async function generate(systemPrompt, userContent, opts = {}) {
     generationConfig: {
       temperature: opts.temperature ?? 0.15,
       maxOutputTokens: opts.maxOutputTokens ?? 1024,
+      // Force structured output. This is the single biggest reliability win for field
+      // extraction — Gemini returns a raw JSON object with no markdown fences and no
+      // prose, so JSON.parse no longer fails intermittently across the different forms.
+      responseMimeType: 'application/json',
     },
   };
   if (systemPrompt) body.system_instruction = { parts: [{ text: systemPrompt }] };

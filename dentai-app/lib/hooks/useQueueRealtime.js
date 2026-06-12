@@ -15,8 +15,9 @@ export function useQueueRealtime() {
   const unsubRef = useRef(null);
 
   useEffect(() => {
-    loadQueue();
+    // No clinic context yet (logged out / pre-hydration) → don't hit the API.
     if (!clinicId) return;
+    loadQueue();
 
     // Poll every 5s as fallback when realtime is unavailable
     const poll = setInterval(() => loadQueue(), 5000);

@@ -37,6 +37,11 @@ function normaliseAppointment(raw) {
   return {
     id: raw.id,
     patientId: raw.patient_id ?? null,
+    // The backend list joins `patients(id, name, phone)`. Carry that through so the
+    // schedule can show the real name even when the patient isn't in the (possibly
+    // partial) patients store — otherwise the row falls back to the literal "Patient".
+    patientName: raw.patients?.name ?? raw.patient_name ?? null,
+    patientPhone: raw.patients?.phone ?? raw.patient_phone ?? null,
     dentistId: raw.dentist_id ?? null,
     clinicId: raw.clinic_id ?? null,
     date: raw.appointment_date ?? '',

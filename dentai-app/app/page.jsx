@@ -191,7 +191,7 @@ function HomeScreen() {
                     <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', fontWeight: 600 }}>{t.ampm}</div>
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 16.5, fontWeight: 600 }}>{p ? p.name : 'Patient'}</div>
+                    <div style={{ fontSize: 16.5, fontWeight: 600 }}>{p?.name || v.patientName || 'Patient'}</div>
                     <div style={{ fontSize: 14, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{proc ? `${proc.type}${proc.tooth ? ' · Tooth ' + proc.tooth : ''}` : 'Consultation'}</div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>

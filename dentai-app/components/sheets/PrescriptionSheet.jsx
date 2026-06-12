@@ -4,26 +4,16 @@ import { useAppStore } from '@/store/useAppStore';
 import { usePatientStore } from '@/store/usePatientStore';
 import { useClinicalStore } from '@/store/useClinicalStore';
 import Icon from '@/components/icons';
-import { SheetHeader, SectionHeader, PrimaryButton, SelectPill, Field } from '@/components/ui';
+import { SheetHeader, SectionHeader, PrimaryButton, SelectPill, Field, VoiceButton, DocumentActions } from '@/components/ui';
 import { TODAY, FREQUENT_MEDICINES } from '@/lib/data/patients';
 import { formatDate } from '@/lib/data/utils';
-import { createPrescription, getPrescription, getPrescriptionPdfUrl } from '@/lib/services/prescription.service';
+import { createPrescription, getPrescription } from '@/lib/services/prescription.service';
+import { fetchDocBlob, viewDocument, shareDocument, docFilename } from '@/lib/documents/export';
 import { extractPrescription } from '@/lib/services/ai.service';
 import { useAudioRecorder } from '@/lib/hooks/useAudioRecorder';
 import { useTranscription } from '@/lib/hooks/useTranscription';
 
 const FREQ_OPTIONS = ['OD', 'BD', 'TDS', 'SOS', 'HS'];
-
-function RecordingWave() {
-  const peaks = [4, 8, 14, 6, 20, 10, 24, 16, 22, 12, 24, 10, 20, 8, 16, 6, 18, 10, 14, 8, 6];
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, height: 32, width: '100%' }}>
-      {peaks.map((h, i) => (
-        <div key={i} style={{ width: 4, borderRadius: 4, background: 'rgba(255,255,255,0.9)', height: h, animation: `wave ${0.5 + (i % 5) * 0.1}s ease-in-out ${i * 0.04}s infinite alternate` }} />
-      ))}
-    </div>
-  );
-}
 
 export default function PrescriptionSheet({ params, onClose }) {
   const showToast = useAppStore((s) => s.showToast);
@@ -41,6 +31,7 @@ export default function PrescriptionSheet({ params, onClose }) {
   const [dictateMode, setDictateMode] = useState('full');
   const [transcript, setTranscript] = useState('');
   const [expanded, setExpanded] = useState(null);
+  const [savedRxId, setSavedRxId] = useState(existing?.id || null);
 
   const recorder = useAudioRecorder();
   const { transcribe } = useTranscription();
@@ -118,8 +109,10 @@ export default function PrescriptionSheet({ params, onClose }) {
         instructions,
         followUpDays: followUp,
       });
+      const newId = result.id || result.prescription_id || ('rx' + Date.now());
+      setSavedRxId(newId);
       // Also persist in local store for UI consistency
-      saveRx({ id: result.id || result.prescription_id || ('rx' + Date.now()), patientId: params.patientId, patientName: p ? p.name : '', date: TODAY, medicines: meds, instructions, followUpDays: followUp });
+      saveRx({ id: newId, patientId: params.patientId, patientName: p ? p.name : '', date: TODAY, medicines: meds, instructions, followUpDays: followUp });
       showToast('Prescription saved');
       onClose();
     } catch(e) {
@@ -127,37 +120,27 @@ export default function PrescriptionSheet({ params, onClose }) {
     }
   };
 
-  const printPrescription = async () => {
+  // Ensure the prescription is saved (so it has a real id) then export the PDF as a
+  // file through the shared util. Replaces the old navigator.share({ url }) which shared
+  // an auth-protected backend URL the recipient could never open.
+  const exportRx = async (kind) => {
     try {
-      let rxId = existing?.id;
+      let rxId = existing?.id || savedRxId;
       if (!rxId) {
-        const result = await createPrescription({
-          patientId: params.patientId,
-          medicines: meds,
-          instructions,
-          followUpDays: followUp,
-        });
+        const result = await createPrescription({ patientId: params.patientId, medicines: meds, instructions, followUpDays: followUp });
         rxId = result.id || result.prescription_id;
+        if (rxId) {
+          setSavedRxId(rxId);
+          saveRx({ id: rxId, patientId: params.patientId, patientName: p ? p.name : '', date: TODAY, medicines: meds, instructions, followUpDays: followUp });
+        }
       }
       if (!rxId) { showToast('Could not generate prescription'); return; }
-
-      const pdfUrl = getPrescriptionPdfUrl(rxId);
-      const patientName = p ? p.name : 'Patient';
-
-      if (typeof navigator !== 'undefined' && navigator.share) {
-        try {
-          await navigator.share({
-            title: `Prescription — ${patientName}`,
-            text: `Prescription for ${patientName}`,
-            url: pdfUrl,
-          });
-          return;
-        } catch {}
-      }
-      // Fallback: open in browser
-      window.open(pdfUrl, '_blank');
-    } catch(e) {
-      showToast(e?.response?.data?.message || 'Could not generate PDF');
+      const blob = await fetchDocBlob('prescription', rxId);
+      const filename = docFilename('prescription', p?.name);
+      if (kind === 'view') await viewDocument(blob, filename);
+      else await shareDocument({ blob, filename, title: 'Prescription', text: `Prescription${p?.name ? ' — ' + p.name : ''}`, fallbackPhone: p?.phone });
+    } catch (e) {
+      if (e?.name !== 'AbortError') showToast(kind === 'view' ? "Couldn't open the PDF" : "Couldn't share");
     }
   };
 
@@ -167,7 +150,12 @@ export default function PrescriptionSheet({ params, onClose }) {
 
   return (
     <div style={{ padding: '0 20px 28px' }}>
-      <SheetHeader title="Prescription" onClose={onClose} />
+      <SheetHeader title="Prescription" onClose={onClose} right={
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {savedRxId && <DocumentActions docType="prescription" id={savedRxId} patientName={p?.name} patientPhone={p?.phone} />}
+          <button onClick={onClose} style={{ color: 'var(--text-secondary)', display: 'flex' }}><Icon name="x" size={24} /></button>
+        </div>
+      } />
       {p && (
         <div className="card" style={{ padding: 14, marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={{ fontSize: 16, fontWeight: 600 }}>{p.name}</span>
@@ -177,49 +165,25 @@ export default function PrescriptionSheet({ params, onClose }) {
 
       <SectionHeader>Medicines</SectionHeader>
 
-      {/* Dictate pill button */}
-      <button
-        onClick={isMedsRecording ? stopDictate : () => startDictate('full')}
-        disabled={phase === 'transcribing' || phase === 'extracting'}
-        style={{
-          width: '100%', borderRadius: 99, border: 'none', cursor: 'pointer',
-          background: isMedsRecording ? '#C0392B' : phase === 'done' && dictateMode === 'full' ? '#16A34A' : 'var(--accent)',
-          transition: 'background .25s',
-          display: 'flex',
-          flexDirection: isMedsRecording ? 'column' : 'row',
-          alignItems: 'center',
-          justifyContent: isMedsRecording ? 'center' : 'flex-start',
-          gap: isMedsRecording ? 6 : 14,
-          padding: isMedsRecording ? '18px 20px 14px' : '14px 18px',
-          marginBottom: 14,
-        }}
-      >
-        {isMedsRecording ? (
-          <>
-            <RecordingWave />
-            <div style={{ fontSize: 14, fontWeight: 700, color: '#fff' }}>Tap to finish</div>
-            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.65)' }}>Medicines · instructions · review days</div>
-          </>
-        ) : (
-          <>
-            <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'rgba(255,255,255,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              {phase === 'transcribing' || phase === 'extracting'
-                ? <div style={{ width: 20, height: 20, borderRadius: '50%', border: '2.5px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', animation: 'spin .7s linear infinite' }} />
-                : phase === 'done' && dictateMode === 'full'
-                ? <Icon name="check" size={22} color="#fff" stroke={2.5} />
-                : <Icon name="mic" size={22} color="#fff" />}
-            </div>
-            <div style={{ flex: 1, textAlign: 'left' }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: '#fff' }}>
-                {phase === 'transcribing' ? 'Transcribing…' : phase === 'extracting' ? 'Filling prescription…' : phase === 'done' && dictateMode === 'full' ? 'Done!' : 'Dictate prescription'}
-              </div>
-              <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.65)', marginTop: 2 }}>
-                {phase === 'done' && dictateMode === 'full' ? 'Medicines · instructions · review filled' : 'Medicines · instructions · review — hands-free'}
-              </div>
-            </div>
-          </>
-        )}
-      </button>
+      {/* Dictate — shared voice button */}
+      <div style={{ marginBottom: 14 }}>
+        <VoiceButton
+          phase={
+            isMedsRecording ? 'recording'
+            : (dictateMode === 'full' && (phase === 'transcribing' || phase === 'extracting')) ? 'processing'
+            : (dictateMode === 'full' && phase === 'done') ? 'done'
+            : 'idle'
+          }
+          seconds={recorder.seconds}
+          onTap={isMedsRecording ? stopDictate : () => startDictate('full')}
+          disabled={phase === 'transcribing' || phase === 'extracting'}
+          idleTitle="Dictate prescription"
+          idleHint="Medicines · instructions · review — hands-free"
+          recordingHint="Medicines · instructions · review days"
+          doneTitle="Done!"
+          doneHint="Medicines · instructions · review filled"
+        />
+      </div>
 
       <div className="card" style={{ overflow: 'hidden', marginBottom: 12 }}>
         {meds.length === 0 && <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>Add medicines below or dictate</div>}
@@ -257,7 +221,10 @@ export default function PrescriptionSheet({ params, onClose }) {
       </div>
 
       <PrimaryButton onClick={save}>Save</PrimaryButton>
-      <button onClick={printPrescription} style={{ width: '100%', textAlign: 'center', color: 'var(--blue)', fontSize: 15, fontWeight: 500, padding: '14px 0 2px' }}>Print / Share</button>
+      <div style={{ display: 'flex', gap: 18, justifyContent: 'center', padding: '14px 0 2px' }}>
+        <button onClick={() => exportRx('view')} style={{ color: 'var(--blue)', fontSize: 15, fontWeight: 500 }}>View PDF</button>
+        <button onClick={() => exportRx('share')} style={{ color: 'var(--blue)', fontSize: 15, fontWeight: 500 }}>Share</button>
+      </div>
     </div>
   );
 }

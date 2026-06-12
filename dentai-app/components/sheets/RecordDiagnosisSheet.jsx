@@ -64,8 +64,8 @@ export default function RecordDiagnosisSheet({ params, onClose }) {
   const [fixPhase, setFixPhase] = useState('idle'); // idle | recording | processing (correction-by-voice)
 
   const recorder = useAudioRecorder();
-  const { transcribe, loading: transcribing } = useTranscription('diagnosis');
-  const { generateFromTranscript, loading: generating } = useGenerateNote();
+  const { transcribe } = useTranscription('diagnosis');
+  const { generateFromTranscript } = useGenerateNote();
 
   if (!entry || !p) return null;
 
@@ -89,28 +89,34 @@ export default function RecordDiagnosisSheet({ params, onClose }) {
         setPhase('idle');
         return;
       }
-      const note = await generateFromTranscript(transcript);
+      // The note structuring and the prescription extraction are independent Gemini
+      // calls on the same transcript — run them IN PARALLEL so processing is ~2x faster
+      // (was sequential await → await). Prescription is optional: a failure must not
+      // break the diagnosis, so it resolves to null instead of throwing.
+      const [note, rx] = await Promise.all([
+        generateFromTranscript(transcript),
+        extractPrescription(transcript).catch(() => null),
+      ]);
 
-      // generate-note returns medications as free text, not structured — so also
-      // run prescription extraction to populate the medicines preview.
       let medicines = note.medicines || [];
-      try {
-        const rx = await extractPrescription(transcript);
-        if (Array.isArray(rx.medicines) && rx.medicines.length) {
-          medicines = rx.medicines.map((m) => ({
-            name: m.name || '',
-            dose: m.dose || m.dosage || '',
-            frequency: m.frequency || '',
-            duration: m.duration || '',
-            slots: m.meal_timing_slots || m.slots,
-            uncertain: m.uncertain || false,
-          }));
-        }
-      } catch { /* prescription is optional — keep going */ }
+      if (rx && Array.isArray(rx.medicines) && rx.medicines.length) {
+        medicines = rx.medicines.map((m) => ({
+          name: m.name || '',
+          dose: m.dose || m.dosage || '',
+          frequency: m.frequency || '',
+          duration: m.duration || '',
+          slots: m.meal_timing_slots || m.slots,
+          uncertain: m.uncertain || false,
+        }));
+      }
 
-      // Preview the auto-scheduled future sittings (sessions 2..N, weekly),
-      // mirroring the backend so the doctor sees them before saving.
-      const appointments = buildAppointmentPreview(note.totalSittings, note.procedure);
+      // Prefer the AI's resolved follow-up appointments ("review in 3 months",
+      // "come back Thursday", per-sitting dates). Only fall back to the weekly
+      // sittings preview when the AI didn't recommend any — otherwise a single-visit
+      // review (totalSittings = 1) would show NO appointment at all.
+      const appointments = (note.appointments && note.appointments.length)
+        ? note.appointments
+        : buildAppointmentPreview(note.totalSittings, note.procedure);
 
       setExtraction({ ...note, medicines, appointments, transcript });
       setPhase('review');
@@ -131,14 +137,35 @@ export default function RecordDiagnosisSheet({ params, onClose }) {
         const blob = await recorder.stopRecording();
         const { text: transcript, warning } = await transcribe(blob);
         if (!transcript) { setAiError(warning || "Couldn't hear the correction — try again"); setFixPhase('idle'); return; }
-        const merged = await generateFromTranscript(transcript, extraction?._raw || null);
-        const appointments = buildAppointmentPreview(merged.totalSittings, merged.procedure);
-        setExtraction((prev) => ({
-          ...merged,
-          medicines: prev?.medicines?.length ? prev.medicines : (merged.medicines || []),
-          appointments,
-          transcript: prev?.transcript || transcript,
-        }));
+        // Merge the correction onto the note AND re-extract the prescription from the
+        // SAME correction (in parallel) — so a spoken change like "add ibuprofen" or
+        // "make amoxicillin three times a day" actually updates the medicines, instead
+        // of the old behaviour that silently kept the previous list.
+        const [merged, rx] = await Promise.all([
+          generateFromTranscript(transcript, extraction?._raw || null),
+          extractPrescription(transcript).catch(() => null),
+        ]);
+        const appointments = (merged.appointments && merged.appointments.length)
+          ? merged.appointments
+          : buildAppointmentPreview(merged.totalSittings, merged.procedure);
+        setExtraction((prev) => {
+          // Start from whatever medicines were already on screen…
+          let medicines = prev?.medicines?.length ? [...prev.medicines] : (merged.medicines || []);
+          // …then fold in any newly-dictated ones (match by name → update, else add).
+          if (rx && Array.isArray(rx.medicines) && rx.medicines.length) {
+            const byName = new Map(medicines.map((m) => [(m.name || '').toLowerCase(), m]));
+            rx.medicines.forEach((m) => byName.set((m.name || '').toLowerCase(), {
+              name: m.name || '',
+              dose: m.dose || m.dosage || '',
+              frequency: m.frequency || '',
+              duration: m.duration || '',
+              slots: m.meal_timing_slots || m.slots,
+              uncertain: m.uncertain || false,
+            }));
+            medicines = [...byName.values()];
+          }
+          return { ...merged, medicines, appointments, transcript: prev?.transcript || transcript };
+        });
         setFixPhase('idle');
         showToast('Correction applied');
       } catch (e) {
@@ -248,7 +275,7 @@ export default function RecordDiagnosisSheet({ params, onClose }) {
       {phase === 'processing' && (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '54px 0' }}>
           <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 16 }}>
-            {transcribing ? 'Transcribing audio…' : generating ? 'Extracting diagnosis…' : 'Processing…'}
+            Processing…
           </div>
           <div style={{ display: 'flex', gap: 6 }}>
             {[0, 1, 2].map(i => <div key={i} style={{ width: 9, height: 9, borderRadius: '50%', background: 'var(--accent)', animation: `dots 1.2s ease-in-out ${i * 0.18}s infinite` }} />)}
@@ -283,7 +310,7 @@ export default function RecordDiagnosisSheet({ params, onClose }) {
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 14.5, fontWeight: 700 }}>
-                {fixPhase === 'recording' ? 'Tap to apply correction' : fixPhase === 'processing' ? 'Applying…' : 'Fix by voice'}
+                {fixPhase === 'recording' ? 'Tap to apply correction' : fixPhase === 'processing' ? 'Processing…' : 'Fix by voice'}
               </div>
               <div style={{ fontSize: 12.5, opacity: 0.8 }}>
                 {fixPhase === 'recording' ? `${recorder.seconds}s · speak the change` : 'Say just the change — e.g. "3 sittings, ₹4500"'}

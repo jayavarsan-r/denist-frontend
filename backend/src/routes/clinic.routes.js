@@ -1,10 +1,14 @@
 const express = require('express');
+const multer = require('multer');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const auth = require('../middleware/auth');
 const requireRole = require('../middleware/requireRole');
 const validate = require('../middleware/validate');
 const v = require('../validators');
+const storage = require('../services/storage.service');
+
+const logoUpload = multer({ dest: '/tmp/dental-uploads', limits: { fileSize: 5 * 1024 * 1024 } });
 
 function makeJoinCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no O,0,I,1
@@ -36,7 +40,7 @@ router.get('/', auth, async (req, res, next) => {
 router.patch('/', auth, requireRole('doctor'), validate(v.updateClinic), async (req, res, next) => {
   try {
     if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
-    const { name, city, address, phone, openTime, closeTime, workingDays } = req.body;
+    const { name, city, address, phone, openTime, closeTime, workingDays, registrationNumber } = req.body;
     const updates = {};
     if (name !== undefined) updates.name = name;
     if (city !== undefined) updates.city = city;
@@ -45,10 +49,33 @@ router.patch('/', auth, requireRole('doctor'), validate(v.updateClinic), async (
     if (openTime !== undefined) updates.open_time = openTime;
     if (closeTime !== undefined) updates.close_time = closeTime;
     if (workingDays !== undefined) updates.working_days = workingDays;
+    if (registrationNumber !== undefined) updates.registration_number = registrationNumber;
     if (Object.keys(updates).length === 0) return res.json({ clinic: null });
     const { data, error } = await supabase.from('clinics').update(updates).eq('id', req.clinicId).select().single();
     if (error) throw error;
     res.json({ clinic: data });
+  } catch (e) { next(e); }
+});
+
+// POST /api/clinic/logo — upload clinic logo (PNG/JPEG). Stores the storage PATH in
+// clinics.logo_url (re-signed at PDF render time so it never expires-breaks) and returns
+// a short-lived signed URL for immediate preview.
+const fs = require('fs');
+router.post('/logo', auth, requireRole('doctor'), logoUpload.single('logo'), async (req, res, next) => {
+  try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
+    if (!req.file) return res.status(400).json({ error: 'No logo file (field name "logo")' });
+    const ct = (req.file.mimetype || '').toLowerCase();
+    if (!ct.includes('png') && !ct.includes('jpeg') && !ct.includes('jpg')) {
+      try { fs.unlinkSync(req.file.path); } catch { /* ignore */ }
+      return res.status(400).json({ error: 'Logo must be PNG or JPEG' });
+    }
+    const { storagePath } = await storage.uploadFile(req.file.path, 'clinic-logos', `${req.clinicId}/logo`);
+    try { fs.unlinkSync(req.file.path); } catch { /* ignore */ }
+    await supabase.from('clinics').update({ logo_url: storagePath }).eq('id', req.clinicId);
+    let previewUrl = null;
+    try { previewUrl = await storage.getSignedUrl('clinic-logos', storagePath, 3600); } catch { /* non-fatal */ }
+    res.json({ logoPath: storagePath, logoUrl: previewUrl });
   } catch (e) { next(e); }
 });
 

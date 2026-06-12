@@ -6,7 +6,7 @@ import { usePatientStore } from '@/store/usePatientStore';
 import { useVisitStore } from '@/store/useVisitStore';
 import { useClinicalStore } from '@/store/useClinicalStore';
 import Icon from '@/components/icons';
-import { Avatar, Chip, StatusChip, SectionHeader, PillToggle, StageDots, ToothChip, EmptyState, PrimaryButton, NavBar } from '@/components/ui';
+import { Avatar, Chip, StatusChip, SectionHeader, PillToggle, StageDots, ToothChip, EmptyState, PrimaryButton, NavBar, DocumentActions } from '@/components/ui';
 import Odontogram from '@/components/odontogram/Odontogram';
 import { TODAY } from '@/lib/data/patients';
 import { formatCurrency, formatDate, formatTime, clinicianFlags, hasComplications, parseDate, MONTHS, formatCurrencyK } from '@/lib/data/utils';
@@ -956,11 +956,17 @@ function PatientProfile({ patientId, initialTab }) {
   const [toothHistory, setToothHistory] = React.useState(null);
   const [toothLoading, setToothLoading] = React.useState(false);
 
-  // Ensure patient is loaded if navigated directly
+  // Ensure patient is loaded if navigated directly (e.g. opened straight from a
+  // schedule appointment whose patient isn't in the list store yet). Track resolution
+  // so we render a spinner / not-found state instead of a blank white page.
+  const [resolving, setResolving] = React.useState(!patients.find(x => x.id === patientId));
+  const resolvePatient = React.useCallback(() => {
+    setResolving(true);
+    Promise.resolve(fetchPatient(patientId)).finally(() => setResolving(false));
+  }, [patientId, fetchPatient]);
   React.useEffect(() => {
-    if (!patients.find(x => x.id === patientId)) {
-      fetchPatient(patientId);
-    }
+    if (patients.find(x => x.id === patientId)) { setResolving(false); return; }
+    resolvePatient();
   }, [patientId]);
 
   // Fetch tooth history from API. Re-runs on patientDataVersion bumps so a tooth
@@ -997,7 +1003,33 @@ function PatientProfile({ patientId, initialTab }) {
     getPatientCaseSheet(patientId).then(setCaseSheet).catch(() => {});
   }, [patientId, patientDataVersion]);
 
-  if (!p) return null;
+  if (!p) {
+    // Never a blank white page: show a spinner while the patient is being fetched,
+    // or a recoverable not-found state if the fetch finished without finding them.
+    return (
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--surface)' }}>
+        <div style={{ padding: '58px 20px 10px', display: 'flex', alignItems: 'center' }}>
+          <button onClick={() => router.back()} style={{ display: 'flex', color: 'var(--accent)' }}><Icon name="chevLeft" size={26} /></button>
+        </div>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24, textAlign: 'center' }}>
+          {resolving ? (
+            <>
+              <div style={{ width: 28, height: 28, borderRadius: '50%', border: '3px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin .7s linear infinite' }} />
+              <span style={{ fontSize: 14, color: 'var(--text-secondary)' }}>Loading patient…</span>
+            </>
+          ) : (
+            <>
+              <Icon name="alert" size={40} color="var(--text-tertiary)" />
+              <div style={{ fontSize: 17, fontWeight: 600 }}>Couldn't load this patient</div>
+              <div style={{ fontSize: 14, color: 'var(--text-secondary)', maxWidth: 260 }}>They may have been removed, or the connection dropped.</div>
+              <button onClick={resolvePatient} style={{ marginTop: 6, height: 42, padding: '0 22px', borderRadius: 12, background: 'var(--accent)', color: 'var(--accent-ink)', fontSize: 15, fontWeight: 700, border: 'none' }}>Retry</button>
+              <button onClick={() => router.back()} style={{ fontSize: 14, fontWeight: 600, color: 'var(--blue)', marginTop: 2 }}>Go back</button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   // Merge: API tooth history overrides local p.teeth
   const apiTeethMap = buildTeethMap(toothHistory);
@@ -1072,6 +1104,13 @@ function PatientProfile({ patientId, initialTab }) {
               <div style={{ fontSize: 15, fontStyle: 'italic', color: 'var(--text-secondary)' }}>{p.chiefComplaint}</div>
             </div>
           )}
+          {/* Documents — view / share a branded PDF via the OS share sheet */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-tertiary)' }}>Case sheet</span>
+            <DocumentActions docType="caseSheet" id={p.id} patientName={p.name} patientPhone={p.phone} />
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-tertiary)', marginLeft: 6 }}>Statement</span>
+            <DocumentActions docType="statement" id={p.id} patientName={p.name} patientPhone={p.phone} />
+          </div>
         </div>
 
         {/* tabs */}
@@ -1089,7 +1128,9 @@ function PatientProfile({ patientId, initialTab }) {
           {tab === 'Billing' && <BillingTab p={p} prescriptions={prescriptions} openSheet={openSheet} toothHistory={toothHistory} caseSheet={caseSheet} />}
         </div>
       </div>
-      <StartConsultFab onClick={() => openSheet('patientConsult', { patientId: p.id, autoStart: true })} />
+      {/* Overview already shows the prominent "Record findings" card, so the floating
+          mic would be a duplicate there — only show the FAB on the other tabs. */}
+      {tab !== 'Overview' && <StartConsultFab onClick={() => openSheet('patientConsult', { patientId: p.id, autoStart: true })} />}
     </div>
   );
 }

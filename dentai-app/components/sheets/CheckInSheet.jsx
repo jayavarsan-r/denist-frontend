@@ -4,24 +4,13 @@ import { useAppStore } from '@/store/useAppStore';
 import { usePatientStore } from '@/store/usePatientStore';
 import { useQueueStore } from '@/store/useQueueStore';
 import Icon from '@/components/icons';
-import { SheetHeader, SectionHeader, Avatar, PrimaryButton, SelectPill, Segmented, Chip, Field } from '@/components/ui';
+import { SheetHeader, SectionHeader, Avatar, PrimaryButton, SelectPill, Segmented, Chip, Field, VoiceButton } from '@/components/ui';
 import { XRAY_TYPES } from '@/lib/data/queue';
 import { hasComplications } from '@/lib/data/utils';
 import { useAudioRecorder } from '@/lib/hooks/useAudioRecorder';
 import { useTranscription } from '@/lib/hooks/useTranscription';
 import { extractComplaint as apiExtractComplaint, extractPatientInfo } from '@/lib/services/ai.service';
 import { uploadXray } from '@/lib/services/xray.service';
-
-function RecordingWave() {
-  const peaks = [4, 8, 14, 6, 20, 10, 24, 16, 22, 12, 24, 10, 20, 8, 16, 6, 18, 10, 14, 8, 6];
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, height: 32, width: '100%' }}>
-      {peaks.map((h, i) => (
-        <div key={i} style={{ width: 4, borderRadius: 4, background: 'rgba(255,255,255,0.9)', height: h, animation: `wave ${0.5 + (i % 5) * 0.1}s ease-in-out ${i * 0.04}s infinite alternate` }} />
-      ))}
-    </div>
-  );
-}
 
 export default function CheckInSheet({ onClose }) {
   const showToast = useAppStore((s) => s.showToast);
@@ -270,49 +259,19 @@ export default function CheckInSheet({ onClose }) {
             </>
           ) : (
             <>
-              {/* Voice fill button */}
-              <button
-                onClick={handlePatientDictate}
-                disabled={patientProcessing}
-                style={{
-                  width: '100%', borderRadius: 99, border: 'none', cursor: 'pointer',
-                  background: patientRecording ? '#C0392B' : patientPhase === 'done' ? '#16A34A' : 'var(--accent)',
-                  transition: 'background .25s',
-                  display: 'flex',
-                  flexDirection: patientRecording ? 'column' : 'row',
-                  alignItems: 'center',
-                  justifyContent: patientRecording ? 'center' : 'flex-start',
-                  gap: patientRecording ? 6 : 14,
-                  padding: patientRecording ? '18px 20px 14px' : '14px 18px',
-                  marginBottom: 14,
-                }}
-              >
-                {patientRecording ? (
-                  <>
-                    <RecordingWave />
-                    <div style={{ fontSize: 14, fontWeight: 700, color: '#fff' }}>Tap to finish</div>
-                    <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.65)' }}>Name · phone number · reason for visit</div>
-                  </>
-                ) : (
-                  <>
-                    <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'rgba(255,255,255,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                      {patientProcessing
-                        ? <div style={{ width: 20, height: 20, borderRadius: '50%', border: '2.5px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', animation: 'spin .7s linear infinite' }} />
-                        : patientPhase === 'done'
-                        ? <Icon name="check" size={22} color="#fff" stroke={2.5} />
-                        : <Icon name="mic" size={22} color="#fff" />}
-                    </div>
-                    <div style={{ flex: 1, textAlign: 'left' }}>
-                      <div style={{ fontSize: 15, fontWeight: 700, color: '#fff' }}>
-                        {patientProcessing ? (patientPhase === 'transcribing' ? 'Transcribing…' : 'Filling details…') : patientPhase === 'done' ? 'All done!' : 'Speak patient details'}
-                      </div>
-                      <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.65)', marginTop: 2 }}>
-                        {patientPhase === 'done' ? 'Moving to next step…' : 'Name · phone · complaint — one go'}
-                      </div>
-                    </div>
-                  </>
-                )}
-              </button>
+              {/* Voice fill button (shared) */}
+              <div style={{ marginBottom: 14 }}>
+                <VoiceButton
+                  phase={patientRecording ? 'recording' : patientProcessing ? 'processing' : patientPhase === 'done' ? 'done' : 'idle'}
+                  seconds={recorder.seconds}
+                  onTap={handlePatientDictate}
+                  idleTitle="Speak patient details"
+                  idleHint="Name · phone · complaint — one go"
+                  recordingHint="Name · phone number · reason for visit"
+                  doneTitle="All done!"
+                  doneHint="Moving to next step…"
+                />
+              </div>
               {patientVoiceError && <p style={{ fontSize: 12, color: 'var(--red)', margin: '-8px 0 10px 2px' }}>{patientVoiceError}</p>}
               <div className="card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <Field value={name} onChange={setName} placeholder="Full name" />
@@ -336,51 +295,16 @@ export default function CheckInSheet({ onClose }) {
       {step === 1 && (
         <>
           {patient && <div className="card" style={{ padding: 12, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}><Avatar name={patient.name} size={36} /><span style={{ fontSize: 15, fontWeight: 600 }}>{patient.name}</span></div>}
-          <button
-            onClick={handleDictate}
-            style={{
-              width: '100%',
-              border: `1.5px dashed ${recording ? 'var(--red)' : 'var(--border)'}`,
-              borderRadius: 14, padding: '20px 16px',
-              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
-              background: recording ? 'rgba(255,59,48,0.04)' : 'rgba(255,255,255,0.5)',
-              marginBottom: 16, transition: 'border-color .2s ease, background .2s ease',
-            }}
-          >
-            {processing ? (
-              <>
-                <div style={{ display: 'flex', gap: 6, height: 44, alignItems: 'center' }}>
-                  {[0, 1, 2].map(i => <div key={i} style={{ width: 9, height: 9, borderRadius: '50%', background: 'var(--accent)', animation: `dots 1.2s ease-in-out ${i * 0.18}s infinite` }} />)}
-                </div>
-                <span style={{ fontSize: 16, fontWeight: 600 }}>
-                  {complaintPhase === 'transcribing' ? 'Sarvam is transcribing…' : 'Gemini is cleaning…'}
-                </span>
-                <span className="t-meta">
-                  {complaintPhase === 'transcribing' ? 'Speech-to-text in progress' : 'Extracting clean complaint'}
-                </span>
-              </>
-            ) : recording ? (
-              <>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3, height: 44 }}>
-                  {[5, 9, 14, 8, 18, 11, 20, 13, 16, 9, 18, 7, 12, 8, 5].map((h, i) => (
-                    <div key={i} style={{ width: 3, borderRadius: 3, background: 'var(--red)', height: h, animation: `wave ${0.5 + (i % 4) * 0.12}s ease-in-out ${i * 0.05}s infinite alternate` }} />
-                  ))}
-                </div>
-                <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--red)' }}>
-                  {recorder.seconds}s · Tap to stop
-                </span>
-                <span className="t-meta">Speak in Tamil or English</span>
-              </>
-            ) : (
-              <>
-                <div style={{ width: 56, height: 56, borderRadius: '50%', background: 'var(--accent)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <Icon name="mic" size={28} color="#fff" />
-                </div>
-                <span style={{ fontSize: 16, fontWeight: 600 }}>Record complaint</span>
-                <span className="t-meta">Speak in Tamil or English — we'll clean it up</span>
-              </>
-            )}
-          </button>
+          <div style={{ marginBottom: 16 }}>
+            <VoiceButton
+              phase={recording ? 'recording' : processing ? 'processing' : 'idle'}
+              seconds={recorder.seconds}
+              onTap={handleDictate}
+              idleTitle="Record complaint"
+              idleHint="Speak in Tamil or English — we'll clean it up"
+              recordingHint="Speak in Tamil or English"
+            />
+          </div>
           {voiceError && <p style={{ fontSize: 12, color: 'var(--red)', margin: '-8px 0 10px 2px' }}>{voiceError}</p>}
           <Field label="Complaint" multiline value={complaint} onChange={setComplaint} placeholder="Or type the chief complaint…" minHeight={56} />
           <div style={{ height: 16 }} />
@@ -455,12 +379,12 @@ export default function CheckInSheet({ onClose }) {
           ? <PrimaryButton onClick={() => {
               // Block navigation while voice is still transcribing/extracting — advancing
               // mid-transcription lands the extracted fields on the wrong step.
-              if (voiceBusy) { showToast('Hold on — still transcribing'); return; }
+              if (voiceBusy) { showToast('Hold on — still processing'); return; }
               if (!stepValid) { showToast('Pick a patient first'); return; }
               // Skip step 1 (complaint) if already filled from step 0
               if (step === 0 && complaint.trim()) { setStep(2); return; }
               setStep(s => s + 1);
-            }} style={{ opacity: voiceBusy ? 0.5 : 1 }}>{voiceBusy ? 'Transcribing…' : (step === 2 && xrays.length === 0 ? 'Skip' : 'Continue')}</PrimaryButton>
+            }} style={{ opacity: voiceBusy ? 0.5 : 1 }}>{voiceBusy ? 'Processing…' : (step === 2 && xrays.length === 0 ? 'Skip' : 'Continue')}</PrimaryButton>
           : <PrimaryButton onClick={finish} style={{ opacity: loading ? 0.6 : 1 }}>{loading ? 'Adding…' : 'Add to queue'}</PrimaryButton>
         }
       </div>

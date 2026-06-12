@@ -1,7 +1,16 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import { getToken, clearToken } from '@/lib/api/client';
 
-export const useAppStore = create((set, get) => ({
+// SSR-safe storage: the factory is only touched on the client. During prerender
+// (static export / next dev SSR) there is no localStorage, so we hand back a noop.
+const safeStorage = createJSONStorage(() =>
+  (typeof window !== 'undefined'
+    ? window.localStorage
+    : { getItem: () => null, setItem: () => {}, removeItem: () => {} })
+);
+
+export const useAppStore = create(persist((set, get) => ({
   // Auth
   token: null,
   staffId: null,
@@ -68,22 +77,27 @@ export const useAppStore = create((set, get) => ({
 
   // Called after verifying token on app start (GET /api/auth/me)
   hydrateAuth: ({ staff, clinic }) => {
-    const roleVal = staff?.role || null;
+    // Non-destructive: the offline fallback (FlowGuard catch branch) calls this with
+    // only ids/role decoded from the JWT — no name/clinic. Falling back to the
+    // existing (cached/persisted) values prevents a failed /auth/me refresh from
+    // blanking the identity back to defaults.
+    const prev = get();
+    const prevClinic = prev.clinic;
     set({
       token: getToken(),
-      staffId: staff?.id || null,
-      role: roleVal,
-      clinicId: clinic?.id || null,
-      name: staff?.name || '',
+      staffId: staff?.id || prev.staffId || null,
+      role: staff?.role || prev.role || null,
+      clinicId: clinic?.id || prev.clinicId || null,
+      name: staff?.name || prev.name || '',
       started: true,
-      doctorSetupDone: !!clinic?.id,
+      doctorSetupDone: !!(clinic?.id || prev.clinicId),
       clinic: {
-        ...get().clinic,
-        doctorName: staff?.name || '',
-        clinicName: clinic?.name || '',
-        city: clinic?.city || '',
-        joinCode: clinic?.join_code || '',
-        settings: clinic?.settings || {},
+        ...prevClinic,
+        doctorName: staff?.name || prevClinic.doctorName || '',
+        clinicName: clinic?.name || prevClinic.clinicName || '',
+        city: clinic?.city || prevClinic.city || '',
+        joinCode: clinic?.join_code || prevClinic.joinCode || '',
+        settings: clinic?.settings || prevClinic.settings || {},
       },
     });
   },
@@ -152,4 +166,22 @@ export const useAppStore = create((set, get) => ({
   setStarted: (v) => set({ started: v }),
   pickRole: (r) => set({ role: r, consultMode: false }),
   switchRole: () => set({ role: null, consultMode: false }),
+}), {
+  name: 'dentai_app',
+  storage: safeStorage,
+  // We rehydrate manually (in FlowGuard) so the server HTML and the first client
+  // render both start from defaults — restoring from cache during render would
+  // cause a hydration mismatch (same reason getGreeting() runs only after mount).
+  skipHydration: true,
+  // Only the identity slice survives a reload. Transient UI (sheets, toast, consult
+  // mode) and data-store caches stay ephemeral.
+  partialize: (s) => ({
+    staffId: s.staffId,
+    clinicId: s.clinicId,
+    name: s.name,
+    role: s.role,
+    started: s.started,
+    doctorSetupDone: s.doctorSetupDone,
+    clinic: s.clinic,
+  }),
 }));

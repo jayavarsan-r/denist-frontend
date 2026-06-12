@@ -184,6 +184,7 @@ const updateClinic = z.object({
   openTime: z.string().optional(),
   closeTime: z.string().optional(),
   workingDays: z.any().optional(),
+  registrationNumber: z.string().max(64).optional(),
 });
 
 // ── Auth onboarding (NOT the OTP endpoints) ───────────────────────────────
@@ -248,6 +249,7 @@ const updateStaff = z.object({
   name: z.string().trim().min(1).optional(),
   role: z.enum(['doctor', 'receptionist']).optional(),
   status: z.enum(['active', 'inactive']).optional(),
+  registrationNumber: z.string().max(64).optional(),
 });
 
 // ── Notifications ─────────────────────────────────────────────────────────

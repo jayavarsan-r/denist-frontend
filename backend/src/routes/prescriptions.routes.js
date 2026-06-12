@@ -3,7 +3,8 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const auth = require('../middleware/auth');
 const { extractPrescription } = require('../services/ai.service');
-const { generatePrescriptionPdf } = require('../services/pdf.service');
+const { generatePrescriptionPdf } = require('../services/pdf');
+const { loadBrandingContext } = require('../services/pdf/branding.data');
 const { parsePagination, pageMeta } = require('../utils/pagination');
 
 // GET /api/prescriptions — clinic-scoped list (paginated, optional ?patientId)
@@ -67,36 +68,19 @@ router.get('/:id/pdf', auth, async (req, res, next) => {
 
     if (error || !rx) return res.status(404).json({ error: 'Prescription not found' });
 
-    // Fetch staff + clinic info for doctor header (only if staffId is available)
-    let staff = null;
-    if (req.staffId) {
-      const { data: staffData } = await supabase
-        .from('staff')
-        .select('name, clinics(name, city)')
-        .eq('id', req.staffId)
-        .single();
-      staff = staffData;
-    }
-
-    const doctor = {
-      name: staff?.name || 'Doctor',
-      clinic_name: staff?.clinics?.name || 'DentAI Clinic',
-      city: staff?.clinics?.city || '',
-      phone: '',
-    };
-
+    const { clinic, dentist } = await loadBrandingContext(req);
     const pdfBuffer = await generatePrescriptionPdf({
       patient: rx.patients || { name: 'Patient', age: null, gender: null, phone: '' },
-      doctor,
+      clinic, dentist,
       date: new Date().toISOString().split('T')[0],
       medicines: rx.medicines || [],
       instructions: rx.instructions || '',
       followUp: rx.follow_up || null,
     });
 
-    const patientName = (rx.patients?.name || 'prescription').replace(/\s+/g, '_');
+    const fname = `Prescription_${(rx.patients?.name || 'patient').replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`;
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="${patientName}_prescription.pdf"`);
+    res.setHeader('Content-Disposition', `inline; filename="${fname}"`);
     res.setHeader('Content-Length', pdfBuffer.length);
     res.send(pdfBuffer);
   } catch (e) { next(e); }

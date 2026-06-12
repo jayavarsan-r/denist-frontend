@@ -109,7 +109,11 @@ function mapToFrontendShape(raw) {
     slots: m.meal_timing_slots || m.slots || { breakfast: true, lunch: false, dinner: true },
   }));
 
-  const appointments = (n.follow_up_appointments || n.appointments || []).map((a, i) => ({
+  // Gemini's consultation schema returns `followUpAppointments` (camelCase) — the smart
+  // array that resolves "come back Thursday" / "review in 3 months" / "4 sittings" into
+  // concrete dated visits. Read that FIRST (the snake_case/`appointments` fallbacks were
+  // the only keys read before, so every AI-recommended appointment was being dropped).
+  const appointments = (n.followUpAppointments || n.follow_up_appointments || n.appointments || []).map((a, i) => ({
     session: a.session || i + 2,
     date: a.date || '',
     time: a.time || '10:00',

@@ -13,6 +13,8 @@ export { default as BottomNav } from './BottomNav';
 export { default as SelectPill } from './SelectPill';
 export { default as Segmented } from './Segmented';
 export { default as Field } from './Field';
+export { default as VoiceButton } from './VoiceButton';
+export { default as DocumentActions } from './DocumentActions';
 export { default as EmptyState } from './EmptyState';
 export { default as NavBar } from './NavBar';
 export { default as TopBar } from './TopBar';
