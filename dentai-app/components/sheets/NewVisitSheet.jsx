@@ -194,7 +194,7 @@ export default function NewVisitSheet({ params, onClose }) {
           </button>
         </div>
         {parsing ? (
-          <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)', marginTop: 7, marginLeft: 4 }}>Reading…</div>
+          <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)', marginTop: 7, marginLeft: 4 }}>Processing…</div>
         ) : understood ? (
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5, fontWeight: 600, color: '#15702F', background: 'rgba(48,209,88,0.12)', borderRadius: 99, padding: '4px 10px', marginTop: 8, marginLeft: 2 }}>
             <Icon name="check" size={12} color="#1E8E3E" stroke={2.6} /> {understood}
