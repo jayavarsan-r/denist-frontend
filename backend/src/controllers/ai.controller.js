@@ -1,4 +1,3 @@
-const axios = require('axios');
 const fs = require('fs');
 const multer = require('multer');
 const storageService = require('../services/storage.service');
@@ -133,52 +132,41 @@ exports.extractComplaint = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
-// POST /api/ai/extract-patient — retains its own gender/arrays prompt pending full
-// consolidation into the receptionist prompt. Uses header auth (no key in URL).
+// POST /api/ai/extract-patient — patient registration extraction. Now routed through
+// the SAME provider + receptionist prompt as every other extraction (it used to be a
+// divergent inline Gemini call on a single env key, which silently returned an all-null
+// patient whenever that one key was missing/misnamed/rate-limited). The receptionist
+// prompt returns medical `flags`; we reshape them into the legacy
+// { patient: { name, age, gender, bloodGroup, conditions[], allergies[], medications[] } }
+// envelope so any existing caller stays compatible.
 exports.extractPatient = async (req, res, next) => {
   try {
     const { transcript } = req.body;
     if (!transcript) return res.status(400).json({ error: 'transcript required' });
 
-    const geminiKey = process.env.GEMINI_API_KEY;
-    if (!geminiKey || geminiKey.startsWith('your_')) {
-      return res.json({ patient: { name: null, age: null, gender: null, bloodGroup: null, conditions: [], allergies: [], medications: [] } });
-    }
+    const ctx = await aiService.extractQueueContext(transcript);
+    const f = ctx.flags || {};
+    const conditions = [];
+    if (f.hasDiabetes) conditions.push('Diabetes');
+    if (f.hasHypertension) conditions.push('Hypertension');
+    if (f.hasHeartCondition) conditions.push('Heart condition');
+    if (f.isPregnant) conditions.push('Pregnant');
+    if (f.isOnBloodThinners) conditions.push('Blood thinners');
+    const allergies = [];
+    if (f.penicillin) allergies.push('Penicillin');
+    if (f.latex) allergies.push('Latex');
 
-    const prompt = `You are a medical receptionist assistant at an Indian dental clinic. The receptionist has recorded patient details by voice — it may be in Tamil, English, or Tanglish.
-
-Extract the following fields and return ONLY valid JSON:
-{
-  "name": "string or null — patient's full name if mentioned. Look for 'patient name is X', 'her name is X', 'his name is X', 'name X'. Return full name as stated.",
-  "age": number or null,
-  "gender": "Male" | "Female" | "Other" | null,
-  "bloodGroup": "A+" | "A-" | "B+" | "B-" | "O+" | "O-" | "AB+" | "AB-" | null,
-  "conditions": ["Diabetes", "Hypertension", "Heart condition", "Pregnant", "Blood thinners"] — only include conditions that are clearly mentioned,
-  "allergies": ["Penicillin", "Latex", ...] — list of allergies mentioned,
-  "medications": ["Metformin", ...] — current medications mentioned
-}
-
-Rules:
-- "sugar" or "sugar patient" or "diabetic" = Diabetes in conditions
-- "BP" or "pressure" or "BP patient" = Hypertension in conditions
-- "heart patient" or "cardiac" = Heart condition in conditions
-- "pregnant" or "pregnancy" = Pregnant in conditions
-- "blood thinner" or "warfarin" or "aspirin" = Blood thinners in conditions
-- Return empty arrays if nothing mentioned, never null arrays
-- Return ONLY the JSON object
-
-Recording: ${transcript}`;
-
-    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent';
-    const response = await axios.post(url, {
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.1, maxOutputTokens: 256 },
-    }, { headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiKey }, timeout: 15000 });
-
-    let text = (response.data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
-    text = text.replace(/^```json?\n?/i, '').replace(/```$/, '').trim();
-    const patient = JSON.parse(text);
-    res.json({ patient });
+    res.json({
+      patient: {
+        name: ctx.name ?? null,
+        age: ctx.age ?? null,
+        gender: null, // not extracted by the receptionist prompt
+        bloodGroup: ctx.bloodGroup ?? null,
+        conditions,
+        allergies,
+        medications: [],
+      },
+    });
   } catch (e) {
     logger.warn('extractPatient failed', { err: e.message });
     res.json({ patient: { name: null, age: null, gender: null, bloodGroup: null, conditions: [], allergies: [], medications: [] } });
