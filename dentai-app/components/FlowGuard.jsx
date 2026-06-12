@@ -36,6 +36,13 @@ export default function FlowGuard() {
   const normPath = pathname !== '/' ? pathname.replace(/\/$/, '') : '/';
   const isPublic = PUBLIC_PATHS.includes(normPath);
 
+  // Restore the persisted identity (name/clinic/role) from localStorage after mount.
+  // Done here rather than at store-init to keep server HTML and the first client
+  // render identical (skipHydration). /api/auth/me still runs below to refresh it.
+  useEffect(() => {
+    useAppStore.persist.rehydrate();
+  }, []);
+
   useEffect(() => {
     // Listen for session expiry events dispatched by the API client
     const handleExpiry = () => {
