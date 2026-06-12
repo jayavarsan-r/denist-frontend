@@ -29,6 +29,7 @@ router.post('/', auth, validate(v.createPaymentPlan), async (req, res, next) => 
 // GET /api/payment-plans/patient/:patientId
 router.get('/patient/:patientId', auth, async (req, res, next) => {
   try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
     const { data, error } = await supabase.from('payment_plans')
       .select('*').eq('patient_id', req.params.patientId).eq('clinic_id', req.clinicId)
       .order('created_at', { ascending: false });
@@ -40,6 +41,7 @@ router.get('/patient/:patientId', auth, async (req, res, next) => {
 // GET /api/payment-plans/:id — plan + derived schedule + paid/remaining
 router.get('/:id', auth, async (req, res, next) => {
   try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
     const { data: plan, error } = await supabase.from('payment_plans')
       .select('*').eq('id', req.params.id).eq('clinic_id', req.clinicId).maybeSingle();
     if (error) throw error;
@@ -60,6 +62,7 @@ router.get('/:id', auth, async (req, res, next) => {
 // PATCH /api/payment-plans/:id
 router.patch('/:id', auth, validate(v.updatePaymentPlan), async (req, res, next) => {
   try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
     const map = { emiAmount: 'emi_amount', emiFrequency: 'emi_frequency', nextDueDate: 'next_due_date', status: 'status', notes: 'notes' };
     const updates = { updated_at: new Date().toISOString() };
     for (const [k, col] of Object.entries(map)) if (req.body[k] !== undefined) updates[col] = req.body[k];

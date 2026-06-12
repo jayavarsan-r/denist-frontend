@@ -175,6 +175,7 @@ router.post('/', auth, validate(v.addToQueue), async (req, res, next) => {
 // PATCH /api/queue/:id — update status, outcome, assigned doctor, sort_order
 router.patch('/:id', auth, validate(v.patchQueue), async (req, res, next) => {
   try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
     const updates = {};
     if (req.body.status !== undefined)             updates.status = req.body.status;
     if (req.body.consultationOutcome !== undefined) updates.consultation_outcome = req.body.consultationOutcome;
@@ -342,6 +343,7 @@ router.post('/:id/checkout', auth, async (req, res, next) => {
 // DELETE /api/queue/:id — remove from queue
 router.delete('/:id', auth, async (req, res, next) => {
   try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
     await supabase.from('queue_entries').delete().eq('id', req.params.id).eq('clinic_id', req.clinicId);
     res.json({ success: true });
   } catch (e) { next(e); }
@@ -350,6 +352,7 @@ router.delete('/:id', auth, async (req, res, next) => {
 // GET /api/queue/:id/context — consultation context screen data
 router.get('/:id/context', auth, async (req, res, next) => {
   try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
     const { data: entry, error } = await supabase
       .from('queue_entries')
       .select(`
@@ -367,17 +370,20 @@ router.get('/:id/context', auth, async (req, res, next) => {
     const patientId = entry.patient_id;
     const today = new Date().toISOString().split('T')[0];
 
+    // patientId comes from a clinic-verified queue entry, but every sub-query still
+    // carries the clinic_id filter — the tenancy boundary holds even if a row was
+    // mis-stamped or the entry check changes later.
     const [plansRes, lastVisitRes, todayXraysRes] = await Promise.all([
       supabase.from('treatment_plans')
         .select('id, procedure_name, total_sittings, completed_sittings, pending_amount, status, estimated_cost, collected_amount')
-        .eq('patient_id', patientId).eq('status', 'active').limit(3),
+        .eq('patient_id', patientId).eq('clinic_id', req.clinicId).eq('status', 'active').limit(3),
       supabase.from('visits')
         .select('id, visit_date, procedure_name, notes, medications, cost, status')
-        .eq('patient_id', patientId)
+        .eq('patient_id', patientId).eq('clinic_id', req.clinicId)
         .order('visit_date', { ascending: false }).limit(1),
       supabase.from('xrays')
         .select('id, xray_type, date_taken, tooth_number, notes')
-        .eq('patient_id', patientId).eq('date_taken', today),
+        .eq('patient_id', patientId).eq('clinic_id', req.clinicId).eq('date_taken', today),
     ]);
 
     const pendingBalance = (plansRes.data || []).reduce((s, p) => s + (parseFloat(p.pending_amount) || 0), 0);

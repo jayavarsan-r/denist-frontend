@@ -58,6 +58,7 @@ router.get('/stats', auth, async (req, res, next) => {
 // GET /api/payments/patient/:patientId
 router.get('/patient/:patientId', auth, async (req, res, next) => {
   try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
     const { data, error } = await supabase
       .from('payments')
       .select(`*, received_by_staff:received_by(name, role), treatment_plans(procedure_name)`)
@@ -75,6 +76,7 @@ router.get('/patient/:patientId', auth, async (req, res, next) => {
 // GET /api/payments/plan/:planId
 router.get('/plan/:planId', auth, async (req, res, next) => {
   try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
     const { data, error } = await supabase
       .from('payments')
       .select(`*, received_by_staff:received_by(name, role)`)

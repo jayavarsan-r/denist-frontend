@@ -28,6 +28,24 @@ describe('validators', () => {
     expect(v.completeConsult.safeParse({ patientId: 'not-a-uuid' }).success).toBe(false); // but a provided patientId must be a real uuid
   });
 
+  test('completeConsult: followUp accepts a date string, a days number, and an {in_days, reason} object', () => {
+    expect(v.completeConsult.safeParse({ followUp: '2026-07-01' }).success).toBe(true);
+    expect(v.completeConsult.safeParse({ followUp: 7 }).success).toBe(true);
+    expect(v.completeConsult.safeParse({ followUp: { in_days: 7, reason: 'RCT review' } }).success).toBe(true);
+    expect(v.completeConsult.safeParse({ followUp: { inDays: 7 } }).success).toBe(true);
+    expect(v.completeConsult.safeParse({ followUp: null }).success).toBe(true);
+  });
+
+  test('completeConsult: appointments + toothNumbers survive validation', () => {
+    const parsed = v.completeConsult.safeParse({
+      toothNumbers: ['36', '37'],
+      appointments: [{ date: '2026-07-01', purpose: 'Session 2', session: 2 }],
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data.toothNumbers).toEqual(['36', '37']);
+    expect(parsed.data.appointments).toHaveLength(1);
+  });
+
   test('gender is case-insensitive and trimmed', () => {
     expect(v.createPatient.safeParse({ name: 'A', phone: '9876543210', gender: 'Male' }).data.gender).toBe('male');
     expect(v.createPatient.safeParse({ name: 'A', phone: '9876543210', gender: ' FEMALE ' }).data.gender).toBe('female');

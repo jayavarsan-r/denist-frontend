@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const auth = require('../middleware/auth');
+const requireClinicOwnership = require('../middleware/requireClinicOwnership');
 const multer = require('multer');
 const { uploadFile, getSignedUrl, deleteFile } = require('../services/storage.service');
 const fs = require('fs');
@@ -44,12 +45,10 @@ router.post('/', auth, upload.single('file'), async (req, res, next) => {
 router.get('/:id/url', auth, async (req, res, next) => {
   try {
     // Clinic-wide access: any staff in the clinic can view an x-ray (a receptionist
-    // upload must be visible to the doctor). Match by clinic_id OR dentist_id so both
-    // newly clinic-stamped rows and legacy dentist-only rows resolve.
+    // upload must be visible to the doctor). Strict clinic_id scope; dentist_id only
+    // for pre-clinic accounts.
     let q = supabase.from('xrays').select('storage_path').eq('id', req.params.id);
-    q = req.clinicId
-      ? q.or(`clinic_id.eq.${req.clinicId},dentist_id.eq.${req.dentistId}`)
-      : q.eq('dentist_id', req.dentistId);
+    q = req.clinicId ? q.eq('clinic_id', req.clinicId) : q.eq('dentist_id', req.dentistId);
     const { data, error } = await q.single();
 
     if (error || !data) return res.status(404).json({ error: 'Not found' });
@@ -58,11 +57,11 @@ router.get('/:id/url', auth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.delete('/:id', auth, async (req, res, next) => {
+router.delete('/:id', auth, requireClinicOwnership('xrays'), async (req, res, next) => {
   try {
     const { data, error } = await supabase
       .from('xrays').select('storage_path')
-      .eq('id', req.params.id).eq('dentist_id', req.dentistId).single();
+      .eq('id', req.params.id).single();
 
     if (error || !data) return res.status(404).json({ error: 'Not found' });
     await deleteFile('xrays', data.storage_path);

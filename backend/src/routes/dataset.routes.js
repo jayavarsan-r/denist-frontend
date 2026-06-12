@@ -4,6 +4,12 @@ const supabase = require('../config/supabase');
 const { getSignedUrl } = require('../services/storage.service');
 const auth = require('../middleware/auth');
 
+// NOTE on scoping: these endpoints export the DENTIST'S OWN voice recordings (training
+// dataset), so dentist_id is the intended key — it is authorship, not tenancy.
+// visit_notes/voice_recordings gain a clinic_id column in migration 016; once the live
+// DB has it, add `.eq('clinic_id', req.clinicId)` here to also bound exports to the
+// current clinic.
+
 router.get('/stats', auth, async (req, res, next) => {
   try {
     const { data: notes } = await supabase

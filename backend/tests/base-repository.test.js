@@ -16,11 +16,19 @@ function mockQuery() {
 }
 
 describe('BaseClinicRepository scoping', () => {
-  test('clinic + dentist scope uses an OR clause (legacy backward compat)', () => {
+  test('clinic + dentist scope is STRICTLY clinic_id (never ORs dentist_id)', () => {
     const repo = new BaseClinicRepository('patients', { softDeleteColumn: 'is_deleted' });
     const q = mockQuery();
     repo._scope(q, { clinicId: 'C1', dentistId: 'D1' });
-    expect(q._calls).toContainEqual(['or', 'clinic_id.eq.C1,dentist_id.eq.D1']);
+    expect(q._calls).toContainEqual(['eq', 'clinic_id', 'C1']);
+    expect(q._calls.find(([m]) => m === 'or')).toBeUndefined();
+  });
+
+  test('dentist-only scope (pre-clinic account) falls back to eq(dentist_id)', () => {
+    const repo = new BaseClinicRepository('patients');
+    const q = mockQuery();
+    repo._scope(q, { dentistId: 'D1' });
+    expect(q._calls).toContainEqual(['eq', 'dentist_id', 'D1']);
   });
 
   test('clinic-only scope uses eq(clinic_id)', () => {

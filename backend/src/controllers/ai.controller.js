@@ -73,9 +73,8 @@ exports.transcribe = async (req, res, next) => {
     res.json({ transcript, audioStoragePath, audioFileSizeKb });
   } catch (e) {
     cleanup(req.file.path);
-    if (typeof e.code === 'string' && e.code.startsWith('AI_')) {
-      return res.json({ transcript: '', warning: e.message });
-    }
+    // No 200-with-warning soft-fail: STT failures surface as real HTTP errors
+    // (503 STT_UNAVAILABLE / 504 AI_TIMEOUT) so callers can detect and retry.
     next(e);
   }
 };
@@ -168,7 +167,10 @@ exports.extractPatient = async (req, res, next) => {
       },
     });
   } catch (e) {
+    // No silent all-null 200: extraction failures surface as real HTTP errors
+    // (422 EXTRACTION_FAILED / 503 LLM_UNAVAILABLE) so the client can fall back
+    // to manual entry knowing the AI did NOT run.
     logger.warn('extractPatient failed', { err: e.message });
-    res.json({ patient: { name: null, age: null, gender: null, bloodGroup: null, conditions: [], allergies: [], medications: [] } });
+    next(e);
   }
 };

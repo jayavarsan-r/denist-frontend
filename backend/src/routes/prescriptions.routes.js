@@ -14,7 +14,7 @@ router.get('/', auth, async (req, res, next) => {
     const { from, to, page, limit } = parsePagination(req.query);
     let q = supabase.from('prescriptions')
       .select('*, patients(name, phone)', { count: 'exact' })
-      .or(`clinic_id.eq.${req.clinicId},dentist_id.eq.${req.dentistId}`)
+      .eq('clinic_id', req.clinicId)
       .is('deleted_at', null);
     if (req.query.patientId) q = q.eq('patient_id', req.query.patientId);
     q = q.order('created_at', { ascending: false }).range(from, to);
@@ -56,14 +56,19 @@ router.post('/', auth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Clinic-scoped, not dentist-scoped: any staff in the clinic can open/print a
+// prescription (receptionist prints what the doctor prescribed). dentist_id only
+// for pre-clinic accounts.
+const scoped = (q, req) =>
+  (req.clinicId ? q.eq('clinic_id', req.clinicId) : q.eq('dentist_id', req.dentistId));
+
 // GET /api/prescriptions/:id/pdf — stream prescription as PDF
 router.get('/:id/pdf', auth, async (req, res, next) => {
   try {
-    const { data: rx, error } = await supabase
+    const { data: rx, error } = await scoped(supabase
       .from('prescriptions')
       .select('*, patients(name, age, gender, phone)')
-      .eq('id', req.params.id)
-      .eq('dentist_id', req.dentistId)
+      .eq('id', req.params.id), req)
       .single();
 
     if (error || !rx) return res.status(404).json({ error: 'Prescription not found' });
@@ -88,11 +93,10 @@ router.get('/:id/pdf', auth, async (req, res, next) => {
 
 router.get('/:id', auth, async (req, res, next) => {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await scoped(supabase
       .from('prescriptions')
       .select(`*, patients(name, age, gender, phone), dentists(name, clinic_name, phone)`)
-      .eq('id', req.params.id)
-      .eq('dentist_id', req.dentistId)
+      .eq('id', req.params.id), req)
       .single();
 
     if (error || !data) return res.status(404).json({ error: 'Prescription not found' });

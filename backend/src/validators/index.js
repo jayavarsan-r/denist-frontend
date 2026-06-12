@@ -113,7 +113,19 @@ const completeConsult = z.object({
   estimatedCost: z.coerce.number().optional().nullable(),
   transcript: optStr,
   notes: optStr,
-  followUp: optStr, // doctor's recommended follow-up (date YYYY-MM-DD or free text)
+  // Doctor's recommended follow-up. Three shapes are accepted (transaction service
+  // normalises all of them into a concrete appointment date):
+  //   'YYYY-MM-DD' / free text · days-from-today number · { date | inDays/in_days, reason }
+  followUp: z.union([
+    z.string().trim(),
+    z.coerce.number(),
+    z.object({
+      date:    z.string().trim().optional().nullable(),
+      inDays:  z.coerce.number().optional().nullable(),
+      in_days: z.coerce.number().optional().nullable(),
+      reason:  optStr,
+    }),
+  ]).optional().nullable(),
   // AI-suggested return visits (resolved dates). The transaction assigns each a free
   // time and falls back to sittings/follow-up when this is empty.
   appointments: z.array(z.object({

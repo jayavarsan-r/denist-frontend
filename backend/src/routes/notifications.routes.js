@@ -32,7 +32,7 @@ router.post('/prescription/:prescriptionId', auth, async (req, res, next) => {
     if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
     const { data: rx } = await supabase.from('prescriptions')
       .select('*, patients(name, phone)').eq('id', req.params.prescriptionId)
-      .or(`clinic_id.eq.${req.clinicId},dentist_id.eq.${req.dentistId}`).maybeSingle();
+      .eq('clinic_id', req.clinicId).maybeSingle();
     if (!rx) return res.status(404).json({ error: 'Prescription not found' });
     const body = msg.buildPrescriptionMessage(rx.patients, rx.medicines || []);
     const notification = await notify({ ...ctx(req), patientId: rx.patient_id, type: 'prescription',

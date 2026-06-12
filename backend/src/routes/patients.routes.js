@@ -9,14 +9,24 @@ const { generateCaseSheetPdf, generateStatementPdf } = require('../services/pdf'
 const { loadBrandingContext } = require('../services/pdf/branding.data');
 
 // A patient is clinic-scoped, so anyone who can see the patient can see their data.
-// Returns the patient row if the caller's clinic (or legacy dentist) owns it, else null.
+// Returns the patient row if the caller's clinic owns it, else null. clinic_id is the
+// tenancy boundary: with clinic context ONLY a clinic match grants access (a dentist's
+// rows at a previous clinic must not follow them). dentist_id matching applies only to
+// pre-clinic accounts that have no clinic context at all.
 async function patientInScope(patientId, req) {
   const { data } = await supabase.from('patients')
     .select('id, clinic_id, dentist_id').eq('id', patientId).maybeSingle();
   if (!data) return null;
-  if (req.clinicId && data.clinic_id === req.clinicId) return data;
+  if (req.clinicId) return data.clinic_id === req.clinicId ? data : null;
   if (data.dentist_id === req.dentistId) return data;
   return null;
+}
+
+// Clinic-scoped query helper used by every patient sub-route: a patient's records
+// belong to the clinic, visible to ALL its staff. Strict clinic_id when clinic context
+// exists; dentist_id only for pre-clinic accounts (see patientInScope).
+function scoped(q, req) {
+  return req.clinicId ? q.eq('clinic_id', req.clinicId) : q.eq('dentist_id', req.dentistId);
 }
 
 router.use(auth);
@@ -27,13 +37,16 @@ router.post('/', validate(v.createPatient), ctrl.create);
 router.get('/:id/tooth-history', async (req, res, next) => {
   try {
     const { id } = req.params;
+    // Ownership gate up front: some sub-queries below (payments, treatment_teeth) are
+    // keyed on patient_id alone, so the patient must be proven in-clinic first.
+    if (!(await patientInScope(id, req))) return res.status(404).json({ error: 'Patient not found' });
     const today = new Date().toISOString().split('T')[0];
     // Each source is independent and non-fatal: a missing table (e.g. treatment_teeth
     // before migration 007) must not break the whole history view.
     const safe = async (p) => { try { const { data } = await p; return data || []; } catch { return []; } };
     // Clinic-scoped so a patient's full history is visible to every staff member in the
     // clinic (doctor + receptionist), not just the dentist_id that created each row.
-    const scope = (q) => (req.clinicId ? q.or(`clinic_id.eq.${req.clinicId},dentist_id.eq.${req.dentistId}`) : q.eq('dentist_id', req.dentistId));
+    const scope = (q) => scoped(q, req);
 
     const [visits, appointments, links, labOrders, plans, payments] = await Promise.all([
       safe(scope(supabase.from('visits').select('*').eq('patient_id', id)).order('visit_date', { ascending: false })),
@@ -184,12 +197,6 @@ router.delete('/:id', ctrl.remove);
 
 // ─── NEW V4 SUB-ROUTES ───
 
-// Clinic-scoped helper: a patient's records belong to the clinic, visible to all its
-// staff — match clinic_id OR dentist_id (legacy rows) rather than only the creator.
-function scoped(q, req) {
-  return req.clinicId ? q.or(`clinic_id.eq.${req.clinicId},dentist_id.eq.${req.dentistId}`) : q.eq('dentist_id', req.dentistId);
-}
-
 router.get('/:id/treatment-plans', async (req, res, next) => {
   try {
     const { data, error } = await scoped(supabase.from('treatment_plans').select('*')
@@ -253,9 +260,8 @@ async function buildCaseSheet(patientId, req) {
   const today = new Date().toISOString().split('T')[0];
 
   // Clinic-scoped, not dentist-scoped: a doctor consulting a receptionist-checked-in
-  // patient (different dentist_id) must still see the full case sheet. Match clinic_id
-  // OR dentist_id (legacy rows) so nothing is hidden across staff in the same clinic.
-  const scope = (q) => (req.clinicId ? q.or(`clinic_id.eq.${req.clinicId},dentist_id.eq.${req.dentistId}`) : q.eq('dentist_id', req.dentistId));
+  // patient (different dentist_id) must still see the full case sheet.
+  const scope = (q) => scoped(q, req);
 
   // lab_orders may not exist before migration 007 — keep it non-fatal.
   const safeLab = scope(supabase.from('lab_orders').select('*').eq('patient_id', patientId)).is('deleted_at', null).order('created_at', { ascending: false })
@@ -327,7 +333,7 @@ router.get('/:id/case-sheet/pdf', async (req, res, next) => {
 // GET /api/patients/:id/statement/pdf — patient statement (charges + payments + balance).
 router.get('/:id/statement/pdf', async (req, res, next) => {
   try {
-    const scope = (q) => (req.clinicId ? q.or(`clinic_id.eq.${req.clinicId},dentist_id.eq.${req.dentistId}`) : q.eq('dentist_id', req.dentistId));
+    const scope = (q) => scoped(q, req);
     const { data: patient } = await scope(supabase.from('patients').select('name, phone').eq('id', req.params.id)).maybeSingle();
     if (!patient) return res.status(404).json({ error: 'Patient not found' });
     const [paymentsRes, plansRes] = await Promise.all([

@@ -66,8 +66,24 @@ async function completeConsultation(ctx) {
   const procedure = (ctx.procedure || '').trim() || 'Consultation';
   const todayStr = new Date().toISOString().split('T')[0];
   const sittings = Math.max(1, parseInt(totalSittings) || 1);
-  // A follow-up like "2026-06-14" becomes a recommended appointment; free text is kept as a note only.
-  const followUpDate = /^\d{4}-\d{2}-\d{2}$/.test(String(followUp || '').trim()) ? String(followUp).trim() : null;
+
+  // Normalise followUp into a concrete date + reason. Accepted shapes (the AI note and
+  // the clients produce all three): 'YYYY-MM-DD', a number of days from today, or an
+  // object { date | inDays/in_days, reason }. Anything unresolvable stays null.
+  const isoDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || '').trim());
+  const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().split('T')[0]; };
+  let followUpDate = null;
+  let followUpReason = null;
+  if (typeof followUp === 'number' && followUp > 0) {
+    followUpDate = addDays(followUp);
+  } else if (isoDate(followUp)) {
+    followUpDate = String(followUp).trim();
+  } else if (followUp && typeof followUp === 'object') {
+    const days = followUp.inDays ?? followUp.in_days;
+    if (isoDate(followUp.date)) followUpDate = String(followUp.date).trim();
+    else if (typeof days === 'number' && days > 0) followUpDate = addDays(days);
+    followUpReason = followUp.reason || null;
+  }
 
   // Normalise the set of teeth covered by this procedure (multi-tooth). Falls back
   // to the single primary tooth. De-duplicated, strings only.
@@ -141,8 +157,17 @@ async function completeConsultation(ctx) {
       const d = new Date(); d.setDate(d.getDate() + (i - 1) * 7);
       plan_specs.push({ date: d.toISOString().split('T')[0], sitting: i, purpose: `${procedure} — Session ${i}` });
     }
-  } else if (followUpDate) {
-    plan_specs.push({ date: followUpDate, sitting: 2, purpose: `${procedure} — Follow-up` });
+  }
+
+  // A dictated follow-up ALWAYS becomes an appointment (it used to be dropped whenever
+  // AI appointments or multi-sitting sessions were present) — unless one of those
+  // already lands on the same date, which would just duplicate it.
+  if (followUpDate && !plan_specs.some((s) => s.date === followUpDate)) {
+    plan_specs.push({
+      date: followUpDate,
+      sitting: plan_specs.length + 2,
+      purpose: followUpReason ? `Follow-up: ${followUpReason}` : `${procedure} — Follow-up`,
+    });
   }
 
   if (plan_specs.length) {

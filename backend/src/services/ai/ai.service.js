@@ -18,14 +18,15 @@ const logger = require('../../utils/logger');
 
 const isDev = () => process.env.NODE_ENV !== 'production';
 
-function noProvider() {
-  return new AppError('AI_UNAVAILABLE', 'AI provider is not configured');
-}
+// Code-specific "not configured" errors so callers can tell WHICH provider is down:
+// STT (Sarvam) vs LLM (Gemini). Both map to HTTP 503.
+const noStt = () => new AppError('STT_UNAVAILABLE', 'Speech-to-text provider is not configured');
+const noLlm = () => new AppError('LLM_UNAVAILABLE', 'LLM provider is not configured');
 
 async function transcribeAudio(filePath, opts = {}) {
   if (sarvam.hasKey()) return sarvam.transcribe(filePath, opts);
   if (isDev()) { logger.warn('SARVAM_API_KEY missing — mock transcription (dev)'); return mock.transcribe(); }
-  throw noProvider();
+  throw noStt();
 }
 
 // generateClinicalNote(transcript, current?) — when `current` (an existing structured
@@ -41,7 +42,7 @@ async function generateClinicalNote(transcript, current) {
     return gemini.generate(consultationPrompt(), userContent, { temperature: 0.1, maxOutputTokens: 1024 });
   }
   if (isDev()) { logger.warn('GEMINI_API_KEY missing — mock clinical note (dev)'); return mock.clinicalNote(transcript); }
-  throw noProvider();
+  throw noLlm();
 }
 
 async function extractPrescription(transcript) {
@@ -54,7 +55,7 @@ async function extractPrescription(transcript) {
     logger.warn('GEMINI_API_KEY missing — mock prescription (dev)');
     raw = mock.prescription();
   } else {
-    throw noProvider();
+    throw noLlm();
   }
   // All medicine output flows through the single canonical parser.
   return {
@@ -70,7 +71,7 @@ async function extractQueueContext(transcript) {
     return gemini.generate(receptionistPrompt(), transcript, { temperature: 0.1, maxOutputTokens: 512 });
   }
   if (isDev()) { logger.warn('GEMINI_API_KEY missing — mock queue context (dev)'); return mock.queueContext(transcript); }
-  throw noProvider();
+  throw noLlm();
 }
 
 // Scheduling INTENT only — never books or chooses slots (the deterministic engine does).
@@ -79,7 +80,7 @@ async function parseScheduleIntent(transcript) {
     return gemini.generate(schedulePrompt(), transcript, { temperature: 0.1, maxOutputTokens: 400 });
   }
   if (isDev()) { logger.warn('GEMINI_API_KEY missing — mock schedule intent (dev)'); return mock.scheduleIntent ? mock.scheduleIntent(transcript) : {}; }
-  throw noProvider();
+  throw noLlm();
 }
 
 module.exports = {

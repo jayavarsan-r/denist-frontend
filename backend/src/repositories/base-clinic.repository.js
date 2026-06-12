@@ -1,8 +1,8 @@
 const supabase = require('../config/supabase');
 
 // Base repository: owns Supabase access and automatic clinic scoping so controllers
-// never query the DB directly. Authorization is clinic_id-based; a dentist_id OR-clause
-// is included only as backward-compat for legacy rows created before clinic stamping.
+// never query the DB directly. Authorization is clinic_id-based; dentist_id scoping
+// exists only for pre-clinic accounts that have no clinic context at all.
 //
 // Soft delete is configurable per table:
 //   softDeleteColumn: 'is_deleted'  -> filters `is_deleted = false`  (patients today)
@@ -24,7 +24,11 @@ class BaseClinicRepository {
 
   _scope(q, scope = {}) {
     const { clinicId, dentistId } = scope;
-    if (clinicId && dentistId) return q.or(`clinic_id.eq.${clinicId},dentist_id.eq.${dentistId}`);
+    // clinic_id is the multi-tenancy boundary: with clinic context, scope STRICTLY by
+    // clinic_id — never OR in dentist_id, or a dentist who moved clinics would carry
+    // their old clinic's rows into the new one. dentist_id applies only to pre-clinic
+    // accounts (no staff row yet); their rows are adopted by createClinic's backfill
+    // and migration 016.
     if (clinicId) return q.eq('clinic_id', clinicId);
     if (dentistId) return q.eq('dentist_id', dentistId);
     return q;
