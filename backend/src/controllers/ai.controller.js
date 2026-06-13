@@ -4,6 +4,8 @@ const storageService = require('../services/storage.service');
 const aiService = require('../services/ai/ai.service');
 const logger = require('../utils/logger');
 const supabase = require('../config/supabase');
+const inventoryVoice = require('../services/inventory-voice.service');
+const audit = require('../services/audit.service');
 
 // Ensure upload directory exists
 const UPLOAD_DIR = '/tmp/dental-uploads';
@@ -95,6 +97,23 @@ exports.extractPrescription = async (req, res, next) => {
     const { transcript } = req.body;
     if (!transcript) return res.status(400).json({ error: 'transcript required' });
     res.json(await aiService.extractPrescription(transcript));
+  } catch (e) { next(e); }
+};
+
+// POST /api/ai/extract-inventory — voice → inventory INTENT only (never writes).
+// Requires clinic context; resolution is clinic-scoped. The raw transcript is
+// recorded in the audit log (debugging) — it is never returned for display.
+exports.extractInventory = async (req, res, next) => {
+  try {
+    const { transcript } = req.body;
+    if (!transcript) return res.status(400).json({ error: 'transcript required' });
+    const result = await inventoryVoice.parseInventoryCommand(req.clinicId, transcript);
+    audit.log({
+      clinicId: req.clinicId, staffId: req.staffId, requestId: req.id,
+      action: 'VOICE_INVENTORY_PARSE', entityType: 'inventory_voice', entityId: null,
+      metadata: { transcript: String(transcript).slice(0, 500), intent: result.intent },
+    });
+    res.json(result);
   } catch (e) { next(e); }
 };
 
