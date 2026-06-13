@@ -18,4 +18,3 @@ export { default as DocumentActions } from './DocumentActions';
 export { default as EmptyState } from './EmptyState';
 export { default as NavBar } from './NavBar';
 export { default as TopBar } from './TopBar';
-export { default as VoiceButton } from './VoiceButton';
