@@ -45,22 +45,17 @@ export default function InventoryPage() {
   const lowCount = items.filter((i) => Number(i.stock_qty) <= Number(i.low_stock_threshold)).length;
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
+    <div style={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
       <NavBar
         title="Inventory"
         onBack={() => router.back()}
         right={(
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-            <button onClick={() => openSheet('inventoryVoice', { onSaved: load })} aria-label="Voice" style={{ color: 'var(--blue)', display: 'flex', alignItems: 'center' }}>
-              <Icon name="mic" size={20} color="var(--blue)" />
-            </button>
-            <button
-              onClick={() => openSheet('addInventory', { onSaved: load })}
-              style={{ color: 'var(--blue)', fontSize: 15, fontWeight: 600 }}
-            >
-              Add item
-            </button>
-          </div>
+          <button
+            onClick={() => openSheet('addInventory', { onSaved: load })}
+            style={{ color: 'var(--blue)', fontSize: 15, fontWeight: 600 }}
+          >
+            Add item
+          </button>
         )}
       />
 
@@ -134,6 +129,16 @@ export default function InventoryPage() {
           })}
         </div>
       </div>
+
+      {/* Floating voice FAB — same pattern as the consult mic (bottom-right) */}
+      <button
+        onClick={() => openSheet('inventoryVoice', { onSaved: load })}
+        className="tap"
+        aria-label="Inventory voice"
+        style={{ position: 'absolute', right: 18, bottom: 22, zIndex: 20, width: 60, height: 60, borderRadius: '50%', background: 'var(--accent)', color: 'var(--accent-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--elevation-2)', border: 'none' }}
+      >
+        <Icon name="mic" size={26} color="var(--accent-ink)" />
+      </button>
     </div>
   );
 }

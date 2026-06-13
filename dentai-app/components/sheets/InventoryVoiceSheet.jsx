@@ -1,8 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
-import { SheetHeader, PrimaryButton } from '@/components/ui';
-import Icon from '@/components/icons';
+import { SheetHeader, PrimaryButton, VoiceButton } from '@/components/ui';
 import { useAudioRecorder } from '@/lib/hooks/useAudioRecorder';
 import { useTranscription } from '@/lib/hooks/useTranscription';
 import { extractInventoryCommand } from '@/lib/services/ai.service';
@@ -109,19 +108,17 @@ export default function InventoryVoiceSheet({ params = {}, onClose }) {
     <div style={{ padding: '0 20px 28px' }}>
       <SheetHeader title="Inventory voice" onClose={onClose} />
 
-      {/* mic */}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: '8px 0 16px' }}>
-        <button
-          onClick={isRecording ? finish : begin}
-          className="tap"
-          style={{ width: 72, height: 72, borderRadius: '50%', background: isRecording ? 'var(--red)' : 'var(--accent)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--elevation-2)' }}
-        >
-          <Icon name={isRecording ? 'stop' : 'mic'} size={28} color="#fff" />
-        </button>
-        <div className="t-meta">
-          {isRecording ? `Listening… ${seconds}s — tap to finish` : phase === 'working' ? 'Understanding…' : 'Tap and speak (any language)'}
-        </div>
-        {recError && <div style={{ fontSize: 13, color: 'var(--red)', textAlign: 'center' }}>{recError}</div>}
+      {/* voice control — the app-wide VoiceButton, consistent with every sheet */}
+      <div style={{ padding: '4px 0 16px' }}>
+        <VoiceButton
+          phase={isRecording ? 'recording' : phase === 'working' ? 'processing' : 'idle'}
+          seconds={seconds}
+          onTap={isRecording ? finish : begin}
+          idleTitle="Inventory voice"
+          idleHint="Add, restock, adjust or ask — any language"
+          recordingHint="Speak now"
+        />
+        {recError && <div style={{ fontSize: 13, color: 'var(--red)', textAlign: 'center', marginTop: 8 }}>{recError}</div>}
       </div>
 
       {/* idle examples */}
