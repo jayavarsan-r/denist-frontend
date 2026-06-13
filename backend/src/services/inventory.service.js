@@ -135,4 +135,73 @@ async function resolveMedicineSpan(clinicId, rx) {
   }
 }
 
-module.exports = { recordStockMovement, dispenseMedicinesAtCheckout, resolveMedicineSpan };
+// ── Inventory-agnostic voice resolver (pure: catalog in, resolution out) ────────
+// Used by the inventory voice module. Distinct from resolveMedicineSpan (which is
+// medicine-specific and queries the DB for checkout) — that stays untouched.
+const _norm = (s) => String(s == null ? '' : s).trim().toLowerCase().replace(/\s+/g, ' ');
+const _firstWord = (s) => _norm(s).split(' ')[0] || '';
+const _slim = (i) => ({ id: i.id, name: i.name, strength: i.strength || null, unit: i.unit || null, stock_qty: i.stock_qty });
+
+function _resolution(span, item, confidence, reason, candidates = []) {
+  return {
+    name_span: span,
+    resolved_item_id: item ? item.id : null,
+    resolved_name: item ? item.name : null,
+    confidence,
+    match_reason: reason,
+    candidates,
+    current_stock: item ? Number(item.stock_qty) : null,
+    current_unit: item ? item.unit : null,
+    current_price: item ? (item.price_per_unit ?? null) : null,
+  };
+}
+
+// resolveInventorySpan(catalog, span, hints?) — hints: { strength?, category? }
+function resolveInventorySpan(catalog, span, hints = {}) {
+  const items = Array.isArray(catalog) ? catalog : [];
+  const s = _norm(span);
+  if (!s) return _resolution(span, null, 0, 'none');
+
+  // 1. exact name
+  const exact = items.filter((i) => _norm(i.name) === s);
+  if (exact.length === 1) return _resolution(span, exact[0], 0.99, 'exact_name');
+
+  // 2. alias
+  const alias = items.filter((i) => (i.aliases || []).some((a) => _norm(a) === s));
+  if (alias.length === 1) return _resolution(span, alias[0], 0.95, 'alias_match');
+
+  // candidate pool: substring either way, or shared first word, or alias-substring
+  const cand = items.filter((i) => {
+    const n = _norm(i.name);
+    return n.includes(s) || s.includes(n) || _firstWord(n) === _firstWord(s) ||
+      (i.aliases || []).some((a) => _norm(a).includes(s) || s.includes(_norm(a)));
+  });
+  const pool = exact.length > 1 ? exact : cand;
+
+  // 3. strength disambiguation
+  const strHint = _norm(hints.strength || span).match(/\d+\s*(mg|ml|mcg|g|%)/);
+  if (pool.length > 1 && strHint) {
+    const sh = strHint[0].replace(/\s/g, '');
+    const sm = pool.filter((i) => _norm(i.strength).replace(/\s/g, '') === sh);
+    if (sm.length === 1) return _resolution(span, sm[0], 0.9, 'strength_match');
+  }
+
+  // 4. category narrowing
+  if (pool.length > 1 && hints.category) {
+    const cm = pool.filter((i) => i.category === hints.category);
+    if (cm.length === 1) return _resolution(span, cm[0], 0.8, 'category_match');
+  }
+
+  // 5. single fuzzy candidate
+  if (cand.length === 1 && exact.length === 0) return _resolution(span, cand[0], 0.7, 'fuzzy_match');
+
+  // ambiguous → no auto-pick; surface candidates for manual selection
+  if (pool.length > 1) {
+    return _resolution(span, null, 0.4, 'fuzzy_match', pool.slice(0, 5).map(_slim));
+  }
+
+  // 6. none
+  return _resolution(span, null, 0, 'none');
+}
+
+module.exports = { recordStockMovement, dispenseMedicinesAtCheckout, resolveMedicineSpan, resolveInventorySpan };
