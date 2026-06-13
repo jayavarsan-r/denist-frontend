@@ -1,9 +1,17 @@
 jest.mock('../../src/services/ai/ai.service', () => ({ extractInventory: jest.fn() }));
 jest.mock('../../src/config/supabase', () => {
   const chain = () => {
+    let cols = '';
     const q = {};
-    ['select', 'eq', 'order'].forEach((m) => { q[m] = () => q; });
-    q.then = (res) => res({ data: global.__catalog || [], error: null });
+    q.select = (c) => { cols = c || ''; return q; };
+    ['eq', 'order'].forEach((m) => { q[m] = () => q; });
+    q.then = (res) => {
+      // Simulate migration 019 not yet applied: any select that asks for `aliases` errors.
+      if (global.__aliasesMissing && /aliases/.test(cols)) {
+        return res({ data: null, error: { message: 'column inventory_items.aliases does not exist' } });
+      }
+      return res({ data: global.__catalog || [], error: null });
+    };
     return q;
   };
   return { from: () => chain() };
@@ -17,7 +25,15 @@ const CATALOG = [
   { id: 'c', name: 'Composite', strength: null, unit: 'syringe', category: 'consumable', stock_qty: 3, low_stock_threshold: 5, aliases: [], price_per_unit: 800 },
 ];
 
-beforeEach(() => { global.__catalog = CATALOG; aiService.extractInventory.mockReset(); });
+beforeEach(() => { global.__catalog = CATALOG; global.__aliasesMissing = false; aiService.extractInventory.mockReset(); });
+
+test('loadCatalog degrades gracefully when the aliases column is missing (migration 019 not yet run)', async () => {
+  global.__aliasesMissing = true; // the with-aliases SELECT will error like the live DB did
+  aiService.extractInventory.mockResolvedValue({ intent: 'restock', intent_confidence: 0.9, items: [{ name_span: 'gloves', qty: 50 }], query: null, unclear_spans: [] });
+  const out = await parseInventoryCommand('CLINIC', 'restock 50 gloves');
+  expect(out.intent).toBe('restock'); // no 500 — it still works
+  expect(out.items[0].resolved_item_id).toBe('g'); // resolves by name even without alias matching
+});
 
 test('restock intent resolves the item and attaches current_stock', async () => {
   aiService.extractInventory.mockResolvedValue({ intent: 'restock', intent_confidence: 0.9, items: [{ name_span: 'gloves', qty: 50 }], query: null, unclear_spans: [] });

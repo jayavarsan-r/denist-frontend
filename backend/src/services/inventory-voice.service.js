@@ -6,12 +6,22 @@ const supabase = require('../config/supabase');
 const aiService = require('./ai/ai.service');
 const { resolveInventorySpan } = require('./inventory.service');
 
-const CATALOG_SELECT = 'id, name, strength, unit, category, aliases, stock_qty, low_stock_threshold, price_per_unit';
+const CATALOG_COLS = 'id, name, strength, unit, category, stock_qty, low_stock_threshold, price_per_unit';
+const CATALOG_SELECT = `${CATALOG_COLS}, aliases`;
 const slim = (i) => ({ id: i.id, name: i.name, strength: i.strength || null, unit: i.unit || null, stock_qty: Number(i.stock_qty), low_stock_threshold: Number(i.low_stock_threshold) });
 
+// Loads the clinic catalog. `aliases` (migration 019) is OPTIONAL: if the column
+// isn't there yet, fall back to a select without it and default aliases to []. This
+// keeps the voice feature working before the migration is run — alias matching just
+// stays off until then, matching the spec's graceful-degradation guarantee.
 async function loadCatalog(clinicId) {
-  const { data, error } = await supabase.from('inventory_items')
+  let { data, error } = await supabase.from('inventory_items')
     .select(CATALOG_SELECT).eq('clinic_id', clinicId).eq('active', true).order('name');
+  if (error && /aliases/.test(error.message || '')) {
+    ({ data, error } = await supabase.from('inventory_items')
+      .select(CATALOG_COLS).eq('clinic_id', clinicId).eq('active', true).order('name'));
+    if (!error) data = (data || []).map((i) => ({ ...i, aliases: [] }));
+  }
   if (error) throw error;
   return data || [];
 }
