@@ -51,6 +51,13 @@ export async function extractPatientInfo(transcript) {
   return data;
 }
 
+// Inventory voice — transcript → parsed inventory command (intent + resolved items
+// + deterministic answer). The interceptor unwraps the { success, data } envelope.
+export async function extractInventoryCommand(transcript) {
+  const { data } = await apiClient.post('/api/ai/extract-inventory', { transcript });
+  return data;
+}
+
 // Scheduling INTENT only — { patient, procedure, preferredDate, preferredTime, notes }.
 // The deterministic slot finder + the doctor's confirmation do the actual scheduling.
 export async function parseScheduleIntent(transcript) {
