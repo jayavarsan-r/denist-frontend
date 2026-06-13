@@ -44,4 +44,17 @@ module.exports = {
   queueContext(transcript) {
     return { name: null, age: null, phone: null, chiefComplaint: transcript || null, bloodGroup: null, flags: {} };
   },
+
+  // Dev-only stub for inventory voice when GEMINI_API_KEY is absent.
+  inventory(transcript = '') {
+    const t = String(transcript).toLowerCase();
+    if (t.includes('low') || t.includes('reorder')) {
+      return { intent: 'reorder', intent_confidence: 0.9, items: [], query: { kind: 'low_stock', target_span: null }, unclear_spans: [] };
+    }
+    return {
+      intent: 'restock', intent_confidence: 0.8,
+      items: [{ name_span: 'gloves', strength: null, unit: 'box', category: 'consumable', qty: 50, set_to_level: null, price_per_unit: null, low_stock_threshold: null }],
+      query: null, unclear_spans: [],
+    };
+  },
 };

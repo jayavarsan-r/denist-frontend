@@ -31,6 +31,7 @@ import AddInventorySheet from '@/components/sheets/AddInventorySheet';
 import InventoryDetailSheet from '@/components/sheets/InventoryDetailSheet';
 import NewLabCaseSheet from '@/components/sheets/NewLabCaseSheet';
 import LabCaseDetailSheet from '@/components/sheets/LabCaseDetailSheet';
+import InventoryVoiceSheet from '@/components/sheets/InventoryVoiceSheet';
 
 const SHEETS = {
   account: AccountSettingsSheet,
@@ -63,6 +64,7 @@ const SHEETS = {
   inventoryDetail: InventoryDetailSheet,
   newLabCase: NewLabCaseSheet,
   labCaseDetail: LabCaseDetailSheet,
+  inventoryVoice: InventoryVoiceSheet,
 };
 
 export default function SheetHost() {

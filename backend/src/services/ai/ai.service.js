@@ -11,6 +11,7 @@ const mock = require('./providers/mock.provider');
 const prescriptionPrompt = require('./prompts/prescription.prompt');
 const receptionistPrompt = require('./prompts/receptionist.prompt');
 const schedulePrompt = require('./prompts/schedule.prompt');
+const inventoryPrompt = require('./prompts/inventory.prompt');
 const medicine = require('./parsers/medicine.parser');
 const { AppError } = require('../../utils/errors');
 const logger = require('../../utils/logger');
@@ -61,6 +62,16 @@ async function extractQueueContext(transcript) {
   throw noLlm();
 }
 
+// Inventory voice extraction — classify + extract only (see inventory.prompt.js).
+// temperature 0: this is transcription, not creativity.
+async function extractInventory(transcript, catalog = []) {
+  if (gemini.hasKey()) {
+    return gemini.generate(inventoryPrompt(catalog), transcript, { temperature: 0, maxOutputTokens: 800 });
+  }
+  if (isDev()) { logger.warn('GEMINI_API_KEY missing — mock inventory extraction (dev)'); return mock.inventory(transcript); }
+  throw noLlm();
+}
+
 // Scheduling INTENT only — never books or chooses slots (the deterministic engine does).
 async function parseScheduleIntent(transcript) {
   if (gemini.hasKey()) {
@@ -75,4 +86,5 @@ module.exports = {
   extractPrescription,
   extractQueueContext,
   parseScheduleIntent,
+  extractInventory,
 };
