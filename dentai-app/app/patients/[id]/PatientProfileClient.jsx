@@ -6,12 +6,13 @@ import { usePatientStore } from '@/store/usePatientStore';
 import { useVisitStore } from '@/store/useVisitStore';
 import { useClinicalStore } from '@/store/useClinicalStore';
 import Icon from '@/components/icons';
-import { Avatar, Chip, StatusChip, SectionHeader, PillToggle, StageDots, ToothChip, EmptyState, PrimaryButton, NavBar } from '@/components/ui';
+import { Avatar, Chip, StatusChip, SectionHeader, PillToggle, StageDots, ToothChip, EmptyState, PrimaryButton, NavBar, DocumentActions } from '@/components/ui';
 import Odontogram from '@/components/odontogram/Odontogram';
 import { TODAY } from '@/lib/data/patients';
 import { formatCurrency, formatDate, formatTime, clinicianFlags, hasComplications, parseDate, MONTHS, formatCurrencyK } from '@/lib/data/utils';
 import { getProcedureColor, TOOTH_STATE_STYLE } from '@/lib/data/procedures';
 import { getToothHistory, getPatientCaseSheet } from '@/lib/services/patient.service';
+import { listLabCases, STATUS_META } from '@/lib/services/lab-case.service';
 import { getPatientXrays, uploadXray, uploadPatientPhoto } from '@/lib/services/xray.service';
 import BeforeAfterCapture from '@/components/sheets/BeforeAfterCapture';
 
@@ -487,10 +488,53 @@ function LabOrderCard({ order, openSheet, markLabReceived }) {
 }
 
 function LabTab({ p, labOrders, openSheet, markLabReceived }) {
+  // NEW lab_cases (Phase 4 WhatsApp-tracked tracker) — shown above the legacy
+  // lab_orders, which stay as read-only "Previous records".
+  const [cases, setCases] = useState([]);
+  const [loadingCases, setLoadingCases] = useState(true);
+  const loadCases = React.useCallback(() => {
+    listLabCases({ patient_id: p.id })
+      .then((rows) => setCases(rows || []))
+      .catch(() => setCases([]))
+      .finally(() => setLoadingCases(false));
+  }, [p.id]);
+  useEffect(() => { loadCases(); }, [loadCases]);
+
   const labs = labOrders.filter(l => l.patientId === p.id);
   return (
     <div>
-      <SectionHeader>Lab orders for this patient</SectionHeader>
+      <SectionHeader>Lab cases</SectionHeader>
+      {loadingCases ? (
+        <div className="card" style={{ marginBottom: 12, padding: 20, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>Loading…</div>
+      ) : cases.length === 0 ? (
+        <div className="card" style={{ marginBottom: 12 }}><EmptyState icon="flask" title="No lab cases" hint="Crowns, dentures & aligners tracked over WhatsApp" /></div>
+      ) : (
+        <div className="card" style={{ overflow: 'hidden', marginBottom: 12 }}>
+          {cases.map((c, i) => {
+            const meta = STATUS_META[c.status] || STATUS_META.DRAFT;
+            return (
+              <button key={c.id} onClick={() => openSheet('labCaseDetail', { id: c.id, onChanged: loadCases })} className="rowtap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {c.case_code}
+                    <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)' }}>{(c.case_type || '').replace(/_/g, ' ')}</span>
+                  </div>
+                  <div className="t-meta">
+                    {c.labs?.name || 'No lab yet'}{c.expected_date ? ` · due ${formatDate(c.expected_date)}` : ''}
+                  </div>
+                </div>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 700, padding: '3px 9px', borderRadius: 99, background: 'rgba(60,60,67,0.06)', flexShrink: 0 }}>
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: meta.dot }} />
+                  {meta.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <PrimaryButton onClick={() => openSheet('newLabCase', { patientId: p.id, onSaved: loadCases })} style={{ marginBottom: 22 }}>+ New lab case</PrimaryButton>
+
+      <SectionHeader>Previous records</SectionHeader>
       {labs.length === 0 ? <div className="card" style={{ marginBottom: 16 }}><EmptyState icon="flask" title="No lab orders" /></div> :
         labs.map(l => <LabOrderCard key={l.id} order={l} openSheet={openSheet} markLabReceived={markLabReceived} />)}
       <PrimaryButton onClick={() => openSheet('newLab', { patientId: p.id })} style={{ marginTop: 6 }}>+ New lab order</PrimaryButton>
@@ -956,11 +1000,17 @@ function PatientProfile({ patientId, initialTab }) {
   const [toothHistory, setToothHistory] = React.useState(null);
   const [toothLoading, setToothLoading] = React.useState(false);
 
-  // Ensure patient is loaded if navigated directly
+  // Ensure patient is loaded if navigated directly (e.g. opened straight from a
+  // schedule appointment whose patient isn't in the list store yet). Track resolution
+  // so we render a spinner / not-found state instead of a blank white page.
+  const [resolving, setResolving] = React.useState(!patients.find(x => x.id === patientId));
+  const resolvePatient = React.useCallback(() => {
+    setResolving(true);
+    Promise.resolve(fetchPatient(patientId)).finally(() => setResolving(false));
+  }, [patientId, fetchPatient]);
   React.useEffect(() => {
-    if (!patients.find(x => x.id === patientId)) {
-      fetchPatient(patientId);
-    }
+    if (patients.find(x => x.id === patientId)) { setResolving(false); return; }
+    resolvePatient();
   }, [patientId]);
 
   // Fetch tooth history from API. Re-runs on patientDataVersion bumps so a tooth
@@ -997,7 +1047,33 @@ function PatientProfile({ patientId, initialTab }) {
     getPatientCaseSheet(patientId).then(setCaseSheet).catch(() => {});
   }, [patientId, patientDataVersion]);
 
-  if (!p) return null;
+  if (!p) {
+    // Never a blank white page: show a spinner while the patient is being fetched,
+    // or a recoverable not-found state if the fetch finished without finding them.
+    return (
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--surface)' }}>
+        <div style={{ padding: '58px 20px 10px', display: 'flex', alignItems: 'center' }}>
+          <button onClick={() => router.back()} style={{ display: 'flex', color: 'var(--accent)' }}><Icon name="chevLeft" size={26} /></button>
+        </div>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24, textAlign: 'center' }}>
+          {resolving ? (
+            <>
+              <div style={{ width: 28, height: 28, borderRadius: '50%', border: '3px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin .7s linear infinite' }} />
+              <span style={{ fontSize: 14, color: 'var(--text-secondary)' }}>Loading patient…</span>
+            </>
+          ) : (
+            <>
+              <Icon name="alert" size={40} color="var(--text-tertiary)" />
+              <div style={{ fontSize: 17, fontWeight: 600 }}>Couldn't load this patient</div>
+              <div style={{ fontSize: 14, color: 'var(--text-secondary)', maxWidth: 260 }}>They may have been removed, or the connection dropped.</div>
+              <button onClick={resolvePatient} style={{ marginTop: 6, height: 42, padding: '0 22px', borderRadius: 12, background: 'var(--accent)', color: 'var(--accent-ink)', fontSize: 15, fontWeight: 700, border: 'none' }}>Retry</button>
+              <button onClick={() => router.back()} style={{ fontSize: 14, fontWeight: 600, color: 'var(--blue)', marginTop: 2 }}>Go back</button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   // Merge: API tooth history overrides local p.teeth
   const apiTeethMap = buildTeethMap(toothHistory);
@@ -1072,6 +1148,13 @@ function PatientProfile({ patientId, initialTab }) {
               <div style={{ fontSize: 15, fontStyle: 'italic', color: 'var(--text-secondary)' }}>{p.chiefComplaint}</div>
             </div>
           )}
+          {/* Documents — view / share a branded PDF via the OS share sheet */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-tertiary)' }}>Case sheet</span>
+            <DocumentActions docType="caseSheet" id={p.id} patientName={p.name} patientPhone={p.phone} />
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-tertiary)', marginLeft: 6 }}>Statement</span>
+            <DocumentActions docType="statement" id={p.id} patientName={p.name} patientPhone={p.phone} />
+          </div>
         </div>
 
         {/* tabs */}
@@ -1089,7 +1172,9 @@ function PatientProfile({ patientId, initialTab }) {
           {tab === 'Billing' && <BillingTab p={p} prescriptions={prescriptions} openSheet={openSheet} toothHistory={toothHistory} caseSheet={caseSheet} />}
         </div>
       </div>
-      <StartConsultFab onClick={() => openSheet('patientConsult', { patientId: p.id, autoStart: true })} />
+      {/* Overview already shows the prominent "Record findings" card, so the floating
+          mic would be a duplicate there — only show the FAB on the other tabs. */}
+      {tab !== 'Overview' && <StartConsultFab onClick={() => openSheet('patientConsult', { patientId: p.id, autoStart: true })} />}
     </div>
   );
 }

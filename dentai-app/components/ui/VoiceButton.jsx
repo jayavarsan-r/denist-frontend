@@ -92,4 +92,8 @@ export default function VoiceButton({
       )}
     </button>
   );
+<<<<<<< HEAD
 }
+=======
+}
+>>>>>>> v2

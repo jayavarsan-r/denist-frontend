@@ -4,30 +4,24 @@ import { useAppStore } from '@/store/useAppStore';
 import { usePatientStore } from '@/store/usePatientStore';
 import { useClinicalStore } from '@/store/useClinicalStore';
 import { useAudioRecorder } from '@/lib/hooks/useAudioRecorder';
-import { useTranscription } from '@/lib/hooks/useTranscription';
-import { useGenerateNote } from '@/lib/hooks/useGenerateNote';
-import { extractPrescription } from '@/lib/services/ai.service';
+import { useVoiceJob } from '@/lib/hooks/useVoiceJob';
+import { reviewDraft } from '@/lib/services/ai.service';
 import { createVisit } from '@/lib/services/visit.service';
 import { createTreatmentPlan } from '@/lib/services/treatment-plan.service';
 import ConsultReview from '@/components/consultation/ConsultReview';
 import ConsultRecorder from '@/components/consultation/ConsultRecorder';
 import {
-  normaliseExtraction, withField, withAddedMedicine, withEditedMedicine,
-  withRemovedMedicine, blankExtraction, mergeMedicinesByName,
+  withField, withAddedMedicine, withEditedMedicine, withRemovedMedicine, blankExtraction,
 } from '@/store/consultDraft.mjs';
-
-// extractPrescription → the frontend medicine shape ConsultReview edits.
-const mapRxMed = (m) => ({
-  name: m.name || '', dose: m.dose || m.dosage || '', frequency: m.frequency || '',
-  duration: m.duration || '', slots: m.meal_timing_slots || m.slots || {}, uncertain: m.uncertain || false,
-});
+import { toFrontendExtraction, toConfirmedData } from '@/lib/voice/draftMapping';
 
 /**
- * PatientConsultSheet — the patient-profile "Start consultation". Uses the EXACT same
- * record → review UI as the queue consult (ConsultRecorder / ConsultReview), so the two
- * flows are identical. Confirming saves a visit + treatment plan + prescription for the
- * named patient; cash/payment is handled later in the receptionist section, not here.
- * params: { patientId, autoStart }
+ * PatientConsultSheet — the patient-profile "Start consultation". Same async voice
+ * pipeline as the queue consult (useVoiceJob → consultation_draft → Verification
+ * Card), but keyed on the PATIENT (no queue entry): audio goes to
+ * /api/patients/:id/start-voice. Confirming records the doctor's review on the
+ * draft (the correction-learning loop) and then saves visit + plan + Rx exactly as
+ * before. params: { patientId, autoStart }
  */
 export default function PatientConsultSheet({ params, onClose }) {
   const showToast = useAppStore((s) => s.showToast);
@@ -40,15 +34,14 @@ export default function PatientConsultSheet({ params, onClose }) {
   const [view, setView] = useState('ready');
   const [extraction, setExtraction] = useState(null);
   const [aiError, setAiError] = useState(null);
-  const [fixPhase, setFixPhase] = useState('idle');
   const [completing, setCompleting] = useState(false);
 
   const recorder = useAudioRecorder();
-  const { transcribe } = useTranscription('diagnosis');
-  const { generateFromTranscript } = useGenerateNote();
+  const voiceJob = useVoiceJob({ patientId: params.patientId || null });
 
   const handleStartRecording = async () => {
     setAiError(null);
+    voiceJob.reset();
     try { await recorder.startRecording(); setView('recording'); }
     catch (e) { setView('ready'); setAiError(e.message || 'Could not start recording'); }
   };
@@ -57,13 +50,26 @@ export default function PatientConsultSheet({ params, onClose }) {
   const autoStarted = useRef(false);
   useEffect(() => {
     if (params.autoStart && p && !autoStarted.current) { autoStarted.current = true; handleStartRecording(); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.autoStart, !!p]);
 
-  // Release the mic on unmount only. Depending on isRecording made this fire on every
-  // Stop and double-called stopRecording — orphaning the awaited stop promise and
-  // freezing on "Understanding…". stopRecording self-guards when already inactive.
+  // Release the mic on unmount only (stopRecording self-guards when inactive).
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => () => { recorder.stopRecording().catch(() => {}); }, []);
+
+  // Worker finished (or failed) → Verification Card / manual fallback.
+  useEffect(() => {
+    if (voiceJob.state === 'draft_ready' && voiceJob.draft) {
+      setExtraction(toFrontendExtraction(voiceJob.draft));
+      setView('review');
+    }
+    if (voiceJob.state === 'error') {
+      setAiError(voiceJob.error || 'AI processing failed — type the findings, or re-record');
+      setExtraction(blankExtraction());
+      setView('review');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voiceJob.state]);
 
   if (!p) return null;
 
@@ -73,60 +79,17 @@ export default function PatientConsultSheet({ params, onClose }) {
     setView('processing');
     try {
       const blob = await recorder.stopRecording();
-      const { text: transcript, warning } = await transcribe(blob);
-      if (!transcript) {
-        setAiError(warning || "Couldn't transcribe — type the findings, or re-record");
-        setExtraction(blankExtraction());
-        setView('review');
-        return;
-      }
-      const note = await generateFromTranscript(transcript);
-      let medicines = note.medicines || [];
-      try {
-        const rx = await extractPrescription(transcript);
-        if (Array.isArray(rx.medicines) && rx.medicines.length) medicines = rx.medicines.map(mapRxMed);
-      } catch { /* prescription optional */ }
-      setExtraction(normaliseExtraction({ ...note, medicines, transcript }));
-      setView('review');
+      await voiceJob.submitRecording(blob);
+      // draft_ready / error arrive via the effect above.
     } catch (e) {
-      setAiError(e.message || 'AI processing failed — type the findings, or re-record');
+      setAiError(e.message || 'Recording failed — type the findings, or re-record');
       setExtraction(blankExtraction());
       setView('review');
     }
   };
 
-  /* ─── Fix by voice — merges core fields AND the prescription ─── */
-  const handleFixByVoice = async () => {
-    if (fixPhase === 'recording') {
-      setFixPhase('processing');
-      setAiError(null);
-      try {
-        const blob = await recorder.stopRecording();
-        const { text: transcript, warning } = await transcribe(blob);
-        if (!transcript) { setAiError(warning || "Couldn't hear the correction — try again"); setFixPhase('idle'); return; }
-        const [merged, rx] = await Promise.all([
-          generateFromTranscript(transcript, extraction?._raw || null),
-          extractPrescription(transcript).catch(() => ({ medicines: [] })),
-        ]);
-        const spoken = (Array.isArray(rx?.medicines) ? rx.medicines : []).map(mapRxMed);
-        const existing = extraction?.medicines || [];
-        const medicines = spoken.length ? mergeMedicinesByName(existing, spoken) : existing;
-        setExtraction((cur) => ({ ...(cur || {}), ...merged, medicines }));
-        setFixPhase('idle');
-        showToast('Correction applied');
-      } catch (e) {
-        setAiError(e.message || 'Could not apply correction');
-        setFixPhase('idle');
-      }
-      return;
-    }
-    setAiError(null);
-    try { await recorder.startRecording(); setFixPhase('recording'); }
-    catch (e) { showToast(e.message || 'Could not start recording'); }
-  };
-
-  /* ─── Confirm & save — visit + plan + Rx, then done. Cash/payment is handled in the
-     receptionist section (the patient's Billing → Collect), not here. ─── */
+  /* ─── Confirm & save — visit + plan + Rx, then done. The draft confirmation
+     (with the corrections diff) feeds the per-doctor learning loop. ─── */
   const confirmSave = async () => {
     const ex = extraction;
     if (!ex || completing) return;
@@ -137,6 +100,12 @@ export default function PatientConsultSheet({ params, onClose }) {
     const primaryTooth = teeth[0] || null;
     const followUpDate = /^\d{4}-\d{2}-\d{2}/.test(ex.followUp || '') ? ex.followUp : null;
     try {
+      // Record the doctor's review on the draft first (non-fatal for the save).
+      if (ex._draftId) {
+        try { await reviewDraft(ex._draftId, { status: 'confirmed', confirmedData: toConfirmedData(ex) }); }
+        catch { /* learning loop only — never blocks the save */ }
+      }
+
       await createVisit({
         patientId: p.id,
         procedureName: ex.procedure || 'Consultation',
@@ -185,9 +154,6 @@ export default function PatientConsultSheet({ params, onClose }) {
         onAddMedicine={() => setExtraction((cur) => withAddedMedicine(cur))}
         onEditMedicine={(i, patch) => setExtraction((cur) => withEditedMedicine(cur, i, patch))}
         onRemoveMedicine={(i) => setExtraction((cur) => withRemovedMedicine(cur, i))}
-        onFixByVoice={handleFixByVoice}
-        fixPhase={fixPhase}
-        fixSeconds={recorder.seconds}
         onRerecord={() => { setAiError(null); handleStartRecording(); }}
         onComplete={confirmSave}
         completing={completing}
@@ -205,7 +171,7 @@ export default function PatientConsultSheet({ params, onClose }) {
       onStart={handleStartRecording}
       onStop={handleStop}
       onManual={handleManual}
-      processingLabel="Understanding…"
+      processingLabel="Analysing recording…"
     />
   );
 }

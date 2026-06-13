@@ -37,7 +37,7 @@ let cursor = 0;
 
 function parseResponse(res) {
   let text = res.data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-  if (!text) throw new AppError('AI_PARSE_ERROR', 'Empty response from AI');
+  if (!text) throw new AppError('EXTRACTION_FAILED', 'Empty response from AI');
   // JSON mode (responseMimeType) makes this clean, but stay defensive: strip any
   // ```json fences the model still emits…
   text = text.replace(/^```json?\n?/i, '').replace(/```$/, '').trim();
@@ -52,7 +52,9 @@ function parseResponse(res) {
     if (start !== -1 && end > start) {
       try { return JSON.parse(text.slice(start, end + 1)); } catch { /* fall through */ }
     }
-    throw new AppError('AI_PARSE_ERROR', 'AI returned unparseable output');
+    // 422: the provider answered but the output is unusable. Carry the raw text so
+    // callers/logs can see what the model actually said.
+    throw new AppError('EXTRACTION_FAILED', 'AI returned unparseable output', { raw: text.slice(0, 2000) });
   }
 }
 
@@ -67,7 +69,7 @@ function parseResponse(res) {
 // latency). Never returns silent fake data — failures throw typed AppErrors.
 async function generate(systemPrompt, userContent, opts = {}) {
   const keys = getKeys();
-  if (!keys.length) throw new AppError('AI_UNAVAILABLE', 'AI provider is not configured');
+  if (!keys.length) throw new AppError('LLM_UNAVAILABLE', 'AI provider is not configured');
 
   const body = {
     contents: [{ parts: [{ text: userContent }] }],
@@ -109,7 +111,7 @@ async function generate(systemPrompt, userContent, opts = {}) {
           if (keys.length > 1) logger.warn(`[gemini] key #${idx + 1} busy (${status}) — rotating`);
           continue; // try the next key
         }
-        throw new AppError('AI_UNAVAILABLE', `AI provider error (${status || 'network'})`);
+        throw new AppError('LLM_UNAVAILABLE', `AI provider error (${status || 'network'})`);
       }
     }
     // Every key was transiently busy this pass.

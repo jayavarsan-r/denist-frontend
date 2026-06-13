@@ -19,7 +19,6 @@ import ApptPeekSheet from '@/components/sheets/ApptPeekSheet';
 import EndVisitSheet from '@/components/sheets/EndVisitSheet';
 import CheckInSheet from '@/components/sheets/CheckInSheet';
 import RemoveQueueSheet from '@/components/sheets/RemoveQueueSheet';
-import RecordDiagnosisSheet from '@/components/sheets/RecordDiagnosisSheet';
 import QueueActionsSheet from '@/components/sheets/QueueActionsSheet';
 import VisitRecordSheet from '@/components/sheets/VisitRecordSheet';
 import PrescriptionDesignSheet from '@/components/sheets/PrescriptionDesignSheet';
@@ -28,6 +27,11 @@ import TreatmentPlanSheet from '@/components/sheets/TreatmentPlanSheet';
 import PatientPickerSheet from '@/components/sheets/PatientPickerSheet';
 import PatientConsultSheet from '@/components/sheets/PatientConsultSheet';
 import ConsultRecordSheet from '@/components/sheets/ConsultRecordSheet';
+import AddInventorySheet from '@/components/sheets/AddInventorySheet';
+import InventoryDetailSheet from '@/components/sheets/InventoryDetailSheet';
+import NewLabCaseSheet from '@/components/sheets/NewLabCaseSheet';
+import LabCaseDetailSheet from '@/components/sheets/LabCaseDetailSheet';
+import InventoryVoiceSheet from '@/components/sheets/InventoryVoiceSheet';
 
 const SHEETS = {
   account: AccountSettingsSheet,
@@ -48,7 +52,6 @@ const SHEETS = {
   endVisit: EndVisitSheet,
   checkin: CheckInSheet,
   removeQueue: RemoveQueueSheet,
-  recordDiagnosis: RecordDiagnosisSheet,
   queueActions: QueueActionsSheet,
   visitRecord: VisitRecordSheet,
   prescriptionDesign: PrescriptionDesignSheet,
@@ -57,6 +60,11 @@ const SHEETS = {
   patientPicker: PatientPickerSheet,
   patientConsult: PatientConsultSheet,
   consultRecord: ConsultRecordSheet,
+  addInventory: AddInventorySheet,
+  inventoryDetail: InventoryDetailSheet,
+  newLabCase: NewLabCaseSheet,
+  labCaseDetail: LabCaseDetailSheet,
+  inventoryVoice: InventoryVoiceSheet,
 };
 
 export default function SheetHost() {

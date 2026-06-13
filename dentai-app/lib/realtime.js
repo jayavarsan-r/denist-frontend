@@ -76,6 +76,45 @@ export async function subscribeToQueue(clinicId, onUpdate) {
 }
 
 /**
+ * Subscribe to ONE consultation draft row (the async voice pipeline result).
+ * Fires on every UPDATE — the worker moves status processing → pending_review
+ * | error and fills extracted/safety_flags.
+ *
+ * @param {string} draftId
+ * @param {(draft: object) => void} onUpdate
+ * @returns {() => void} unsubscribe function
+ */
+export async function subscribeToDraft(draftId, onUpdate) {
+  try {
+    const sb = await getSupabase();
+    if (!sb) return () => {};
+
+    const channel = sb
+      .channel(`draft:${draftId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'consultation_drafts',
+          filter: `id=eq.${draftId}`,
+        },
+        (payload) => {
+          try { onUpdate(payload.new); } catch {}
+        }
+      )
+      .subscribe((status, err) => {
+        if (err) console.warn('[Realtime] draft subscription error:', err.message);
+      });
+
+    return () => { try { sb.removeChannel(channel); } catch {} };
+  } catch (e) {
+    console.warn('[Realtime] subscribeToDraft failed:', e.message);
+    return () => {};
+  }
+}
+
+/**
  * Subscribe to appointments changes for a clinic.
  *
  * @param {string} clinicId

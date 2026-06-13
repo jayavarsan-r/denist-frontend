@@ -71,7 +71,7 @@ async function callSarvam(filePath, filename, contentType) {
     if (e.code === 'ECONNABORTED') throw new AppError('AI_TIMEOUT', 'Transcription timed out');
     const data = e.response?.data;
     const msg = data?.error?.message || data?.message || data?.detail || e.message;
-    throw new AppError('AI_UNAVAILABLE', `Sarvam error (${e.response?.status || 'network'}): ${msg}`);
+    throw new AppError('STT_UNAVAILABLE', `Sarvam error (${e.response?.status || 'network'}): ${msg}`);
   }
   return response.data.transcript || '';
 }

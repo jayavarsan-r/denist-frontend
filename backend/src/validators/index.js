@@ -101,26 +101,34 @@ const patchQueue = z.object({
   sortOrder: z.coerce.number().int().optional(),
   notes: optStr,
 });
-const completeConsult = z.object({
-  patientId: uuid.optional().nullable(), // defaults from the queue entry in the route
-  // Optional: the doctor must be able to finish/checkout even when the AI didn't extract
-  // a clear procedure (or was rate-limited). The transaction defaults it to 'Consultation'.
-  procedure: optStr,
+// Phase 2: complete-consult confirms an AI draft from the Verification Card.
+// confirmed_data is the (possibly doctor-edited) extraction in the DraftSchema
+// shape, plus optional UI extras (total_sittings, estimated_cost, diagnosis).
+// Inner objects are passthrough on purpose: the card edits every field and the
+// payload lands in jsonb — the transaction maps only the columns it knows.
+const confirmedDataSchema = z.object({
+  treatments:    z.array(z.object({}).passthrough()).optional().default([]),
+  prescriptions: z.array(z.object({}).passthrough()).optional().default([]),
+  follow_up: z.object({
+    in_days: z.coerce.number().int().positive().optional().nullable(),
+    reason:  optStr,
+  }).optional().nullable(),
+  lab_case_suggestion: z.object({}).passthrough().optional().nullable(),
+  clinical_notes: optStr,
+  total_sittings: z.coerce.number().int().min(1).optional().nullable(),
+  estimated_cost: z.coerce.number().optional().nullable(),
   diagnosis: optStr,
-  toothNumber: optStr,
-  toothNumbers: z.array(z.string().trim()).optional().nullable(), // multi-tooth procedure
-  totalSittings: z.coerce.number().int().min(1).optional().nullable(),
-  estimatedCost: z.coerce.number().optional().nullable(),
-  transcript: optStr,
-  notes: optStr,
-  followUp: optStr, // doctor's recommended follow-up (date YYYY-MM-DD or free text)
-  // AI-suggested return visits (resolved dates). The transaction assigns each a free
-  // time and falls back to sittings/follow-up when this is empty.
-  appointments: z.array(z.object({
-    date: z.string().trim(),
-    session: z.coerce.number().int().optional().nullable(),
-    purpose: optStr,
-  })).optional().nullable(),
+}).passthrough();
+
+const confirmDraft = z.object({
+  draft_id: uuid,
+  confirmed_data: confirmedDataSchema,
+});
+
+// PATCH /api/consultation-drafts/:id — profile-consult confirm + reject path.
+const reviewDraft = z.object({
+  status: z.enum(['confirmed', 'rejected']),
+  confirmed_data: confirmedDataSchema.optional().nullable(),
 });
 
 // ── Payments ──────────────────────────────────────────────────────────────
@@ -184,6 +192,7 @@ const updateClinic = z.object({
   openTime: z.string().optional(),
   closeTime: z.string().optional(),
   workingDays: z.any().optional(),
+  registrationNumber: z.string().max(64).optional(),
 });
 
 // ── Auth onboarding (NOT the OTP endpoints) ───────────────────────────────
@@ -243,11 +252,92 @@ const toothChartUpsert = z.object({
   notes: optStr,
 });
 
+// ── Lab cases (Phase 4 — NEW system, separate from lab orders) ────────────
+const LAB_CASE_TYPES = ['crown_pfm', 'crown_zirconia', 'bridge', 'denture_full', 'denture_partial', 'aligner', 'inlay_onlay', 'other'];
+const LAB_CASE_STATUSES = ['DRAFT', 'SENT', 'ACKNOWLEDGED', 'IN_PROGRESS', 'READY', 'DISPATCHED', 'RECEIVED', 'FITTED', 'ISSUE_RAISED', 'CANCELLED'];
+const fdiTooth = z.coerce.number().int().min(11).max(48);
+const createLabCase = z.object({
+  patientId: uuid,
+  labId: uuid.optional().nullable(),
+  visitId: uuid.optional().nullable(),
+  treatmentPlanId: uuid.optional().nullable(),
+  caseType: z.enum(LAB_CASE_TYPES),
+  toothFdi: z.array(fdiTooth).optional().default([]),
+  shade: optStr,
+  instructions: optStr,
+  expectedDate: z.string().optional().nullable(),
+  sendNow: z.coerce.boolean().optional().default(false),
+});
+const updateLabCase = z.object({
+  labId: uuid.optional().nullable(),
+  shade: optStr,
+  instructions: optStr,
+  expectedDate: z.string().optional().nullable(),
+  toothFdi: z.array(fdiTooth).optional(),
+});
+const labCaseStatus = z.object({ status: z.enum(LAB_CASE_STATUSES) });
+const createLab = z.object({
+  name: z.string().trim().min(1, 'name required'),
+  phoneNumbers: z.array(z.string().trim().min(8)).min(1, 'at least one phone number'),
+  preferredLanguage: z.enum(['en', 'ta']).optional(),
+  defaultTurnaroundDays: z.coerce.number().int().positive().optional(),
+  notes: optStr,
+  consentLogged: z.coerce.boolean().optional(),
+});
+const updateLab = z.object({
+  name: z.string().trim().min(1).optional(),
+  phoneNumbers: z.array(z.string().trim().min(8)).optional(),
+  preferredLanguage: z.enum(['en', 'ta']).optional(),
+  automationPaused: z.coerce.boolean().optional(),
+  defaultTurnaroundDays: z.coerce.number().int().positive().optional(),
+  notes: optStr,
+  consentLogged: z.coerce.boolean().optional(),
+});
+const resolveInboxItem = z.object({
+  labCaseId: uuid.optional().nullable(),
+  newStatus: z.enum(LAB_CASE_STATUSES).optional().nullable(),
+});
+
+// ── Inventory ─────────────────────────────────────────────────────────────
+const INVENTORY_CATEGORIES = ['medicine', 'consumable', 'equipment'];
+const createInventoryItem = z.object({
+  category: z.enum(INVENTORY_CATEGORIES).optional().default('medicine'),
+  name: z.string().trim().min(1, 'name required'),
+  strength: optStr,
+  unit: z.string().trim().min(1).optional().default('tablet'),
+  price_per_unit: z.coerce.number().nonnegative().optional().nullable(),
+  stock_qty: z.coerce.number().nonnegative().optional().default(0),
+  low_stock_threshold: z.coerce.number().nonnegative().optional().default(10),
+  notes: optStr,
+});
+const updateInventoryItem = z.object({
+  name: z.string().trim().min(1).optional(),
+  strength: optStr,
+  unit: z.string().trim().min(1).optional(),
+  price_per_unit: z.coerce.number().nonnegative().optional().nullable(),
+  low_stock_threshold: z.coerce.number().nonnegative().optional(),
+  notes: optStr,
+  active: z.coerce.boolean().optional(),
+  // stock_qty deliberately absent — stock changes go through stock-in/adjustment
+  // so the movements ledger stays the source of truth.
+});
+const stockIn = z.object({
+  qty: z.coerce.number().positive('qty must be positive'),
+  notes: optStr,
+});
+const stockAdjust = z.object({
+  qty: z.coerce.number().positive('qty must be positive'),
+  direction: z.enum(['in', 'out']),
+  reason: z.enum(['adjustment', 'expired', 'return', 'purchase']).optional().default('adjustment'),
+  notes: optStr,
+});
+
 // ── Staff ─────────────────────────────────────────────────────────────────
 const updateStaff = z.object({
   name: z.string().trim().min(1).optional(),
   role: z.enum(['doctor', 'receptionist']).optional(),
   status: z.enum(['active', 'inactive']).optional(),
+  registrationNumber: z.string().max(64).optional(),
 });
 
 // ── Notifications ─────────────────────────────────────────────────────────
@@ -266,7 +356,7 @@ module.exports = {
   createPatient, updatePatient,
   createAppointment, updateAppointment, recurringAppointments,
   createVisit, updateVisit,
-  addToQueue, patchQueue, completeConsult,
+  addToQueue, patchQueue, confirmDraft, reviewDraft,
   recordPayment,
   createTreatmentPlan, updateTreatmentPlan,
   createPaymentPlan, updatePaymentPlan,
@@ -274,6 +364,9 @@ module.exports = {
   createClinic, joinClinic, lookupClinic,
   updateStaff,
   createLabOrder, updateLabOrder,
+  createInventoryItem, updateInventoryItem, stockIn, stockAdjust, INVENTORY_CATEGORIES,
+  createLabCase, updateLabCase, labCaseStatus, createLab, updateLab, resolveInboxItem,
+  LAB_CASE_TYPES, LAB_CASE_STATUSES,
   sendNotification, notifyReminder, notifyPaymentDue, notifyRecall,
   toothChartUpsert, TOOTH_CONDITIONS,
   APPOINTMENT_STATUS, LAB_STATUS,

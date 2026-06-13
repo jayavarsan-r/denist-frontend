@@ -6,7 +6,6 @@
 
 const supabase = require('../config/supabase');
 const repos = require('./../repositories');
-const aiService = require('./ai/ai.service');
 const audit = require('./audit.service');
 const { outstandingFor, isOverpayment } = require('../utils/payment-math');
 const { badRequest } = require('../utils/errors');
@@ -58,50 +57,115 @@ async function firstFreeTime(clinicId, date, durationMins = 30, alreadyPicked = 
   return _toHHMM(OPEN);
 }
 
-// ── completeConsultation ──────────────────────────────────────────────────
-async function completeConsultation(ctx) {
-  const { clinicId, dentistId, staffId, requestId, queueId,
-    patientId, diagnosis, toothNumber, toothNumbers, totalSittings, estimatedCost, transcript, notes, followUp } = ctx;
-  // Never block checkout on a missing procedure — fall back to a generic label.
-  const procedure = (ctx.procedure || '').trim() || 'Consultation';
+// ── confirmConsultationDraft ──────────────────────────────────────────────
+// Phase 2: the doctor confirmed an AI draft on the Verification Card. This is the
+// ONLY path that turns AI output into clinical records — nothing commits without
+// this explicit confirmation. Sequenced like every other workflow here (critical
+// write first, the rest best-effort, audit at the end).
+//
+// confirmedData is the (possibly doctor-edited) DraftSchema shape:
+//   { treatments[], prescriptions[], follow_up, lab_case_suggestion, clinical_notes }
+// plus optional UI extras: total_sittings, estimated_cost, diagnosis.
+async function confirmConsultationDraft(ctx) {
+  const { clinicId, dentistId, staffId, requestId, queueId, draft, confirmedData } = ctx;
+  const { computeCorrections } = require('../utils/draft-diff');
+  const patientId = draft.patient_id;
   const todayStr = new Date().toISOString().split('T')[0];
-  const sittings = Math.max(1, parseInt(totalSittings) || 1);
-  // A follow-up like "2026-06-14" becomes a recommended appointment; free text is kept as a note only.
-  const followUpDate = /^\d{4}-\d{2}-\d{2}$/.test(String(followUp || '').trim()) ? String(followUp).trim() : null;
 
-  // Normalise the set of teeth covered by this procedure (multi-tooth). Falls back
-  // to the single primary tooth. De-duplicated, strings only.
-  const teeth = [...new Set(
-    [...(Array.isArray(toothNumbers) ? toothNumbers : []), toothNumber]
-      .filter((t) => t != null && String(t).trim() !== '')
-      .map((t) => String(t).trim())
-  )];
+  const treatments = Array.isArray(confirmedData.treatments) ? confirmedData.treatments : [];
+  const primary = treatments[0] || {};
+  const procedure = (primary.procedure_name_span || confirmedData.procedure || '').trim() || 'Consultation';
+  const teeth = [...new Set(treatments.map((t) => t.tooth_fdi).filter((t) => t != null).map(String))];
+  const sittings = Math.max(1, parseInt(confirmedData.total_sittings) || parseInt(primary.sitting_number) || 1);
+  const estimatedCost = confirmedData.estimated_cost != null ? parseFloat(confirmedData.estimated_cost) : 0;
+  const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().split('T')[0]; };
+  const followUpDate = confirmedData.follow_up?.in_days > 0 ? addDays(confirmedData.follow_up.in_days) : null;
+  const followUpReason = confirmedData.follow_up?.reason || null;
 
-  // 1. Treatment plan (critical — propagate failure)
-  const plan = await repos.treatmentPlans.create({
-    patient_id: patientId,
-    dentist_id: dentistId,
-    clinic_id: clinicId || null,
-    diagnosis: diagnosis || null,
-    procedure_name: procedure,
-    total_sittings: sittings,
-    completed_sittings: 1,
-    estimated_cost: estimatedCost ? parseFloat(estimatedCost) : 0,
-    collected_amount: 0,
-    status: 'active',
-    start_date: todayStr,
-  });
+  // Manual drafts (typed notes, no voice) carry no transcript — diffing them against
+  // an empty extraction would record everything as a "correction" and poison the
+  // few-shot learning loop, so corrections are voice-only.
+  const corrections = draft.raw_transcript ? computeCorrections(draft.extracted, confirmedData) : {};
+
+  // 0. Mark the draft confirmed FIRST (idempotency gate: a double-tap of the confirm
+  //    button must not create the clinical records twice). Guarded on pending_review.
+  const { data: claimed, error: claimErr } = await supabase
+    .from('consultation_drafts')
+    .update({
+      status: 'confirmed',
+      confirmed_data: confirmedData,
+      corrections: Object.keys(corrections).length ? corrections : null,
+      confirmed_by: staffId || null,
+      confirmed_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', draft.id).eq('clinic_id', clinicId).eq('status', 'pending_review')
+    .select('id').maybeSingle();
+  if (claimErr) throw claimErr;
+  if (!claimed) {
+    const err = new Error('draft_already_processed');
+    err.status = 409;
+    throw err;
+  }
+
+  // 1. Treatment plan (critical — propagate failure). Continuation-aware: when a
+  //    confirmed sitting lands on a tooth that already has a matching active plan,
+  //    increment that plan's sittings instead of opening a duplicate plan.
+  let plan = null;
+  const continuing = treatments.find((t) => t.sitting_action === 'continued' || t.sitting_action === 'completed');
+  if (continuing && teeth.length) {
+    try {
+      const { data: candidates } = await supabase.from('treatment_plans')
+        .select('id, procedure_name, total_sittings, completed_sittings, treatment_teeth(tooth_number)')
+        .eq('patient_id', patientId).eq('clinic_id', clinicId)
+        .in('status', ['active', 'in_progress']);
+      const procWord = procedure.toLowerCase().split(' ')[0];
+      const match = (candidates || []).find((p) => {
+        const planTeeth = (p.treatment_teeth || []).map((l) => String(l.tooth_number));
+        return teeth.some((t) => planTeeth.includes(t))
+          && (p.procedure_name || '').toLowerCase().includes(procWord);
+      });
+      if (match) {
+        const newCompleted = (match.completed_sittings || 0) + 1;
+        const done = newCompleted >= (match.total_sittings || 1);
+        const { data: updated } = await supabase.from('treatment_plans')
+          .update({ completed_sittings: newCompleted, status: done ? 'completed' : 'active', updated_at: new Date().toISOString() })
+          .eq('id', match.id).select().single();
+        plan = updated;
+      }
+    } catch { /* fall through to creating a fresh plan */ }
+  }
+  if (!plan) {
+    plan = await repos.treatmentPlans.create({
+      patient_id: patientId,
+      dentist_id: dentistId,
+      clinic_id: clinicId || null,
+      diagnosis: confirmedData.diagnosis || null,
+      procedure_name: procedure,
+      total_sittings: sittings,
+      completed_sittings: 1,
+      estimated_cost: estimatedCost,
+      collected_amount: 0,
+      status: 'active',
+      start_date: todayStr,
+    });
+  }
 
   // 2. Visit record (non-fatal)
   let visit = null;
   try {
     visit = await repos.visits.create({
       patient_id: patientId, dentist_id: dentistId, clinic_id: clinicId || null,
-      visit_date: todayStr, procedure_name: procedure, tooth_number: toothNumber || null,
-      status: 'completed', raw_transcript: transcript || null, notes: notes || null,
-      sitting_number: 1, cost: estimatedCost ? parseFloat(estimatedCost) : null,
+      visit_date: todayStr, procedure_name: procedure, tooth_number: teeth[0] || null,
+      status: 'completed', raw_transcript: draft.raw_transcript || null,
+      notes: confirmedData.clinical_notes || null,
+      sitting_number: continuing ? (plan.completed_sittings || 1) : 1,
+      cost: estimatedCost || null,
       follow_up_date: followUpDate,
     });
+    // Link the visit back onto the draft (drafts are created before the visit exists).
+    await supabase.from('consultation_drafts')
+      .update({ visit_id: visit.id }).eq('id', draft.id);
   } catch (e) { /* non-fatal — logged by caller via audit metadata */ }
 
   // 2b. Multi-tooth links — one row per tooth covered by this procedure, tied to
@@ -121,28 +185,22 @@ async function completeConsultation(ctx) {
 
   // 3. Recommended appointments (non-fatal). Each is given a REAL free time on its
   //    date (availability-checked) so the receptionist sees a concrete slot to confirm
-  //    or edit — not a blank time. Source of the dates, in priority order:
-  //    (a) explicit dates the dentist dictated (ctx.appointments, resolved by Gemini),
-  //    (b) multi-sitting → one suggested session per remaining sitting (weekly),
-  //    (c) single-sitting with a follow-up date → one follow-up appointment.
+  //    or edit — not a blank time. Sources: remaining sittings (weekly), plus the
+  //    confirmed follow-up (always becomes an appointment unless a sitting already
+  //    lands on that date).
   const appointments = [];
-  let plan_specs = [];
-  const aiAppts = Array.isArray(ctx.appointments)
-    ? ctx.appointments.filter(a => a && /^\d{4}-\d{2}-\d{2}$/.test(String(a.date || '').trim()))
-    : [];
-  if (aiAppts.length) {
-    plan_specs = aiAppts.map((a, i) => ({
-      date: String(a.date).trim(),
-      sitting: Number(a.session || a.sitting) || i + 2,
-      purpose: (a.purpose || `${procedure} — Session ${i + 2}`).trim(),
-    }));
-  } else if (sittings > 1) {
-    for (let i = 2; i <= sittings; i++) {
-      const d = new Date(); d.setDate(d.getDate() + (i - 1) * 7);
-      plan_specs.push({ date: d.toISOString().split('T')[0], sitting: i, purpose: `${procedure} — Session ${i}` });
-    }
-  } else if (followUpDate) {
-    plan_specs.push({ date: followUpDate, sitting: 2, purpose: `${procedure} — Follow-up` });
+  const plan_specs = [];
+  const remainingFrom = (plan.completed_sittings || 1);
+  for (let i = remainingFrom + 1; i <= (plan.total_sittings || sittings); i++) {
+    const d = new Date(); d.setDate(d.getDate() + (i - remainingFrom) * 7);
+    plan_specs.push({ date: d.toISOString().split('T')[0], sitting: i, purpose: `${procedure} — Session ${i}` });
+  }
+  if (followUpDate && !plan_specs.some((s) => s.date === followUpDate)) {
+    plan_specs.push({
+      date: followUpDate,
+      sitting: plan_specs.length + 2,
+      purpose: followUpReason ? `Follow-up: ${followUpReason}` : `${procedure} — Follow-up`,
+    });
   }
 
   if (plan_specs.length) {
@@ -161,41 +219,80 @@ async function completeConsultation(ctx) {
     let { data: apptData, error: apptErr } = await supabase
       .from('appointments').insert(apptInserts.map(a => ({ ...a, duration_minutes: 30 }))).select();
     if (apptErr) ({ data: apptData } = await supabase.from('appointments').insert(apptInserts).select());
-    if (apptData) appointments.push(...apptData);
+    if (apptData) {
+      appointments.push(...apptData);
+      // 24h + 2h WhatsApp reminders per created appointment (non-fatal).
+      try {
+        const { scheduleAppointmentReminders } = require('../workers/reminders.worker');
+        for (const a of apptData) {
+          await scheduleAppointmentReminders({
+            appointmentId: a.id, clinicId, patientId,
+            appointmentDate: a.appointment_date, appointmentTime: a.appointment_time,
+          });
+        }
+      } catch { /* reminders must never block the consult */ }
+    }
   }
 
-  // 4. Prescription from transcript (non-fatal)
+  // 4. Prescription from the CONFIRMED data (non-fatal) — never re-extracted from
+  //    the transcript; what the doctor approved on the card is what gets stored.
+  //    Mapped into the legacy medicines jsonb shape the PDF/checkout screens read.
   let prescription = null;
-  if (transcript) {
+  const confirmedRx = Array.isArray(confirmedData.prescriptions) ? confirmedData.prescriptions : [];
+  if (confirmedRx.length) {
     try {
-      const extracted = await aiService.extractPrescription(transcript);
+      const medicines = confirmedRx.map((rx) => ({
+        name: rx.resolved_name || rx.medicine_name_span || '',
+        dose: rx.dose || '',
+        frequency: rx.frequency || '',
+        duration: rx.duration_days ? `${rx.duration_days} days` : '',
+        instructions: rx.instructions || '',
+        item_id: rx.resolved_item_id || null,
+        price_per_unit: rx.price_per_unit ?? null,
+      }));
       prescription = await repos.prescriptions.create({
         patient_id: patientId, dentist_id: dentistId, clinic_id: clinicId || null,
-        visit_id: visit?.id || null, queue_entry_id: queueId,
-        raw_voice: transcript, medicines: extracted.medicines || [],
-        instructions: extracted.instructions || null, follow_up: extracted.followUp || null,
+        visit_id: visit?.id || null, queue_entry_id: queueId || null,
+        raw_voice: draft.raw_transcript || null, medicines,
+        instructions: confirmedData.clinical_notes || null,
+        follow_up: followUpDate,
       }, '*, patients(name, age, gender, phone)');
     } catch (e) { /* non-fatal */ }
   }
 
-  // 5. Link plan + notes on queue entry AND move it to checkout. Without the status
-  //    change the patient never appears in the receptionist's "Ready for checkout"
-  //    list (the frontend's optimistic status gets overwritten on the next reload).
+  // 5. Lab case suggestion → DRAFT lab case for reception to complete. The lab_cases
+  //    table arrives with Phase 4 (migration 013); until then the suggestion simply
+  //    stays on the draft's confirmed_data — nothing is lost.
+  if (confirmedData.lab_case_suggestion?.type) {
+    try {
+      const sug = confirmedData.lab_case_suggestion;
+      await supabase.from('lab_cases').insert({
+        clinic_id: clinicId, patient_id: patientId, visit_id: visit?.id || null,
+        case_type: sug.type,
+        tooth_fdi: sug.tooth_fdi != null ? [sug.tooth_fdi] : [],
+        expected_date: sug.due_in_days ? addDays(sug.due_in_days) : null,
+        status: 'DRAFT', created_by: staffId || null,
+      });
+    } catch { /* Phase 4 table not present yet — suggestion kept on the draft */ }
+  }
+
+  // 6. Link plan + move the queue entry to checkout (queue consults only). Without
+  //    the status change the patient never appears in the receptionist's "Ready for
+  //    checkout" list.
   if (queueId) {
-    const updates = {
+    await supabase.from('queue_entries').update({
       treatment_plan_id: plan.id,
       status: 'ready_for_checkout',
       consultation_outcome: 'treatment_done',
+      draft_id: null,
       updated_at: new Date().toISOString(),
-    };
-    if (notes) updates.notes = notes;
-    await supabase.from('queue_entries').update(updates).eq('id', queueId).eq('clinic_id', clinicId);
+    }).eq('id', queueId).eq('clinic_id', clinicId);
   }
 
-  audit.log({ clinicId, staffId, requestId, action: 'CONSULTATION', entityType: 'treatment_plan',
-    entityId: plan.id, metadata: { queueId, patientId, hasVisit: !!visit, appts: appointments.length, hasRx: !!prescription } });
+  audit.log({ clinicId, staffId, requestId, action: 'CONSULTATION', entityType: 'consultation_draft',
+    entityId: draft.id, metadata: { queueId, patientId, planId: plan.id, hasVisit: !!visit, appts: appointments.length, hasRx: !!prescription, corrections: Object.keys(corrections).length } });
 
-  return { plan, visit, appointments, prescription };
+  return { plan, visit, appointments, prescription, corrections };
 }
 
 // ── recordPayment ─────────────────────────────────────────────────────────
@@ -266,20 +363,45 @@ async function createTreatmentPlan(ctx) {
 }
 
 // ── completeCheckout ──────────────────────────────────────────────────────
-// Marks a queue entry completed and optionally records a payment in one step.
+// Marks a queue entry completed, optionally records a payment, and decrements
+// stock for medicines the receptionist marked as dispensed. Dispensing is
+// NON-BLOCKING: stock accuracy matters, the patient walking out matters more —
+// failures (e.g. insufficient stock) come back as warnings, never errors.
 async function completeCheckout(ctx) {
-  const { clinicId, staffId, requestId, queueId, payment: pay } = ctx;
+  const { clinicId, staffId, requestId, queueId, payment: pay, medicinesDispensed } = ctx;
   let payment = null;
   if (pay && pay.amount) {
     payment = await recordPayment({ clinicId, staffId, requestId, queueEntryId: queueId, ...pay });
   }
+
+  let dispensing = [];
+  if (Array.isArray(medicinesDispensed) && medicinesDispensed.length) {
+    try {
+      const { dispenseMedicinesAtCheckout } = require('./inventory.service');
+      // The visit was created at draft-confirm — find it via the entry's draft
+      // so the stock movement references the right visit (best-effort).
+      let visitId = null;
+      try {
+        const { data: draft } = await supabase.from('consultation_drafts')
+          .select('visit_id').eq('queue_entry_id', queueId).eq('clinic_id', clinicId)
+          .eq('status', 'confirmed').order('confirmed_at', { ascending: false })
+          .limit(1).maybeSingle();
+        visitId = draft?.visit_id || null;
+      } catch { /* drafts table may not exist yet */ }
+      dispensing = await dispenseMedicinesAtCheckout({
+        clinicId, visitId, medicines: medicinesDispensed, staffId,
+      });
+    } catch (e) { /* never block checkout on inventory */ }
+  }
+
   const { data: queueEntry } = await supabase.from('queue_entries')
     .update({ status: 'completed', updated_at: new Date().toISOString() })
     .eq('id', queueId).eq('clinic_id', clinicId).select().maybeSingle();
 
+  const stockWarnings = dispensing.filter((d) => d.error);
   audit.log({ clinicId, staffId, requestId, action: 'CHECKOUT', entityType: 'queue_entry',
-    entityId: queueId, metadata: { hasPayment: !!payment } });
-  return { queueEntry, payment };
+    entityId: queueId, metadata: { hasPayment: !!payment, dispensed: dispensing.filter((d) => !d.error).length, stockWarnings: stockWarnings.length } });
+  return { queueEntry, payment, dispensing, stockWarnings };
 }
 
 // ── createClinic ──────────────────────────────────────────────────────────
@@ -340,7 +462,7 @@ async function joinClinic(ctx) {
 }
 
 module.exports = {
-  completeConsultation,
+  confirmConsultationDraft,
   recordPayment,
   createTreatmentPlan,
   completeCheckout,

@@ -1,16 +1,20 @@
 // Typed application errors + canonical error codes used in the response envelope.
 
 const ERROR_CODES = {
-  VALIDATION_ERROR: { status: 400 },
-  UNAUTHORIZED:     { status: 401 },
-  FORBIDDEN:        { status: 403 },
-  NOT_FOUND:        { status: 404 },
-  CONFLICT:         { status: 409 },
-  RATE_LIMITED:     { status: 429 },
-  AI_UNAVAILABLE:   { status: 503 },
-  AI_TIMEOUT:       { status: 504 },
-  AI_PARSE_ERROR:   { status: 502 },
-  INTERNAL:         { status: 500 },
+  VALIDATION_ERROR:  { status: 400 },
+  UNAUTHORIZED:      { status: 401 },
+  FORBIDDEN:         { status: 403 },
+  NOT_FOUND:         { status: 404 },
+  CONFLICT:          { status: 409 },
+  EXTRACTION_FAILED: { status: 422 }, // AI returned invalid/unparseable structured output
+  RATE_LIMITED:      { status: 429 },
+  AI_UNAVAILABLE:    { status: 503 },
+  STT_UNAVAILABLE:   { status: 503 }, // Sarvam (speech-to-text) down/unreachable
+  LLM_UNAVAILABLE:   { status: 503 }, // Gemini down/unreachable
+  SMS_UNAVAILABLE:   { status: 503 }, // OTP/SMS provider failed to send
+  AI_TIMEOUT:        { status: 504 },
+  AI_PARSE_ERROR:    { status: 502 }, // legacy alias — new code paths use EXTRACTION_FAILED
+  INTERNAL:          { status: 500 },
 };
 
 class AppError extends Error {
@@ -39,6 +43,7 @@ function codeForStatus(status) {
     case 403: return 'FORBIDDEN';
     case 404: return 'NOT_FOUND';
     case 409: return 'CONFLICT';
+    case 422: return 'EXTRACTION_FAILED';
     case 429: return 'RATE_LIMITED';
     case 503: return 'AI_UNAVAILABLE';
     case 504: return 'AI_TIMEOUT';

@@ -11,9 +11,16 @@ import Icon from '@/components/icons';
 import { SectionHeader, Chip, StatusChip, Avatar, EmptyState, SelectPill, Segmented } from '@/components/ui';
 import { TODAY } from '@/lib/data/patients';
 import { formatCurrency, formatCurrencyK, formatDate, formatDateLong, formatTime, parseDate, getInitials, hasComplications, clinicianFlags, MONTHS, DAYS, DAYS_FULL, getGreeting } from '@/lib/data/utils';
+import { listLabCases, getReceptionInbox, STATUS_META } from '@/lib/services/lab-case.service';
+import { listLowStock } from '@/lib/services/inventory.service';
 
 const APPT_DOT = { confirmed: 'var(--blue)', arrived: 'var(--yellow)', done: 'var(--green)', no_show: 'var(--red)', scheduled: 'var(--blue)', completed: 'var(--green)', cancelled: 'var(--red)' };
 const APPT_WORD = { confirmed: 'Confirmed', arrived: 'In chair', done: 'Done', no_show: 'No-show' };
+
+// Lab-case status buckets for the homepage operations card (mirrors the tracker).
+const LAB_ACTIVE = ['SENT', 'ACKNOWLEDGED', 'IN_PROGRESS'];
+const LAB_READY = ['READY', 'DISPATCHED'];
+const LAB_SETTLED = ['READY', 'DISPATCHED', 'RECEIVED', 'FITTED', 'CANCELLED']; // not "overdue" once here
 
 /* faint eyebrow label that sets a section without a box */
 function Eyebrow({ children, action }) {
@@ -37,6 +44,9 @@ function HomeScreen() {
   const procedures = useClinicalStore((s) => s.procedures);
   const bills = useClinicalStore((s) => s.bills);
   const [analytics, setAnalytics] = React.useState(null);
+  const [labCases, setLabCases] = React.useState([]);
+  const [lowStock, setLowStock] = React.useState([]);
+  const [inboxCount, setInboxCount] = React.useState(0);
 
   React.useEffect(() => {
     if (!started) return;
@@ -44,6 +54,20 @@ function HomeScreen() {
       .then(r => setAnalytics(r.data))
       .catch(() => {});
   }, [started]);
+
+  // Operations cards (lab cases + low stock + reception inbox). Each call is
+  // independent — allSettled so one failure never blanks the others; a failed
+  // fetch just leaves that card empty (logged, no user-facing error).
+  const loadOps = React.useCallback(() => {
+    if (!started) return;
+    Promise.allSettled([listLabCases({ open: 'true' }), listLowStock(), getReceptionInbox()])
+      .then(([lc, ls, inb]) => {
+        if (lc.status === 'fulfilled') setLabCases(lc.value || []); else console.error('[home] lab cases card failed', lc.reason);
+        if (ls.status === 'fulfilled') setLowStock(ls.value || []); else console.error('[home] low stock card failed', ls.reason);
+        if (inb.status === 'fulfilled') setInboxCount((inb.value || []).length); else console.error('[home] inbox count failed', inb.reason);
+      });
+  }, [started]);
+  React.useEffect(() => { loadOps(); }, [loadOps]);
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const pById = id => patients.find(p => p.id === id);
@@ -55,6 +79,26 @@ function HomeScreen() {
   const waiting = queue.filter(e => e.status === 'waiting').length;
   const inChair = queue.some(e => e.status === 'in_consultation');
   const queueCount = waiting + (inChair ? 1 : 0);
+
+  // ── Operations card derivations ──
+  const labIsOverdue = (c) => c.expected_date && c.expected_date < todayStr && !LAB_SETTLED.includes(c.status);
+  const labActive = labCases.filter(c => LAB_ACTIVE.includes(c.status)).length;
+  const labReady = labCases.filter(c => LAB_READY.includes(c.status)).length;
+  const labOverdue = labCases.filter(labIsOverdue).length;
+  const labTop = [...labCases]
+    .sort((a, b) => {
+      const ao = labIsOverdue(a) ? 0 : 1, bo = labIsOverdue(b) ? 0 : 1;
+      if (ao !== bo) return ao - bo; // overdue first
+      return String(a.expected_date || '9999').localeCompare(String(b.expected_date || '9999')); // then soonest due
+    })
+    .slice(0, 2);
+  const labSummary = [labActive ? `${labActive} active` : null, labReady ? `${labReady} ready` : null, labOverdue ? `${labOverdue} overdue` : null, inboxCount ? `${inboxCount} in inbox` : null].filter(Boolean).join(' · ');
+  const invOut = lowStock.filter(i => Number(i.stock_qty) <= 0).length;
+  const invLow = lowStock.filter(i => Number(i.stock_qty) > 0).length;
+  const lowTop = [...lowStock].sort((a, b) => Number(a.stock_qty) - Number(b.stock_qty)).slice(0, 3);
+  const invSummary = [invLow ? `${invLow} low` : null, invOut ? `${invOut} out of stock` : null].filter(Boolean).join(' · ');
+  const showLabCard = labCases.length > 0 || inboxCount > 0;
+  const showInvCard = lowStock.length > 0;
 
   // urgent alerts — medical flags on today's patients + outstanding balances
   const alerts = [];
@@ -191,7 +235,7 @@ function HomeScreen() {
                     <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', fontWeight: 600 }}>{t.ampm}</div>
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 16.5, fontWeight: 600 }}>{p ? p.name : 'Patient'}</div>
+                    <div style={{ fontSize: 16.5, fontWeight: 600 }}>{p?.name || v.patientName || 'Patient'}</div>
                     <div style={{ fontSize: 14, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{proc ? `${proc.type}${proc.tooth ? ' · Tooth ' + proc.tooth : ''}` : 'Consultation'}</div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
@@ -229,6 +273,80 @@ function HomeScreen() {
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* ── Operations: lab cases + inventory (reception/admin glance) ── */}
+      {(showLabCard || showInvCard) && (
+        <div style={{ padding: '26px 22px 0' }}>
+          <Eyebrow>Operations</Eyebrow>
+
+          {/* Lab cases summary — header taps through to the tracker, rows open the case */}
+          {showLabCard && (
+            <div className="card" style={{ overflow: 'hidden', marginBottom: showInvCard ? 10 : 0 }}>
+              <button onClick={() => router.push('/finance/lab-cases')} className="tap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', textAlign: 'left', background: 'transparent' }}>
+                <div style={{ width: 40, height: 40, borderRadius: 11, background: 'rgba(50,173,230,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <Icon name="flask" size={20} color="#1B86B8" />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 16, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    Lab cases
+                    {labOverdue > 0 ? <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--red)' }} />
+                      : labReady > 0 ? <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--green)' }} /> : null}
+                  </div>
+                  <div className="t-meta">{labSummary || 'All clear'}</div>
+                </div>
+                <Icon name="chevRight" size={16} color="var(--text-tertiary)" />
+              </button>
+              {labTop.map((c) => {
+                const overdue = labIsOverdue(c);
+                const meta = STATUS_META[c.status] || STATUS_META.DRAFT;
+                return (
+                  <button key={c.id} onClick={() => openSheet('labCaseDetail', { id: c.id, onChanged: loadOps })} className="rowtap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', borderTop: '1px solid var(--border-light)', textAlign: 'left', background: 'transparent' }}>
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: overdue ? 'var(--red)' : meta.dot, flexShrink: 0 }} />
+                    <div style={{ flex: 1, minWidth: 0, fontSize: 14.5, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {c.case_code} · {(c.case_type || '').replace(/_/g, ' ')}
+                    </div>
+                    <span style={{ fontSize: 12.5, fontWeight: 600, color: overdue ? 'var(--red)' : 'var(--text-secondary)', flexShrink: 0 }}>
+                      {overdue ? 'Overdue' : meta.label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Inventory low stock — header taps through, rows open the item */}
+          {showInvCard && (
+            <div className="card" style={{ overflow: 'hidden' }}>
+              <button onClick={() => router.push('/finance/inventory')} className="tap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', textAlign: 'left', background: 'transparent' }}>
+                <div style={{ width: 40, height: 40, borderRadius: 11, background: 'rgba(48,209,88,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <Icon name="pill" size={20} color="#1E8E3E" />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 16, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    Inventory
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: invOut > 0 ? 'var(--red)' : 'var(--amber)' }} />
+                  </div>
+                  <div className="t-meta">{invSummary || 'Stock healthy'}</div>
+                </div>
+                <Icon name="chevRight" size={16} color="var(--text-tertiary)" />
+              </button>
+              {lowTop.map((it) => {
+                const out = Number(it.stock_qty) <= 0;
+                return (
+                  <button key={it.id} onClick={() => openSheet('inventoryDetail', { item: it, onSaved: loadOps })} className="rowtap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', borderTop: '1px solid var(--border-light)', textAlign: 'left', background: 'transparent' }}>
+                    <div style={{ flex: 1, minWidth: 0, fontSize: 14.5, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {it.name}{it.strength ? ` ${it.strength}` : ''}
+                    </div>
+                    <span style={{ fontSize: 12.5, fontWeight: 700, color: out ? 'var(--red)' : 'var(--amber)', flexShrink: 0 }}>
+                      {out ? 'Out of stock' : `${Number(it.stock_qty)} left`}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 

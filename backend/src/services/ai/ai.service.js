@@ -8,41 +8,30 @@
 const sarvam = require('./providers/sarvam.provider');
 const gemini = require('./providers/gemini.provider');
 const mock = require('./providers/mock.provider');
-const consultationPrompt = require('./prompts/consultation.prompt');
 const prescriptionPrompt = require('./prompts/prescription.prompt');
 const receptionistPrompt = require('./prompts/receptionist.prompt');
 const schedulePrompt = require('./prompts/schedule.prompt');
+const inventoryPrompt = require('./prompts/inventory.prompt');
 const medicine = require('./parsers/medicine.parser');
 const { AppError } = require('../../utils/errors');
 const logger = require('../../utils/logger');
 
 const isDev = () => process.env.NODE_ENV !== 'production';
 
-function noProvider() {
-  return new AppError('AI_UNAVAILABLE', 'AI provider is not configured');
-}
+// Code-specific "not configured" errors so callers can tell WHICH provider is down:
+// STT (Sarvam) vs LLM (Gemini). Both map to HTTP 503.
+const noStt = () => new AppError('STT_UNAVAILABLE', 'Speech-to-text provider is not configured');
+const noLlm = () => new AppError('LLM_UNAVAILABLE', 'LLM provider is not configured');
 
 async function transcribeAudio(filePath, opts = {}) {
   if (sarvam.hasKey()) return sarvam.transcribe(filePath, opts);
   if (isDev()) { logger.warn('SARVAM_API_KEY missing — mock transcription (dev)'); return mock.transcribe(); }
-  throw noProvider();
+  throw noStt();
 }
 
-// generateClinicalNote(transcript, current?) — when `current` (an existing structured
-// note) is provided, the transcript is treated as a CORRECTION and merged on top:
-// only the fields the doctor mentions change; everything else is preserved.
-async function generateClinicalNote(transcript, current) {
-  const userContent = current
-    ? `CURRENT NOTE (JSON):\n${JSON.stringify(current)}\n\n` +
-      `DOCTOR'S SPOKEN CORRECTION (apply on top of the current note):\n${transcript}\n\n` +
-      `Return the FULL updated note in the exact same JSON schema. Change ONLY the fields the correction explicitly mentions; keep every other field EXACTLY as in CURRENT NOTE. Do not invent or reset unmentioned fields.`
-    : transcript;
-  if (gemini.hasKey()) {
-    return gemini.generate(consultationPrompt(), userContent, { temperature: 0.1, maxOutputTokens: 1024 });
-  }
-  if (isDev()) { logger.warn('GEMINI_API_KEY missing — mock clinical note (dev)'); return mock.clinicalNote(transcript); }
-  throw noProvider();
-}
+// (generateClinicalNote was the old sync consult flow — deleted in Phase 2.
+// The consult pipeline now lives in services/gemini-extraction.service.js,
+// called from workers/voice.worker.js with injected clinic/patient context.)
 
 async function extractPrescription(transcript) {
   let raw;
@@ -54,7 +43,7 @@ async function extractPrescription(transcript) {
     logger.warn('GEMINI_API_KEY missing — mock prescription (dev)');
     raw = mock.prescription();
   } else {
-    throw noProvider();
+    throw noLlm();
   }
   // All medicine output flows through the single canonical parser.
   return {
@@ -70,7 +59,17 @@ async function extractQueueContext(transcript) {
     return gemini.generate(receptionistPrompt(), transcript, { temperature: 0.1, maxOutputTokens: 512 });
   }
   if (isDev()) { logger.warn('GEMINI_API_KEY missing — mock queue context (dev)'); return mock.queueContext(transcript); }
-  throw noProvider();
+  throw noLlm();
+}
+
+// Inventory voice extraction — classify + extract only (see inventory.prompt.js).
+// temperature 0: this is transcription, not creativity.
+async function extractInventory(transcript, catalog = []) {
+  if (gemini.hasKey()) {
+    return gemini.generate(inventoryPrompt(catalog), transcript, { temperature: 0, maxOutputTokens: 800 });
+  }
+  if (isDev()) { logger.warn('GEMINI_API_KEY missing — mock inventory extraction (dev)'); return mock.inventory(transcript); }
+  throw noLlm();
 }
 
 // Scheduling INTENT only — never books or chooses slots (the deterministic engine does).
@@ -79,13 +78,13 @@ async function parseScheduleIntent(transcript) {
     return gemini.generate(schedulePrompt(), transcript, { temperature: 0.1, maxOutputTokens: 400 });
   }
   if (isDev()) { logger.warn('GEMINI_API_KEY missing — mock schedule intent (dev)'); return mock.scheduleIntent ? mock.scheduleIntent(transcript) : {}; }
-  throw noProvider();
+  throw noLlm();
 }
 
 module.exports = {
   transcribeAudio,
-  generateClinicalNote,
   extractPrescription,
   extractQueueContext,
   parseScheduleIntent,
+  extractInventory,
 };

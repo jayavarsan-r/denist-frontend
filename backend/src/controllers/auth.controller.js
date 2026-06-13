@@ -2,6 +2,8 @@ const supabase = require('../config/supabase');
 const jwt = require('jsonwebtoken');
 const transaction = require('../services/transaction.service');
 const { ok, fail } = require('../utils/response');
+const { getOtpProvider } = require('../providers/otp');
+const logger = require('../utils/logger');
 
 function signToken(payload) {
   return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '30d' });
@@ -31,7 +33,9 @@ async function ensureDentistId(req, { name } = {}) {
   return created.id;
 }
 
-// ── send OTP (unchanged) ──────────────────────────────────────────────────────
+// ── send OTP ──────────────────────────────────────────────────────────────────
+// Code generation/storage lives HERE; delivery is delegated to the OTP_PROVIDER
+// adapter (stub logs locally, msg91 sends a real SMS — config change, no code change).
 exports.sendOtp = async (req, res, next) => {
   try {
     const { phone } = req.body;
@@ -41,7 +45,8 @@ exports.sendOtp = async (req, res, next) => {
     // USE_DEV_OTP=true pins all phones to DEV_OTP (local dev only)
     const useDevOtp = process.env.USE_DEV_OTP === 'true' && process.env.DEV_OTP;
     const isDemoPhone = process.env.DEMO_PHONE && phone === process.env.DEMO_PHONE;
-    const otp = (useDevOtp || isDemoPhone)
+    const pinned = useDevOtp || isDemoPhone;
+    const otp = pinned
       ? (process.env.DEV_OTP || '012345')
       : (process.env.DEV_OTP_OTHER || Math.floor(100000 + Math.random() * 900000).toString());
 
@@ -49,6 +54,23 @@ exports.sendOtp = async (req, res, next) => {
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
     const { error } = await supabase.from('otp_codes').insert({ phone, code: otp, expires_at: expiresAt });
     if (error) throw error;
+
+    // Pinned dev/demo codes are known to the tester — no SMS needed for them.
+    if (!pinned) {
+      let sent;
+      try {
+        sent = await getOtpProvider().sendOtp(phone, otp);
+      } catch (provErr) {
+        logger.error('OTP provider send failed', { err: provErr.message });
+        sent = { success: false };
+      }
+      if (!sent.success) {
+        // Don't leave a live code for an SMS that never arrived.
+        await supabase.from('otp_codes').delete().eq('phone', phone);
+        return fail(res, 503, 'SMS_UNAVAILABLE', 'Could not send OTP — please try again');
+      }
+    }
+
     return ok(res, { message: 'OTP sent' });
   } catch (e) { next(e); }
 };

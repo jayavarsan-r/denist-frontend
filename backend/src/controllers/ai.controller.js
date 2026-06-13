@@ -4,6 +4,8 @@ const storageService = require('../services/storage.service');
 const aiService = require('../services/ai/ai.service');
 const logger = require('../utils/logger');
 const supabase = require('../config/supabase');
+const inventoryVoice = require('../services/inventory-voice.service');
+const audit = require('../services/audit.service');
 
 // Ensure upload directory exists
 const UPLOAD_DIR = '/tmp/dental-uploads';
@@ -73,22 +75,10 @@ exports.transcribe = async (req, res, next) => {
     res.json({ transcript, audioStoragePath, audioFileSizeKb });
   } catch (e) {
     cleanup(req.file.path);
-    if (typeof e.code === 'string' && e.code.startsWith('AI_')) {
-      return res.json({ transcript: '', warning: e.message });
-    }
+    // No 200-with-warning soft-fail: STT failures surface as real HTTP errors
+    // (503 STT_UNAVAILABLE / 504 AI_TIMEOUT) so callers can detect and retry.
     next(e);
   }
-};
-
-// POST /api/ai/generate-note — Gemini structuring of a doctor's transcript.
-exports.generateNote = async (req, res, next) => {
-  try {
-    const { transcript, current } = req.body;
-    if (!transcript) return res.status(400).json({ error: 'Transcript required' });
-    // `current` (optional): an existing structured note → merge the transcript as a correction.
-    const structured = await aiService.generateClinicalNote(transcript, current || null);
-    res.json({ structured });
-  } catch (e) { next(e); }
 };
 
 // POST /api/ai/parse-schedule — natural language → structured scheduling intent ONLY.
@@ -107,6 +97,23 @@ exports.extractPrescription = async (req, res, next) => {
     const { transcript } = req.body;
     if (!transcript) return res.status(400).json({ error: 'transcript required' });
     res.json(await aiService.extractPrescription(transcript));
+  } catch (e) { next(e); }
+};
+
+// POST /api/ai/extract-inventory — voice → inventory INTENT only (never writes).
+// Requires clinic context; resolution is clinic-scoped. The raw transcript is
+// recorded in the audit log (debugging) — it is never returned for display.
+exports.extractInventory = async (req, res, next) => {
+  try {
+    const { transcript } = req.body;
+    if (!transcript) return res.status(400).json({ error: 'transcript required' });
+    const result = await inventoryVoice.parseInventoryCommand(req.clinicId, transcript);
+    audit.log({
+      clinicId: req.clinicId, staffId: req.staffId, requestId: req.id,
+      action: 'VOICE_INVENTORY_PARSE', entityType: 'inventory_voice', entityId: null,
+      metadata: { transcript: String(transcript).slice(0, 500), intent: result.intent },
+    });
+    res.json(result);
   } catch (e) { next(e); }
 };
 
@@ -168,7 +175,10 @@ exports.extractPatient = async (req, res, next) => {
       },
     });
   } catch (e) {
+    // No silent all-null 200: extraction failures surface as real HTTP errors
+    // (422 EXTRACTION_FAILED / 503 LLM_UNAVAILABLE) so the client can fall back
+    // to manual entry knowing the AI did NOT run.
     logger.warn('extractPatient failed', { err: e.message });
-    res.json({ patient: { name: null, age: null, gender: null, bloodGroup: null, conditions: [], allergies: [], medications: [] } });
+    next(e);
   }
 };

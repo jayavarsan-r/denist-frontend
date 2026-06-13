@@ -5,6 +5,7 @@ const auth = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const v = require('../validators');
 const transaction = require('../services/transaction.service');
+const voice = require('../controllers/voice.controller');
 const { parsePagination, pageMeta } = require('../utils/pagination');
 
 // GET /api/queue — today's queue for the clinic
@@ -175,6 +176,7 @@ router.post('/', auth, validate(v.addToQueue), async (req, res, next) => {
 // PATCH /api/queue/:id — update status, outcome, assigned doctor, sort_order
 router.patch('/:id', auth, validate(v.patchQueue), async (req, res, next) => {
   try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
     const updates = {};
     if (req.body.status !== undefined)             updates.status = req.body.status;
     if (req.body.consultationOutcome !== undefined) updates.consultation_outcome = req.body.consultationOutcome;
@@ -293,6 +295,9 @@ router.get('/:id/checkout-summary', auth, async (req, res, next) => {
           name: m.name || '', dose: m.dose || m.dosage || '', frequency: m.frequency || '',
           duration: m.duration || '', timing: m.timing || '',
           slots: m.meal_timing_slots || m.slots || { breakfast: false, lunch: false, dinner: false },
+          // Inventory link (Phase 3): lets checkout offer a Dispense toggle with price.
+          item_id: m.item_id || null,
+          price_per_unit: m.price_per_unit ?? null,
         })) : [],
         instructions: presc?.instructions || '',
         prescriptionId: presc?.id || null,
@@ -301,39 +306,59 @@ router.get('/:id/checkout-summary', auth, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// POST /api/queue/:id/complete-consult — orchestrated by the transaction service:
-// treatment plan + visit + suggested appointments + prescription + queue link + audit.
-router.post('/:id/complete-consult', auth, validate(v.completeConsult), async (req, res, next) => {
+// POST /api/queue/:id/start-voice — async voice pipeline intake: uploads the audio,
+// creates a consultation_draft (status 'processing') and enqueues the voice job.
+// The Verification Card subscribes to the draft row; the queue board sees
+// recording_processing → draft_ready | voice_error on the entry.
+router.post('/:id/start-voice', auth, voice.uploadMiddleware, voice.startVoiceForQueue);
+
+// POST /api/queue/:id/manual-draft — manual ("type notes") entry point: an empty
+// draft so hand-typed consults pass through the same confirm gate as voice ones.
+router.post('/:id/manual-draft', auth, voice.createManualDraft);
+
+// POST /api/queue/:id/complete-consult — Phase 2: confirms an AI draft from the
+// Verification Card. Body: { draft_id, confirmed_data }. The URL is unchanged so
+// the frontend route doesn't break, but this is now the draft-confirm gate —
+// nothing clinical commits without it. The transaction marks the draft confirmed
+// (409 on double-submit), then creates plan + visit + teeth + appointments +
+// prescription, computes the corrections diff, and moves the entry to checkout.
+router.post('/:id/complete-consult', auth, validate(v.confirmDraft), async (req, res, next) => {
   try {
     if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
-    let { patientId } = req.body;
-    const { procedure, diagnosis, toothNumber, toothNumbers, totalSittings, estimatedCost, transcript, notes, followUp, appointments } = req.body;
+    const { draft_id: draftId, confirmed_data: confirmedData } = req.body;
 
-    // The queue entry already knows the patient — default from it so the client
-    // never has to resend patientId (was a silent 400 trap).
-    if (!patientId) {
-      const { data: entry } = await supabase.from('queue_entries')
-        .select('patient_id').eq('id', req.params.id).eq('clinic_id', req.clinicId).maybeSingle();
-      if (!entry) return res.status(404).json({ error: 'Queue entry not found' });
-      patientId = entry.patient_id;
+    const { data: draft } = await supabase.from('consultation_drafts')
+      .select('*')
+      .eq('id', draftId).eq('clinic_id', req.clinicId).eq('queue_entry_id', req.params.id)
+      .maybeSingle();
+    if (!draft) return res.status(404).json({ error: 'draft_not_found' });
+    if (draft.status !== 'pending_review') {
+      return res.status(409).json({ error: 'draft_already_processed', status: draft.status });
     }
 
-    const result = await transaction.completeConsultation({
+    const result = await transaction.confirmConsultationDraft({
       clinicId: req.clinicId, dentistId: req.dentistId, staffId: req.staffId, requestId: req.id,
-      queueId: req.params.id,
-      patientId, procedure, diagnosis, toothNumber, toothNumbers, totalSittings, estimatedCost, transcript, notes, followUp, appointments,
+      queueId: req.params.id, draft, confirmedData,
     });
     res.status(201).json(result);
-  } catch (e) { next(e); }
+  } catch (e) {
+    if (e.message === 'draft_already_processed') {
+      return res.status(409).json({ error: 'draft_already_processed' });
+    }
+    next(e);
+  }
 });
 
-// POST /api/queue/:id/checkout — mark completed + optional payment (transaction service)
+// POST /api/queue/:id/checkout — mark completed + optional payment + optional
+// medicine dispensing (stock decrement; non-blocking).
+// Body: { payment?, medicines_dispensed?: [{ item_id|resolved_item_id, qty_dispensed }] }
 router.post('/:id/checkout', auth, async (req, res, next) => {
   try {
     if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
     const result = await transaction.completeCheckout({
       clinicId: req.clinicId, staffId: req.staffId, requestId: req.id,
       queueId: req.params.id, payment: req.body?.payment || null,
+      medicinesDispensed: Array.isArray(req.body?.medicines_dispensed) ? req.body.medicines_dispensed : null,
     });
     res.json(result);
   } catch (e) { next(e); }
@@ -342,6 +367,7 @@ router.post('/:id/checkout', auth, async (req, res, next) => {
 // DELETE /api/queue/:id — remove from queue
 router.delete('/:id', auth, async (req, res, next) => {
   try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
     await supabase.from('queue_entries').delete().eq('id', req.params.id).eq('clinic_id', req.clinicId);
     res.json({ success: true });
   } catch (e) { next(e); }
@@ -350,6 +376,7 @@ router.delete('/:id', auth, async (req, res, next) => {
 // GET /api/queue/:id/context — consultation context screen data
 router.get('/:id/context', auth, async (req, res, next) => {
   try {
+    if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
     const { data: entry, error } = await supabase
       .from('queue_entries')
       .select(`
@@ -367,17 +394,20 @@ router.get('/:id/context', auth, async (req, res, next) => {
     const patientId = entry.patient_id;
     const today = new Date().toISOString().split('T')[0];
 
+    // patientId comes from a clinic-verified queue entry, but every sub-query still
+    // carries the clinic_id filter — the tenancy boundary holds even if a row was
+    // mis-stamped or the entry check changes later.
     const [plansRes, lastVisitRes, todayXraysRes] = await Promise.all([
       supabase.from('treatment_plans')
         .select('id, procedure_name, total_sittings, completed_sittings, pending_amount, status, estimated_cost, collected_amount')
-        .eq('patient_id', patientId).eq('status', 'active').limit(3),
+        .eq('patient_id', patientId).eq('clinic_id', req.clinicId).eq('status', 'active').limit(3),
       supabase.from('visits')
         .select('id, visit_date, procedure_name, notes, medications, cost, status')
-        .eq('patient_id', patientId)
+        .eq('patient_id', patientId).eq('clinic_id', req.clinicId)
         .order('visit_date', { ascending: false }).limit(1),
       supabase.from('xrays')
         .select('id, xray_type, date_taken, tooth_number, notes')
-        .eq('patient_id', patientId).eq('date_taken', today),
+        .eq('patient_id', patientId).eq('clinic_id', req.clinicId).eq('date_taken', today),
     ]);
 
     const pendingBalance = (plansRes.data || []).reduce((s, p) => s + (parseFloat(p.pending_amount) || 0), 0);

@@ -129,6 +129,9 @@ function CheckoutScreen({ entryId }) {
   const [editingCost, setEditingCost] = React.useState(false);
   const [collected, setCollected] = React.useState('');
   const [method, setMethod] = React.useState('UPI');
+  // Dispensing (Phase 3): per-medicine toggle + qty, keyed by medicine index.
+  // Default qty = duration_days × doses/day from the prescription.
+  const [dispense, setDispense] = React.useState({});
 
   // Source of truth: persisted consultation summary from the backend (works for the
   // receptionist / any session). Falls back to the doctor's same-session consult data.
@@ -213,10 +216,26 @@ function CheckoutScreen({ entryId }) {
       }
     }
     const summ = { patientName: p.name, procedure: `${c.procedure}${c.tooth ? ' · Tooth ' + c.tooth : ''}`, amount: paid };
-    checkout(entryId, summ);
+    // Stock decrement for medicines marked as handed over (resolved ones only).
+    const medicinesDispensed = (c.medicines || [])
+      .map((m, i) => ({ m, d: dispense[i] }))
+      .filter(({ m, d }) => m.item_id && d?.on && parseFloat(d.qty) > 0)
+      .map(({ m, d }) => ({ item_id: m.item_id, qty_dispensed: parseFloat(d.qty) }));
+    checkout(entryId, summ, medicinesDispensed.length ? medicinesDispensed : undefined);
     showToast(paid > 0 ? 'Checked out · ' + formatCurrency(paid) + ' collected' : 'Checked out');
     router.push('/reception');
   };
+
+  // Default dispense qty: duration ("5 days") × doses per day (OD/BD/TID/QID; SOS ≈ ½).
+  const defaultDispenseQty = (m) => {
+    const days = parseInt(String(m.duration || '').match(/\d+/)?.[0] || '1', 10);
+    const perDay = { OD: 1, BD: 2, TID: 3, QID: 4, SOS: 0.5 }[String(m.frequency || '').toUpperCase()] ?? 1;
+    return Math.max(1, Math.ceil(days * perDay));
+  };
+  const toggleDispense = (i, m) => setDispense((cur) => ({
+    ...cur,
+    [i]: cur[i]?.on ? { ...cur[i], on: false } : { on: true, qty: cur[i]?.qty ?? defaultDispenseQty(m) },
+  }));
 
   const openPrescriptionPdf = async (rxId) => {
     if (!rxId) { showToast('Prescription is still generating…'); return; }
@@ -345,12 +364,47 @@ function CheckoutScreen({ entryId }) {
                 <span className="t-section">B · L · D</span>
               </div>
               {c.medicines.map((m, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none' }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 15, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>{m.name} <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)' }}>{m.dose}</span></div>
-                    <div className="t-meta">{m.frequency} · {m.duration} · {m.timing}</div>
+                <div key={i} style={{ padding: '10px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 15, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>{m.name} <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)' }}>{m.dose}</span></div>
+                      <div className="t-meta">{m.frequency} · {m.duration} · {m.timing}{m.price_per_unit != null ? ` · ${formatCurrency(m.price_per_unit)}/unit` : ''}</div>
+                    </div>
+                    <MealTiming slots={m.slots} />
                   </div>
-                  <MealTiming slots={m.slots} />
+                  {/* Dispense from clinic stock — only for inventory-resolved medicines */}
+                  {m.item_id && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+                      <button
+                        onClick={() => toggleDispense(i, m)}
+                        style={{
+                          fontSize: 12.5, fontWeight: 700, borderRadius: 9, padding: '6px 12px',
+                          background: dispense[i]?.on ? 'var(--accent)' : 'rgba(60,60,67,0.06)',
+                          color: dispense[i]?.on ? 'var(--accent-ink)' : 'var(--text-secondary)',
+                          border: dispense[i]?.on ? 'none' : '1px solid var(--border)',
+                        }}
+                      >
+                        {dispense[i]?.on ? 'Dispensing ✓' : 'Dispense from stock'}
+                      </button>
+                      {dispense[i]?.on && (
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <input
+                            value={dispense[i].qty}
+                            onChange={(e) => setDispense((cur) => ({ ...cur, [i]: { ...cur[i], qty: e.target.value.replace(/\D/g, '') } }))}
+                            inputMode="numeric"
+                            className="tnum"
+                            style={{ width: 48, textAlign: 'center', fontSize: 14, fontWeight: 700, border: '1px solid var(--border)', borderRadius: 8, padding: '5px 0', outline: 'none', background: '#fff' }}
+                          />
+                          <span className="t-meta">units</span>
+                          {m.price_per_unit != null && parseFloat(dispense[i].qty) > 0 && (
+                            <span className="tnum" style={{ fontSize: 13, fontWeight: 700, color: '#1E8E3E' }}>
+                              {formatCurrency(parseFloat(dispense[i].qty) * m.price_per_unit)}
+                            </span>
+                          )}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
               {c.instructions && <div style={{ padding: '12px 14px', borderTop: '1px solid var(--border-light)', background: 'rgba(60,60,67,0.02)' }}><div className="t-section" style={{ marginBottom: 3 }}>Instructions</div><div style={{ fontSize: 13.5, lineHeight: 1.45, color: 'var(--text-primary)' }}>{c.instructions}</div></div>}

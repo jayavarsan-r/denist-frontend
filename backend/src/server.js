@@ -29,6 +29,9 @@ app.use(helmet());
 // and the Authorization header handles security (not CORS)
 app.use(cors({ origin: true }));
 app.use(morgan('dev'));
+// BSP webhook mounts BEFORE express.json(): signature verification needs the
+// raw body bytes (the route uses express.raw internally).
+app.use('/api/webhooks/whatsapp', require('./routes/whatsapp.webhook.routes'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 // Standardize every JSON response into { success, data } / { success, error }.
@@ -62,14 +65,48 @@ app.use('/api/clinic', require('./routes/clinic.routes'));
 app.use('/api/payments', require('./routes/payments.routes'));
 app.use('/api/payment-plans', require('./routes/payment-plans.routes'));
 app.use('/api/notifications', require('./routes/notifications.routes'));
+app.use('/api/consultation-drafts', require('./routes/consultation-drafts.routes'));
+app.use('/api/inventory', require('./routes/inventory.routes'));
+app.use('/api/lab-cases', require('./routes/lab-cases.routes'));
+app.use('/api/labs', require('./routes/labs.routes'));
+app.use('/api/reception', require('./routes/reception-inbox.routes'));
 
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 app.use(require('./middleware/errorHandler'));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, async () => {
   console.log(`DentAI Backend running on port ${PORT}`);
   const { runAudioCleanup } = require('./jobs/cleanup.job');
   setTimeout(() => runAudioCleanup(18).catch(console.error), 30000);
   setInterval(() => runAudioCleanup(18).catch(console.error), 24 * 60 * 60 * 1000);
+
+  // pg-boss job queue + workers. startQueue() is a no-op (with a loud warning)
+  // when DATABASE_URL is missing in dev — voice endpoints then answer 503 while
+  // everything else keeps working.
+  try {
+    const { startQueue } = require('./jobs/queue');
+    const boss = await startQueue();
+    if (boss) {
+      await require('./workers/voice.worker').registerVoiceWorker();
+      await require('./workers/whatsapp-outbound.worker').registerWhatsAppOutboundWorker();
+      await require('./workers/whatsapp-inbound.worker').registerWhatsAppInboundWorker();
+      await require('./workers/lab-timeouts.worker').registerLabTimeoutsWorker();
+      await require('./workers/reminders.worker').registerRemindersWorker();
+      await require('./workers/eod.worker').registerEodWorker();
+    }
+  } catch (e) {
+    console.error('[pg-boss] failed to start:', e.message);
+    if (process.env.NODE_ENV === 'production') process.exit(1);
+  }
 });
+
+// Graceful shutdown: stop taking jobs, finish in-flight ones, then exit.
+async function shutdown(signal) {
+  console.log(`${signal} received — shutting down`);
+  try { await require('./jobs/queue').stopQueue(); } catch { /* already stopped */ }
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 12000).unref();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
