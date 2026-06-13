@@ -219,7 +219,19 @@ async function confirmConsultationDraft(ctx) {
     let { data: apptData, error: apptErr } = await supabase
       .from('appointments').insert(apptInserts.map(a => ({ ...a, duration_minutes: 30 }))).select();
     if (apptErr) ({ data: apptData } = await supabase.from('appointments').insert(apptInserts).select());
-    if (apptData) appointments.push(...apptData);
+    if (apptData) {
+      appointments.push(...apptData);
+      // 24h + 2h WhatsApp reminders per created appointment (non-fatal).
+      try {
+        const { scheduleAppointmentReminders } = require('../workers/reminders.worker');
+        for (const a of apptData) {
+          await scheduleAppointmentReminders({
+            appointmentId: a.id, clinicId, patientId,
+            appointmentDate: a.appointment_date, appointmentTime: a.appointment_time,
+          });
+        }
+      } catch { /* reminders must never block the consult */ }
+    }
   }
 
   // 4. Prescription from the CONFIRMED data (non-fatal) — never re-extracted from

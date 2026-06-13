@@ -87,6 +87,16 @@ exports.create = async (req, res, next) => {
     } catch (e) {
       appointment = await repos.appointments.create(base);
     }
+
+    // 24h + 2h WhatsApp reminders (non-fatal; worker re-checks before sending).
+    try {
+      const { scheduleAppointmentReminders } = require('../workers/reminders.worker');
+      await scheduleAppointmentReminders({
+        appointmentId: appointment.id, clinicId: req.clinicId, patientId,
+        appointmentDate, appointmentTime,
+      });
+    } catch { /* reminders must never block booking */ }
+
     res.status(201).json({ appointment });
   } catch (e) { next(e); }
 };

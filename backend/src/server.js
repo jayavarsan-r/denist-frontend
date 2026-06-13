@@ -29,6 +29,9 @@ app.use(helmet());
 // and the Authorization header handles security (not CORS)
 app.use(cors({ origin: true }));
 app.use(morgan('dev'));
+// BSP webhook mounts BEFORE express.json(): signature verification needs the
+// raw body bytes (the route uses express.raw internally).
+app.use('/api/webhooks/whatsapp', require('./routes/whatsapp.webhook.routes'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 // Standardize every JSON response into { success, data } / { success, error }.
@@ -64,6 +67,9 @@ app.use('/api/payment-plans', require('./routes/payment-plans.routes'));
 app.use('/api/notifications', require('./routes/notifications.routes'));
 app.use('/api/consultation-drafts', require('./routes/consultation-drafts.routes'));
 app.use('/api/inventory', require('./routes/inventory.routes'));
+app.use('/api/lab-cases', require('./routes/lab-cases.routes'));
+app.use('/api/labs', require('./routes/labs.routes'));
+app.use('/api/reception', require('./routes/reception-inbox.routes'));
 
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 app.use(require('./middleware/errorHandler'));
@@ -83,6 +89,11 @@ const server = app.listen(PORT, async () => {
     const boss = await startQueue();
     if (boss) {
       await require('./workers/voice.worker').registerVoiceWorker();
+      await require('./workers/whatsapp-outbound.worker').registerWhatsAppOutboundWorker();
+      await require('./workers/whatsapp-inbound.worker').registerWhatsAppInboundWorker();
+      await require('./workers/lab-timeouts.worker').registerLabTimeoutsWorker();
+      await require('./workers/reminders.worker').registerRemindersWorker();
+      await require('./workers/eod.worker').registerEodWorker();
     }
   } catch (e) {
     console.error('[pg-boss] failed to start:', e.message);

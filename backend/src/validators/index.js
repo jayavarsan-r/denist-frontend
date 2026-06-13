@@ -252,6 +252,52 @@ const toothChartUpsert = z.object({
   notes: optStr,
 });
 
+// ── Lab cases (Phase 4 — NEW system, separate from lab orders) ────────────
+const LAB_CASE_TYPES = ['crown_pfm', 'crown_zirconia', 'bridge', 'denture_full', 'denture_partial', 'aligner', 'inlay_onlay', 'other'];
+const LAB_CASE_STATUSES = ['DRAFT', 'SENT', 'ACKNOWLEDGED', 'IN_PROGRESS', 'READY', 'DISPATCHED', 'RECEIVED', 'FITTED', 'ISSUE_RAISED', 'CANCELLED'];
+const fdiTooth = z.coerce.number().int().min(11).max(48);
+const createLabCase = z.object({
+  patientId: uuid,
+  labId: uuid.optional().nullable(),
+  visitId: uuid.optional().nullable(),
+  treatmentPlanId: uuid.optional().nullable(),
+  caseType: z.enum(LAB_CASE_TYPES),
+  toothFdi: z.array(fdiTooth).optional().default([]),
+  shade: optStr,
+  instructions: optStr,
+  expectedDate: z.string().optional().nullable(),
+  sendNow: z.coerce.boolean().optional().default(false),
+});
+const updateLabCase = z.object({
+  labId: uuid.optional().nullable(),
+  shade: optStr,
+  instructions: optStr,
+  expectedDate: z.string().optional().nullable(),
+  toothFdi: z.array(fdiTooth).optional(),
+});
+const labCaseStatus = z.object({ status: z.enum(LAB_CASE_STATUSES) });
+const createLab = z.object({
+  name: z.string().trim().min(1, 'name required'),
+  phoneNumbers: z.array(z.string().trim().min(8)).min(1, 'at least one phone number'),
+  preferredLanguage: z.enum(['en', 'ta']).optional(),
+  defaultTurnaroundDays: z.coerce.number().int().positive().optional(),
+  notes: optStr,
+  consentLogged: z.coerce.boolean().optional(),
+});
+const updateLab = z.object({
+  name: z.string().trim().min(1).optional(),
+  phoneNumbers: z.array(z.string().trim().min(8)).optional(),
+  preferredLanguage: z.enum(['en', 'ta']).optional(),
+  automationPaused: z.coerce.boolean().optional(),
+  defaultTurnaroundDays: z.coerce.number().int().positive().optional(),
+  notes: optStr,
+  consentLogged: z.coerce.boolean().optional(),
+});
+const resolveInboxItem = z.object({
+  labCaseId: uuid.optional().nullable(),
+  newStatus: z.enum(LAB_CASE_STATUSES).optional().nullable(),
+});
+
 // ── Inventory ─────────────────────────────────────────────────────────────
 const INVENTORY_CATEGORIES = ['medicine', 'consumable', 'equipment'];
 const createInventoryItem = z.object({
@@ -319,6 +365,8 @@ module.exports = {
   updateStaff,
   createLabOrder, updateLabOrder,
   createInventoryItem, updateInventoryItem, stockIn, stockAdjust, INVENTORY_CATEGORIES,
+  createLabCase, updateLabCase, labCaseStatus, createLab, updateLab, resolveInboxItem,
+  LAB_CASE_TYPES, LAB_CASE_STATUSES,
   sendNotification, notifyReminder, notifyPaymentDue, notifyRecall,
   toothChartUpsert, TOOTH_CONDITIONS,
   APPOINTMENT_STATUS, LAB_STATUS,

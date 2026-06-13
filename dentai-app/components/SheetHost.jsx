@@ -29,6 +29,8 @@ import PatientConsultSheet from '@/components/sheets/PatientConsultSheet';
 import ConsultRecordSheet from '@/components/sheets/ConsultRecordSheet';
 import AddInventorySheet from '@/components/sheets/AddInventorySheet';
 import InventoryDetailSheet from '@/components/sheets/InventoryDetailSheet';
+import NewLabCaseSheet from '@/components/sheets/NewLabCaseSheet';
+import LabCaseDetailSheet from '@/components/sheets/LabCaseDetailSheet';
 
 const SHEETS = {
   account: AccountSettingsSheet,
@@ -59,6 +61,8 @@ const SHEETS = {
   consultRecord: ConsultRecordSheet,
   addInventory: AddInventorySheet,
   inventoryDetail: InventoryDetailSheet,
+  newLabCase: NewLabCaseSheet,
+  labCaseDetail: LabCaseDetailSheet,
 };
 
 export default function SheetHost() {
