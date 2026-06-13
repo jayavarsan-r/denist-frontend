@@ -97,7 +97,8 @@ const server = app.listen(PORT, async () => {
     }
   } catch (e) {
     console.error('[pg-boss] failed to start:', e.message);
-    if (process.env.NODE_ENV === 'production') process.exit(1);
+    // Don't exit — let the server stay up and serve non-queue routes.
+    // Voice/WhatsApp endpoints will return 503 until DATABASE_URL is set.
   }
 });
 
