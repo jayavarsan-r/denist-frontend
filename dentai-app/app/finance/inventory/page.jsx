@@ -50,12 +50,17 @@ export default function InventoryPage() {
         title="Inventory"
         onBack={() => router.back()}
         right={(
-          <button
-            onClick={() => openSheet('addInventory', { onSaved: load })}
-            style={{ color: 'var(--blue)', fontSize: 15, fontWeight: 600 }}
-          >
-            Add item
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <button onClick={() => openSheet('inventoryVoice', { onSaved: load })} aria-label="Voice" style={{ color: 'var(--blue)', display: 'flex', alignItems: 'center' }}>
+              <Icon name="mic" size={20} color="var(--blue)" />
+            </button>
+            <button
+              onClick={() => openSheet('addInventory', { onSaved: load })}
+              style={{ color: 'var(--blue)', fontSize: 15, fontWeight: 600 }}
+            >
+              Add item
+            </button>
+          </div>
         )}
       />
 
