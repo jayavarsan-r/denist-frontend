@@ -1,8 +1,9 @@
 const { assertProvider, normalisePhone } = require('./whatsapp.adapter');
 const stub = require('./stub.whatsapp.provider');
 const aisensy = require('./aisensy.whatsapp.provider');
+const meta = require('./meta-cloud.provider');
 
-const PROVIDERS = { stub, aisensy };
+const PROVIDERS = { stub, aisensy, meta };
 
 // WHATSAPP_PROVIDER selects the implementation (default: stub). Read at call
 // time so tests and config changes need no restart. Going live = config change.

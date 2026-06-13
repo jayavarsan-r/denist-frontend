@@ -37,4 +37,67 @@ router.get('/dashboard', auth, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// GET /api/analytics/lab-turnaround — avg days SENT→RECEIVED per lab, last 90 days.
+// Backed by the lab_turnaround_stats() SQL function (migration 018).
+router.get('/lab-turnaround', auth, async (req, res, next) => {
+  try {
+    if (!req.clinicId) return ok(res, []);
+    const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await supabase.rpc('lab_turnaround_stats', {
+      p_clinic_id: req.clinicId,
+      p_since: since,
+    });
+    if (error) throw error;
+    return ok(res, data || []);
+  } catch (e) { next(e); }
+});
+
+// GET /api/analytics/medicine-spend — value of stock dispensed at checkout this month.
+router.get('/medicine-spend', auth, async (req, res, next) => {
+  try {
+    if (!req.clinicId) return ok(res, { total_dispensed: 0, month: null });
+    const monthStart = new Date();
+    monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
+
+    const { data, error } = await supabase
+      .from('stock_movements')
+      .select('qty, inventory_items(price_per_unit)')
+      .eq('clinic_id', req.clinicId)
+      .eq('direction', 'out')
+      .eq('reason', 'dispensed_checkout')
+      .gte('created_at', monthStart.toISOString());
+    if (error) throw error;
+
+    const total = (data || []).reduce(
+      (sum, m) => sum + Number(m.qty) * Number(m.inventory_items?.price_per_unit || 0),
+      0,
+    );
+    return ok(res, { total_dispensed: total, month: monthStart.toISOString() });
+  } catch (e) { next(e); }
+});
+
+// GET /api/analytics/eod-log — recent end-of-day summaries (from notification_logs).
+router.get('/eod-log', auth, async (req, res, next) => {
+  try {
+    if (!req.clinicId) return ok(res, []);
+    const limit = Math.min(Number(req.query.limit) || 7, 30);
+    const { data, error } = await supabase
+      .from('notification_logs')
+      .select('id, payload, status, sent_at, created_at')
+      .eq('clinic_id', req.clinicId)
+      .eq('type', 'eod_summary')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error) throw error;
+
+    const rows = (data || []).map((r) => ({
+      id: r.id,
+      summary: r.payload?.components?.[0] || '',
+      status: r.status,
+      at: r.sent_at || r.created_at,
+    }));
+    return ok(res, rows);
+  } catch (e) { next(e); }
+});
+
 module.exports = router;

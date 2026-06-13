@@ -46,7 +46,22 @@ async function send({ to, templateKey, language, components, mediaUrl, clinicId,
 
   const { getWhatsAppProvider } = require('../providers/whatsapp');
   const provider = getWhatsAppProvider();
-  const result = await provider.sendTemplate(to, templateName, components, mediaUrl);
+
+  // Per-clinic WhatsApp number for the Meta Cloud API. Each clinic sends from its
+  // own WABA number (clinics.meta_phone_number_id); null falls back to the
+  // META_PHONE_NUMBER_ID env var. Only looked up for the meta provider — stub and
+  // aisensy ignore the options arg, so we skip the extra query.
+  let phoneNumberId = null;
+  if ((process.env.WHATSAPP_PROVIDER || 'stub').toLowerCase() === 'meta' && clinicId) {
+    const { data: clinic } = await supabase.from('clinics')
+      .select('meta_phone_number_id').eq('id', clinicId).maybeSingle();
+    phoneNumberId = clinic?.meta_phone_number_id || null;
+  }
+
+  const result = await provider.sendTemplate(to, templateName, components, mediaUrl, {
+    language: language || 'en',
+    phoneNumberId,
+  });
 
   await supabase.from('notification_logs').insert({
     clinic_id: clinicId,

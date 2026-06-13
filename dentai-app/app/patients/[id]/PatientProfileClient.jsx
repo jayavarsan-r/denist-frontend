@@ -12,6 +12,7 @@ import { TODAY } from '@/lib/data/patients';
 import { formatCurrency, formatDate, formatTime, clinicianFlags, hasComplications, parseDate, MONTHS, formatCurrencyK } from '@/lib/data/utils';
 import { getProcedureColor, TOOTH_STATE_STYLE } from '@/lib/data/procedures';
 import { getToothHistory, getPatientCaseSheet } from '@/lib/services/patient.service';
+import { listLabCases, STATUS_META } from '@/lib/services/lab-case.service';
 import { getPatientXrays, uploadXray, uploadPatientPhoto } from '@/lib/services/xray.service';
 import BeforeAfterCapture from '@/components/sheets/BeforeAfterCapture';
 
@@ -487,10 +488,53 @@ function LabOrderCard({ order, openSheet, markLabReceived }) {
 }
 
 function LabTab({ p, labOrders, openSheet, markLabReceived }) {
+  // NEW lab_cases (Phase 4 WhatsApp-tracked tracker) — shown above the legacy
+  // lab_orders, which stay as read-only "Previous records".
+  const [cases, setCases] = useState([]);
+  const [loadingCases, setLoadingCases] = useState(true);
+  const loadCases = React.useCallback(() => {
+    listLabCases({ patient_id: p.id })
+      .then((rows) => setCases(rows || []))
+      .catch(() => setCases([]))
+      .finally(() => setLoadingCases(false));
+  }, [p.id]);
+  useEffect(() => { loadCases(); }, [loadCases]);
+
   const labs = labOrders.filter(l => l.patientId === p.id);
   return (
     <div>
-      <SectionHeader>Lab orders for this patient</SectionHeader>
+      <SectionHeader>Lab cases</SectionHeader>
+      {loadingCases ? (
+        <div className="card" style={{ marginBottom: 12, padding: 20, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>Loading…</div>
+      ) : cases.length === 0 ? (
+        <div className="card" style={{ marginBottom: 12 }}><EmptyState icon="flask" title="No lab cases" hint="Crowns, dentures & aligners tracked over WhatsApp" /></div>
+      ) : (
+        <div className="card" style={{ overflow: 'hidden', marginBottom: 12 }}>
+          {cases.map((c, i) => {
+            const meta = STATUS_META[c.status] || STATUS_META.DRAFT;
+            return (
+              <button key={c.id} onClick={() => openSheet('labCaseDetail', { id: c.id, onChanged: loadCases })} className="rowtap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {c.case_code}
+                    <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)' }}>{(c.case_type || '').replace(/_/g, ' ')}</span>
+                  </div>
+                  <div className="t-meta">
+                    {c.labs?.name || 'No lab yet'}{c.expected_date ? ` · due ${formatDate(c.expected_date)}` : ''}
+                  </div>
+                </div>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 700, padding: '3px 9px', borderRadius: 99, background: 'rgba(60,60,67,0.06)', flexShrink: 0 }}>
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: meta.dot }} />
+                  {meta.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <PrimaryButton onClick={() => openSheet('newLabCase', { patientId: p.id, onSaved: loadCases })} style={{ marginBottom: 22 }}>+ New lab case</PrimaryButton>
+
+      <SectionHeader>Previous records</SectionHeader>
       {labs.length === 0 ? <div className="card" style={{ marginBottom: 16 }}><EmptyState icon="flask" title="No lab orders" /></div> :
         labs.map(l => <LabOrderCard key={l.id} order={l} openSheet={openSheet} markLabReceived={markLabReceived} />)}
       <PrimaryButton onClick={() => openSheet('newLab', { patientId: p.id })} style={{ marginTop: 6 }}>+ New lab order</PrimaryButton>

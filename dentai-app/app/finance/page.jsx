@@ -7,6 +7,7 @@ import Icon from '@/components/icons';
 import { Avatar } from '@/components/ui';
 import { TODAY } from '@/lib/data/patients';
 import { formatCurrency, formatDate, parseDate, MONTHS } from '@/lib/data/utils';
+import { apiClient } from '@/lib/api/client';
 
 function daysBetween(a, b) { return Math.round((parseDate(b) - parseDate(a)) / 86400000); }
 
@@ -33,6 +34,9 @@ function FinanceScreen() {
   const loadPendingPlans = useClinicalStore((s) => s.loadPendingPlans);
   const today = TODAY;
   const [showAllTx, setShowAllTx] = React.useState(false);
+  const [labTurnaround, setLabTurnaround] = React.useState([]);
+  const [medSpend, setMedSpend] = React.useState(null);
+  const [eodLog, setEodLog] = React.useState([]);
 
   // Everything on this page is clinic-wide and API-backed: collection totals,
   // who still owes (treatment plans with a balance), payments ledger, lab orders.
@@ -41,6 +45,20 @@ function FinanceScreen() {
     loadPendingPlans();
     loadClinicPayments();
     loadLabOrders();
+  }, []);
+
+  // Phase 5 analytics — each independent (allSettled); a section stays hidden if
+  // its endpoint is unavailable (e.g. older deployment) or returns nothing.
+  React.useEffect(() => {
+    Promise.allSettled([
+      apiClient.get('/api/analytics/lab-turnaround'),
+      apiClient.get('/api/analytics/medicine-spend'),
+      apiClient.get('/api/analytics/eod-log', { params: { limit: 7 } }),
+    ]).then(([lt, ms, eod]) => {
+      if (lt.status === 'fulfilled') setLabTurnaround(lt.value.data || []);
+      if (ms.status === 'fulfilled') setMedSpend(ms.value.data || null);
+      if (eod.status === 'fulfilled') setEodLog(eod.value.data || []);
+    });
   }, []);
 
   const pending = pendingPlans
@@ -138,6 +156,58 @@ function FinanceScreen() {
             <Icon name="chevRight" size={16} color="var(--text-tertiary)" />
           </button>
         </div>
+
+        {/* ── Insights (Phase 5): lab turnaround · medicine spend · daily summaries ── */}
+        {medSpend && (
+          <div style={{ padding: '28px 22px 0' }}>
+            <Eyebrow>Medicine dispensed · {monthName}</Eyebrow>
+            <div className="card" style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 11, background: 'rgba(48,209,88,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <Icon name="pill" size={20} color="#1E8E3E" />
+              </div>
+              <div style={{ flex: 1 }}>
+                <div className="tnum" style={{ fontSize: 21, fontWeight: 700, letterSpacing: '-0.02em' }}>{formatCurrency(medSpend.total_dispensed || 0)}</div>
+                <div className="t-meta">Stock value dispensed at checkout this month</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {labTurnaround.length > 0 && (
+          <div style={{ padding: '28px 22px 0' }}>
+            <Eyebrow>Lab turnaround · last 90 days</Eyebrow>
+            <div className="card" style={{ overflow: 'hidden' }}>
+              {labTurnaround.map((r, i) => (
+                <div key={`${r.lab_name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 15, fontWeight: 600 }}>{r.lab_name}</div>
+                    <div className="t-meta">{r.case_count} case{Number(r.case_count) === 1 ? '' : 's'} delivered</div>
+                  </div>
+                  <div className="tnum" style={{ fontSize: 17, fontWeight: 700, flexShrink: 0 }}>
+                    {r.avg_days}<span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)' }}> d avg</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {eodLog.length > 0 && (
+          <div style={{ padding: '28px 22px 0' }}>
+            <Eyebrow>Daily summaries</Eyebrow>
+            <div className="card" style={{ overflow: 'hidden' }}>
+              {eodLog.map((e, i) => (
+                <div key={e.id} style={{ padding: '11px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                    <span className="t-meta">{e.at ? formatDate(String(e.at).slice(0, 10)) : ''}</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: e.status === 'sent' ? '#1E8E3E' : 'var(--text-tertiary)' }}>{e.status === 'sent' ? 'Sent' : (e.status || '')}</span>
+                  </div>
+                  {e.summary && <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', marginTop: 3, whiteSpace: 'pre-wrap' }}>{e.summary}</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* lab payments — operational states, not a ledger */}
         <div style={{ padding: '28px 22px 0' }}>
