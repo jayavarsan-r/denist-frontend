@@ -9,6 +9,7 @@ const { buildConsultationContext } = require('../services/consultation-context.s
 const { extractFromTranscript } = require('../services/gemini-extraction.service');
 const { runSafetyChecks } = require('../services/safety-net.service');
 const { resolveMedicineSpan } = require('../services/inventory.service');
+const sheets = require('../services/sheets-logger.service');
 
 const QUEUE_NAME = 'voice-processing';
 
@@ -43,6 +44,10 @@ async function handleVoiceJob(data, job) {
 
   // currentStage powers pipeline.failed so we always know WHERE it broke.
   let currentStage = 'init';
+  // Hoisted so the Google Sheet row carries whatever STT/Gemini data we managed to
+  // gather even when a LATER stage throws (the catch block needs them in scope).
+  let sttSummary = null;
+  let geminiSummary = null;
   log('pipeline.started', { patientId });
 
   // Re-entry safe: a pg-boss retry resets the draft to processing.
@@ -81,6 +86,13 @@ async function handleVoiceJob(data, job) {
       emptyChunkCount: sttRaw.emptyChunkCount ?? 0,
       transcriptLength: (transcript || '').length,
     });
+    sttSummary = {
+      duration: sttRaw.duration ?? null,
+      chunks: sttRaw.chunkCount ?? null,
+      emptyChunks: sttRaw.emptyChunkCount ?? 0,
+      transcriptLength: (transcript || '').length,
+      timeMs: sttRaw.processingTimeMs ?? sttRaw.sttCallMs ?? null,
+    };
     if (!transcript || !transcript.trim()) {
       throw Object.assign(new Error('empty transcript'), { code: 'STT_EMPTY' });
     }
@@ -119,6 +131,12 @@ async function handleVoiceJob(data, job) {
       droppedFieldCount: droppedCount,
       lowConfidenceCount: lowConfidence.length,
     });
+    geminiSummary = {
+      timeMs: telemetry.processingTimeMs ?? null,
+      keyUsed: telemetry.keyIndexUsed ?? null,
+      salvageUsed: !!salvageUsed,
+      droppedFields: droppedCount,
+    };
 
     // validation.completed - what Zod rejected (surfaced, never hidden).
     currentStage = 'validation';
@@ -182,6 +200,15 @@ async function handleVoiceJob(data, job) {
     }
 
     log('pipeline.completed', { flags: safetyFlags.length, droppedFieldCount: droppedCount });
+
+    // Clinic-day visibility (fire-and-forget; never awaited, never throws). One row
+    // per run. Notes surface the same uncertainty the doctor sees on the card.
+    sheets.logConsultationRun({
+      ...base, success: true, stt: sttSummary, gemini: geminiSummary,
+      notes: safetyFlags.length
+        ? `${safetyFlags.length} warning(s): ${[...new Set(safetyFlags.map((f) => f.type))].join(', ')}`
+        : '',
+    });
   } catch (err) {
     const known = ['STT_UNAVAILABLE', 'LLM_UNAVAILABLE', 'EXTRACTION_FAILED', 'AI_TIMEOUT', 'STT_EMPTY', 'RATE_LIMITED'];
     const errorCode = known.includes(err.code) ? err.code : 'UNKNOWN_ERROR';
@@ -207,6 +234,14 @@ async function handleVoiceJob(data, job) {
       message: err.message,
       stack: (err.stack || '').split('\n').slice(0, 4).join(' | '),
     });
+
+    // Failures are the whole point of the sheet — log them too (fire-and-forget),
+    // carrying whatever STT/Gemini data we gathered before the break.
+    sheets.logConsultationRun({
+      ...base, success: false, stt: sttSummary, gemini: geminiSummary,
+      notes: `FAILED @ ${currentStage} — ${errorCode}: ${(err.message || '').slice(0, 160)}`,
+    });
+
     throw err; // pg-boss retries (retryLimit set at send time)
   } finally {
     if (tmpFile) { try { fs.unlinkSync(tmpFile); } catch { /* ignore */ } }

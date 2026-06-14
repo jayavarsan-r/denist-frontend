@@ -118,6 +118,10 @@ async function confirmConsultationDraft(ctx) {
     timestamp: new Date().toISOString(),
     doctorEdited: editedFields.length > 0, editedFields,
   });
+  // Doctor Edit column on the run's sheet row (fire-and-forget; never blocks confirm).
+  require('./sheets-logger.service').logVerification({
+    draftId: draft.id, clinicId, doctorEdited: editedFields.length > 0, editedFields,
+  });
 
   // 1. Treatment plan (critical — propagate failure). Continuation-aware: when a
   //    confirmed sitting lands on a tooth that already has a matching active plan,

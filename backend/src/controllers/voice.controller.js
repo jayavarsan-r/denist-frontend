@@ -5,6 +5,8 @@ const storageService = require('../services/storage.service');
 const { getQueue, isQueueAvailable } = require('../jobs/queue');
 const { QUEUE_NAME } = require('../workers/voice.worker');
 const { computeCorrections } = require('../utils/draft-diff');
+const logger = require('../utils/logger');
+const sheets = require('../services/sheets-logger.service');
 
 const UPLOAD_DIR = '/tmp/dental-uploads';
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -198,10 +200,12 @@ exports.reviewDraft = async (req, res, next) => {
     }
 
     const patch = { status, updated_at: new Date().toISOString() };
+    let editedFields = [];
     if (status === 'confirmed') {
       const corrections = computeCorrections(draft.extracted, confirmedData || {});
+      editedFields = Object.keys(corrections);
       patch.confirmed_data = confirmedData || null;
-      patch.corrections = Object.keys(corrections).length ? corrections : null;
+      patch.corrections = editedFields.length ? corrections : null;
       patch.confirmed_by = req.staffId || null;
       patch.confirmed_at = new Date().toISOString();
     }
@@ -210,6 +214,23 @@ exports.reviewDraft = async (req, res, next) => {
       .update(patch).eq('id', draft.id).eq('clinic_id', req.clinicId)
       .select('id, status, corrections').single();
     if (error) throw error;
+
+    // Verification visibility for the profile-consult path (the queue path logs this
+    // in transaction.service). doctorEdited/editedFields show how often + where the
+    // AI needed correction; the sheet update is fire-and-forget and never blocks.
+    if (status === 'confirmed') {
+      logger.info('consultation.confirmed', {
+        event: 'consultation.confirmed', requestId: req.id, draftId: draft.id,
+        clinicId: req.clinicId, queueEntryId: draft.queue_entry_id || null,
+        timestamp: new Date().toISOString(),
+        doctorEdited: editedFields.length > 0, editedFields,
+      });
+      sheets.logVerification({
+        draftId: draft.id, clinicId: req.clinicId,
+        doctorEdited: editedFields.length > 0, editedFields,
+      });
+    }
+
     res.json({ draft: updated });
   } catch (e) { next(e); }
 };
