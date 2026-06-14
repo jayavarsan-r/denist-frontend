@@ -7,6 +7,7 @@
 const supabase = require('../config/supabase');
 const repos = require('./../repositories');
 const audit = require('./audit.service');
+const logger = require('../utils/logger');
 const { outstandingFor, isOverpayment } = require('../utils/payment-math');
 const { badRequest } = require('../utils/errors');
 
@@ -107,6 +108,16 @@ async function confirmConsultationDraft(ctx) {
     err.status = 409;
     throw err;
   }
+
+  // consultation.confirmed — the doctor accepted the draft (idempotent: only logged
+  // once, after the status-guarded claim wins). doctorEdited/editedFields tell us how
+  // often and where the AI needed correction.
+  const editedFields = Object.keys(corrections);
+  logger.info('consultation.confirmed', {
+    event: 'consultation.confirmed', requestId, draftId: draft.id, clinicId, queueEntryId: queueId,
+    timestamp: new Date().toISOString(),
+    doctorEdited: editedFields.length > 0, editedFields,
+  });
 
   // 1. Treatment plan (critical — propagate failure). Continuation-aware: when a
   //    confirmed sitting lands on a tooth that already has a matching active plan,

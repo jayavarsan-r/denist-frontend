@@ -57,9 +57,12 @@ describe('voice worker pipeline', () => {
   test('happy path: draft filled, flags computed, queue entry → draft_ready', async () => {
     sarvam.transcribe.mockResolvedValue({ transcript: 'deep caries 36, started root canal, amoxicillin five days' });
     buildConsultationContext.mockResolvedValue(CTX);
-    extractFromTranscript.mockResolvedValue({ data: EXTRACTED, lowConfidence: [], raw: { mocked: true } });
+    extractFromTranscript.mockResolvedValue({ data: EXTRACTED, lowConfidence: [], droppedCount: 0, salvageUsed: false, raw: { mocked: true }, telemetry: {} });
     global.__sbResolver = (table) => {
       if (table === 'inventory_items') return { data: [], error: null }; // no match yet (Phase 3)
+      // The status-guarded persist (.eq status 'processing' .select .maybeSingle)
+      // must return the row so the worker proceeds past the idempotency guard.
+      if (table === 'consultation_drafts') return { data: { id: 'D1' }, error: null };
       return { data: null, error: null };
     };
 
@@ -99,7 +102,8 @@ describe('voice worker pipeline', () => {
   test('profile consult (no queueEntryId): no queue_entries write at all', async () => {
     sarvam.transcribe.mockResolvedValue({ transcript: 'scaling done' });
     buildConsultationContext.mockResolvedValue(CTX);
-    extractFromTranscript.mockResolvedValue({ data: { ...EXTRACTED, prescriptions: [] }, lowConfidence: [], raw: {} });
+    extractFromTranscript.mockResolvedValue({ data: { ...EXTRACTED, prescriptions: [] }, lowConfidence: [], droppedCount: 0, salvageUsed: false, raw: {}, telemetry: {} });
+    global.__sbResolver = (table) => (table === 'consultation_drafts' ? { data: { id: 'D1' }, error: null } : { data: null, error: null });
 
     await handleVoiceJob({ ...JOB, queueEntryId: null });
 

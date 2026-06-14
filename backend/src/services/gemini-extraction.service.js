@@ -41,6 +41,66 @@ const DraftSchema = z.object({
   unclear_spans:  z.array(z.string()).default([]),
 });
 
+// ── Gemini responseSchema (structural mirror of DraftSchema) ────────────────────
+// This is a Gemini OpenAPI-subset schema (NOT JSON Schema / Zod). It pins the OUTPUT
+// SHAPE — exact keys, nesting and enums — so flash-lite cannot drift the structure on
+// messy dictation (renamed/omitted/renested fields). It deliberately does NOT encode
+// value constraints Gemini can't reliably honour (the FDI %10 rule, "positive int"):
+// Zod still runs afterwards and remains the authoritative validator + salvage layer.
+// Nullable scalars let the model return null when unsure (the prompt's core rule).
+const GEMINI_DRAFT_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    treatments: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          procedure_name_span: { type: 'STRING', nullable: true },
+          procedure_code:      { type: 'STRING', nullable: true },
+          tooth_fdi:           { type: 'INTEGER', nullable: true },
+          sitting_action:      { type: 'STRING', nullable: true, enum: ['completed', 'started', 'continued'] },
+          sitting_number:      { type: 'INTEGER', nullable: true },
+          notes:               { type: 'STRING', nullable: true },
+        },
+      },
+    },
+    prescriptions: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          medicine_name_span: { type: 'STRING' },
+          dose:               { type: 'STRING', nullable: true },
+          frequency:          { type: 'STRING', nullable: true, enum: ['OD', 'BD', 'TID', 'QID', 'SOS'] },
+          duration_days:      { type: 'INTEGER', nullable: true },
+          instructions:       { type: 'STRING', nullable: true },
+        },
+      },
+    },
+    follow_up: {
+      type: 'OBJECT',
+      nullable: true,
+      properties: {
+        in_days: { type: 'INTEGER', nullable: true },
+        reason:  { type: 'STRING', nullable: true },
+      },
+    },
+    lab_case_suggestion: {
+      type: 'OBJECT',
+      nullable: true,
+      properties: {
+        type:        { type: 'STRING', nullable: true, enum: ['crown_pfm', 'crown_zirconia', 'bridge', 'denture_full', 'denture_partial', 'aligner', 'inlay_onlay', 'other'] },
+        tooth_fdi:   { type: 'INTEGER', nullable: true },
+        due_in_days: { type: 'INTEGER', nullable: true },
+      },
+    },
+    clinical_notes: { type: 'STRING', nullable: true },
+    unclear_spans:  { type: 'ARRAY', items: { type: 'STRING' } },
+  },
+  required: ['treatments', 'prescriptions', 'clinical_notes', 'unclear_spans'],
+};
+
 // ── Prompt ───────────────────────────────────────────────────────────────────
 
 const SYSTEM = `You are a dental documentation assistant at an Indian dental clinic. Extract structured data from the dentist's voice note.
@@ -114,18 +174,27 @@ TRANSCRIPT TO EXTRACT:
 }
 
 // ── Main extraction ──────────────────────────────────────────────────────────
-// Returns { data, lowConfidence, raw }:
+// Returns { data, lowConfidence, droppedCount, salvageUsed, raw, telemetry }:
 //   data          — schema-shaped object (full parse, or per-section salvage)
 //   lowConfidence — field paths that failed validation → amber on the card
+//   droppedCount  — array entries Gemini returned but Zod could NOT validate. These
+//                   are NOT silently discarded: the count is surfaced on the card
+//                   ("N items could not be confidently understood") so the doctor
+//                   reviews rather than never seeing them.
+//   salvageUsed   — true when the full parse failed and per-section salvage ran
 //   raw           — Gemini's parsed JSON before validation (audit trail)
+//   telemetry     — { model, keyIndexUsed, processingTimeMs, passes } for logging
 // Throws typed AppErrors (LLM_UNAVAILABLE 503 / EXTRACTION_FAILED 422) from the
 // provider for real failures.
 async function extractFromTranscript(transcript, ctx) {
   // gemini.generate handles key rotation, JSON mode, fence-stripping and throws
   // LLM_UNAVAILABLE / EXTRACTION_FAILED / AI_TIMEOUT — exactly what the worker needs.
+  const telemetry = {};
   const parsed = await gemini.generate(SYSTEM, buildPrompt(transcript, ctx), {
     temperature: 0,
     maxOutputTokens: 2048,
+    responseSchema: GEMINI_DRAFT_SCHEMA, // pin output shape; Zod below still validates values
+    telemetry,
   });
 
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -133,25 +202,37 @@ async function extractFromTranscript(transcript, ctx) {
   }
 
   const result = DraftSchema.safeParse(parsed);
-  if (result.success) return { data: result.data, lowConfidence: [], raw: parsed };
+  if (result.success) {
+    return { data: result.data, lowConfidence: [], droppedCount: 0, salvageUsed: false, raw: parsed, telemetry };
+  }
 
-  // Partial salvage: drop the array entries / sections that failed, keep the rest,
-  // and report the failing paths so the Verification Card can mark them amber.
+  // Partial salvage: keep the entries that validate, but COUNT the ones that don't
+  // instead of dropping them invisibly. The failing field paths feed the amber
+  // markers; droppedCount feeds the visible "N items couldn't be read" banner.
   const lowConfidence = result.error.issues.map((i) => i.path.join('.') || '(root)');
+  let droppedCount = 0;
+  const countDropped = (n) => { droppedCount += n; };
   const salvage = DraftSchema.parse({
-    treatments:    salvageArray(parsed.treatments, TreatmentSchema),
-    prescriptions: salvageArray(parsed.prescriptions, PrescriptionSchema),
+    treatments:    salvageArray(parsed.treatments, TreatmentSchema, countDropped),
+    prescriptions: salvageArray(parsed.prescriptions, PrescriptionSchema, countDropped),
     follow_up:     salvageObject(parsed.follow_up, DraftSchema.shape.follow_up),
     lab_case_suggestion: salvageObject(parsed.lab_case_suggestion, DraftSchema.shape.lab_case_suggestion),
     clinical_notes: typeof parsed.clinical_notes === 'string' ? parsed.clinical_notes : null,
     unclear_spans:  Array.isArray(parsed.unclear_spans) ? parsed.unclear_spans.filter((s) => typeof s === 'string') : [],
   });
-  return { data: salvage, lowConfidence, raw: parsed };
+  return { data: salvage, lowConfidence, droppedCount, salvageUsed: true, raw: parsed, telemetry };
 }
 
-function salvageArray(value, itemSchema) {
+function salvageArray(value, itemSchema, onDrop) {
   if (!Array.isArray(value)) return [];
-  return value.map((item) => itemSchema.safeParse(item)).filter((r) => r.success).map((r) => r.data);
+  const kept = [];
+  let dropped = 0;
+  for (const item of value) {
+    const r = itemSchema.safeParse(item);
+    if (r.success) kept.push(r.data); else dropped++;
+  }
+  if (dropped && typeof onDrop === 'function') onDrop(dropped);
+  return kept;
 }
 
 function salvageObject(value, schema) {

@@ -17,6 +17,24 @@ function cleanup(p) { try { if (p) fs.unlinkSync(p); } catch { /* ignore */ } }
 // the voice job. The draft is created HERE, before the worker runs, so the client
 // gets a draft_id immediately and subscribes to that row for the result.
 async function startVoiceCore({ clinicId, patientId, queueEntryId, doctorId, dentistId, file }) {
+  // Duplicate-submission guard (queue consults). If an in-flight draft already
+  // exists for this queue entry (a double-tap of Stop, or a retry of start-voice),
+  // return THAT draft instead of creating a second draft + second worker job. This
+  // is the application-level half of "one consultation -> one draft -> one worker";
+  // the partial unique index in migration 017 is the race-proof backstop.
+  if (queueEntryId) {
+    const { data: active } = await supabase.from('consultation_drafts')
+      .select('id')
+      .eq('clinic_id', clinicId).eq('queue_entry_id', queueEntryId)
+      .in('status', ['processing', 'pending_review'])
+      .order('created_at', { ascending: false })
+      .limit(1).maybeSingle();
+    if (active) {
+      cleanup(file.path);
+      return { draftId: active.id, jobId: null, deduped: true };
+    }
+  }
+
   // Give the temp file its real extension so the stored object (and the worker's
   // ffmpeg input) carry the actual container type.
   const ext = (file.mimetype || '').includes('mp4') ? '.mp4'
@@ -43,7 +61,19 @@ async function startVoiceCore({ clinicId, patientId, queueEntryId, doctorId, den
       status: 'processing',
     })
     .select('id').single();
-  if (draftErr) throw draftErr;
+  if (draftErr) {
+    // Race backstop: the migration-017 partial unique index rejected a concurrent
+    // second draft for the same queue entry. Return the existing in-flight draft
+    // rather than surfacing a 500 - the first request's worker is already running.
+    if (draftErr.code === '23505' && queueEntryId) {
+      const { data: active } = await supabase.from('consultation_drafts')
+        .select('id').eq('clinic_id', clinicId).eq('queue_entry_id', queueEntryId)
+        .in('status', ['processing', 'pending_review'])
+        .order('created_at', { ascending: false }).limit(1).maybeSingle();
+      if (active) return { draftId: active.id, jobId: null, deduped: true };
+    }
+    throw draftErr;
+  }
 
   const jobId = await getQueue().send(QUEUE_NAME, {
     draftId: draft.id, clinicId, patientId, queueEntryId: queueEntryId || null,

@@ -2,8 +2,12 @@ const axios = require('axios');
 const { AppError } = require('../../../utils/errors');
 const logger = require('../../../utils/logger');
 
+// Model is pinned here (single source of truth). NOTE: the deployment .env comment
+// historically said "gemini-1.5-flash"; the model actually used is below — keep this
+// constant authoritative and the env comment in sync.
+const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
 const GEMINI_URL =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent';
+  `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
 
 // Collect every configured Gemini key, in priority order:
 //   GEMINI_API_KEYS   — comma-separated list (preferred for many keys)
@@ -14,8 +18,9 @@ const GEMINI_URL =
 // to the environment is picked up without a redeploy.
 //
 // NOTE: both `GEMINI_API_KEY_1` and `GEMINI_API_KEY1` are accepted on purpose — a
-// mismatch here silently disables Gemini entirely (the app falls back to mock data in
-// dev), so we recognise the obvious naming variant rather than fail closed.
+// mismatch here disables Gemini entirely (callers then throw LLM_UNAVAILABLE — there
+// is no mock fallback), so we recognise the obvious naming variant rather than fail
+// closed on a typo.
 function getKeys() {
   const raw = [];
   if (process.env.GEMINI_API_KEYS) raw.push(...process.env.GEMINI_API_KEYS.split(','));
@@ -74,7 +79,7 @@ async function generate(systemPrompt, userContent, opts = {}) {
   const body = {
     contents: [{ parts: [{ text: userContent }] }],
     generationConfig: {
-      temperature: opts.temperature ?? 0.15,
+      temperature: opts.temperature ?? 0,
       maxOutputTokens: opts.maxOutputTokens ?? 1024,
       // Force structured output. This is the single biggest reliability win for field
       // extraction — Gemini returns a raw JSON object with no markdown fences and no
@@ -82,11 +87,22 @@ async function generate(systemPrompt, userContent, opts = {}) {
       responseMimeType: 'application/json',
     },
   };
+  // responseSchema (a Gemini OpenAPI-subset schema, NOT JSON Schema/Zod) pins the
+  // OUTPUT STRUCTURE — field names, nesting, enums, types — not just "valid JSON".
+  // This is what stops shape drift on messy dictation with flash-lite. Optional:
+  // callers without a schema keep the JSON-mode-only behaviour.
+  if (opts.responseSchema) body.generationConfig.responseSchema = opts.responseSchema;
   if (systemPrompt) body.system_instruction = { parts: [{ text: systemPrompt }] };
 
   const maxRetries = opts.maxRetries ?? 2;
   const start = cursor % keys.length;
   cursor = (cursor + 1) % keys.length; // advance for the next request regardless of outcome
+
+  // Optional telemetry collector for structured logging — populated in place so the
+  // return type (the parsed object) is unchanged for every existing caller.
+  const tel = opts.telemetry && typeof opts.telemetry === 'object' ? opts.telemetry : null;
+  const startedAt = Date.now();
+  if (tel) { tel.model = MODEL; tel.keyCount = keys.length; }
 
   for (let pass = 0; ; pass++) {
     let retryDelayMs = 0; // largest Gemini-suggested delay seen this pass
@@ -97,6 +113,7 @@ async function generate(systemPrompt, userContent, opts = {}) {
           headers: { 'Content-Type': 'application/json', 'x-goog-api-key': keys[idx] },
           timeout: opts.timeout ?? 30000,
         });
+        if (tel) { tel.keyIndexUsed = idx + 1; tel.processingTimeMs = Date.now() - startedAt; tel.passes = pass + 1; }
         return parseResponse(response);
       } catch (e) {
         if (e instanceof AppError) throw e; // parse/empty → terminal
@@ -123,4 +140,4 @@ async function generate(systemPrompt, userContent, opts = {}) {
   }
 }
 
-module.exports = { generate, hasKey, getKeys, GEMINI_URL };
+module.exports = { generate, hasKey, getKeys, GEMINI_URL, MODEL };

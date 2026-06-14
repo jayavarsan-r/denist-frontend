@@ -75,6 +75,9 @@ export default function ConsultRecordSheet({ params = {}, onClose }) {
     draft?.phase === 'review' && draft?.extraction ? 'review' : 'ready',
   );
   const [completing, setCompleting] = useState(false);
+  // Guards a double-tap of Stop: two stops would upload twice -> two drafts -> two
+  // workers. One submission per recording.
+  const stoppingRef = useRef(false);
 
   // Release the mic on unmount (drawer dismissed). stopRecording self-guards when
   // already inactive, so an unconditional call here is safe.
@@ -139,6 +142,8 @@ export default function ConsultRecordSheet({ params = {}, onClose }) {
 
   /* ─── recording → async processing (the worker takes it from here) ─── */
   const handleStop = async () => {
+    if (stoppingRef.current) return; // double-tap guard: one submission per recording
+    stoppingRef.current = true;
     setView('processing');
     try {
       const blob = await recorder.stopRecording();
@@ -147,6 +152,8 @@ export default function ConsultRecordSheet({ params = {}, onClose }) {
     } catch (e) {
       setError(id, e.message || 'Recording failed — type your notes, or re-record');
       handleManual();
+    } finally {
+      stoppingRef.current = false;
     }
   };
 

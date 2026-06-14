@@ -26,13 +26,13 @@ exports.transcribe = async (req, res, next) => {
     return res.status(400).json({ error: 'No audio file received. Make sure field name is "audio".' });
   }
   const recordingType = req.body?.recordingType || 'general';
+  const startedAt = Date.now();
   try {
     logger.info('[transcribe] input', {
       sizeKb: Math.round((req.file.size || 0) / 1024),
       mimetype: req.file.mimetype,
       originalname: req.file.originalname,
     });
-    try { fs.copyFileSync(req.file.path, '/tmp/last_audio_upload'); } catch {} // DIAG: inspect real browser audio
     const { transcript, raw } = await aiService.transcribeAudio(req.file.path, {
       originalname: req.file.originalname,
       mimetype: req.file.mimetype,
@@ -40,39 +40,20 @@ exports.transcribe = async (req, res, next) => {
     logger.info('[transcribe] output', {
       transcriptLen: (transcript || '').length,
       preview: (transcript || '').slice(0, 60),
-      raw,
+      sttMs: raw?.processingTimeMs ?? null,
+      totalMs: Date.now() - startedAt,
     });
 
-    // Upload audio to Supabase Storage for dataset collection (non-fatal).
-    let audioStoragePath = null;
-    let audioFileSizeKb = null;
-    try {
-      const tempId = `tmp_${Date.now()}`;
-      const uploaded = await storageService.uploadFile(
-        req.file.path, 'voice-notes', `${recordingType}/${req.dentistId}/${tempId}`,
-      );
-      audioStoragePath = uploaded.storagePath;
-      audioFileSizeKb = uploaded.sizeKb;
-    } catch (uploadErr) {
-      logger.warn('Audio upload failed (non-fatal)', { err: uploadErr.message });
-    }
+    // Respond NOW — the dentist's result is ready. The Supabase upload + dataset
+    // insert below are pure dataset collection: they don't affect the transcript,
+    // and awaiting them added ~1.1–1.3s of dead wait to every call. They run after
+    // the response, and the temp file is cleaned up when that background work ends.
+    res.json({ transcript });
 
-    if (audioStoragePath) {
-      try {
-        await supabase.from('voice_recordings').insert({
-          dentist_id: req.dentistId,
-          recording_type: recordingType,
-          transcript: transcript || '',
-          audio_path: audioStoragePath,
-          audio_size_kb: audioFileSizeKb,
-        });
-      } catch (datasetErr) {
-        logger.warn('voice_recordings insert failed (non-fatal)', { err: datasetErr.message });
-      }
-    }
-
-    cleanup(req.file.path);
-    res.json({ transcript, audioStoragePath, audioFileSizeKb });
+    persistRecordingDataset({
+      filePath: req.file.path, recordingType, dentistId: req.dentistId, transcript,
+    }).catch(() => { /* fully non-fatal — already logged inside */ })
+      .finally(() => cleanup(req.file.path));
   } catch (e) {
     cleanup(req.file.path);
     // No 200-with-warning soft-fail: STT failures surface as real HTTP errors
@@ -80,6 +61,37 @@ exports.transcribe = async (req, res, next) => {
     next(e);
   }
 };
+
+// Off-the-critical-path dataset collection: upload the audio to Storage and record
+// the (audio, transcript) pair for future fine-tuning. Best-effort; never throws.
+async function persistRecordingDataset({ filePath, recordingType, dentistId, transcript }) {
+  let audioStoragePath = null;
+  let audioFileSizeKb = null;
+  try {
+    const tempId = `tmp_${Date.now()}`;
+    const uploaded = await storageService.uploadFile(
+      filePath, 'voice-notes', `${recordingType}/${dentistId}/${tempId}`,
+    );
+    audioStoragePath = uploaded.storagePath;
+    audioFileSizeKb = uploaded.sizeKb;
+  } catch (uploadErr) {
+    logger.warn('Audio upload failed (non-fatal)', { err: uploadErr.message });
+  }
+
+  if (audioStoragePath) {
+    try {
+      await supabase.from('voice_recordings').insert({
+        dentist_id: dentistId,
+        recording_type: recordingType,
+        transcript: transcript || '',
+        audio_path: audioStoragePath,
+        audio_size_kb: audioFileSizeKb,
+      });
+    } catch (datasetErr) {
+      logger.warn('voice_recordings insert failed (non-fatal)', { err: datasetErr.message });
+    }
+  }
+}
 
 // POST /api/ai/parse-schedule — natural language → structured scheduling intent ONLY.
 // No booking, no availability, no slot choice (the deterministic engine handles those).
