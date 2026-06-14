@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useAppStore } from '@/store/useAppStore';
 import { usePatientStore } from '@/store/usePatientStore';
 import { useVisitStore } from '@/store/useVisitStore';
-import { useQueueStore } from '@/store/useQueueStore';
+import { useQueueStore, isInChair } from '@/store/useQueueStore';
 import { useClinicalStore } from '@/store/useClinicalStore';
 import { useConsultStore } from '@/store/useConsultStore';
 import Icon from '@/components/icons';
@@ -34,7 +34,7 @@ function ConsultModeScreen() {
   const startManual = useConsultStore((s) => s.startManual);
 
   const pById = (id) => patients.find((p) => p.id === id);
-  const current = queue.find((e) => e.status === 'in_consultation');
+  const current = queue.find(isInChair);
   const waiting = queue.filter((e) => e.status === 'waiting').sort((a, b) => a.tokenNumber - b.tokenNumber);
   const p = current && pById(current.patientId);
 

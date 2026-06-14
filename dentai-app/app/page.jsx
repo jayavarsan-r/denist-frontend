@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useAppStore } from '@/store/useAppStore';
 import { usePatientStore } from '@/store/usePatientStore';
 import { useVisitStore } from '@/store/useVisitStore';
-import { useQueueStore } from '@/store/useQueueStore';
+import { useQueueStore, isInChair } from '@/store/useQueueStore';
 import { useClinicalStore } from '@/store/useClinicalStore';
 import { apiClient } from '@/lib/api/client';
 import Icon from '@/components/icons';
@@ -77,7 +77,7 @@ function HomeScreen() {
     .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
   const ongoing = procedures.filter(p => p.status === 'in_progress');
   const waiting = queue.filter(e => e.status === 'waiting').length;
-  const inChair = queue.some(e => e.status === 'in_consultation');
+  const inChair = queue.some(isInChair);
   const queueCount = waiting + (inChair ? 1 : 0);
 
   // ── Operations card derivations ──

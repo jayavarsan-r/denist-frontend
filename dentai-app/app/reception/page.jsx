@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useAppStore } from '@/store/useAppStore';
 import { usePatientStore } from '@/store/usePatientStore';
 import { useVisitStore } from '@/store/useVisitStore';
-import { useQueueStore } from '@/store/useQueueStore';
+import { useQueueStore, isInChair } from '@/store/useQueueStore';
 import { useClinicalStore } from '@/store/useClinicalStore';
 import Icon from '@/components/icons';
 import { SectionHeader, Chip, StatusChip, Avatar, EmptyState, SelectPill, Segmented } from '@/components/ui';
@@ -50,7 +50,7 @@ function ReceptionScreen() {
   const q = queue;
   const pById = id => patients.find(p => p.id === id);
   const waiting = q.filter(e => e.status === 'waiting');
-  const inConsult = q.filter(e => e.status === 'in_consultation');
+  const inConsult = q.filter(isInChair);
   const ready = q.filter(e => e.status === 'ready_for_checkout');
 
   const d = parseDate(TODAY);

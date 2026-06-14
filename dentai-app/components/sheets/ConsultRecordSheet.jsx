@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { usePatientStore } from '@/store/usePatientStore';
-import { useQueueStore } from '@/store/useQueueStore';
+import { useQueueStore, isInChair } from '@/store/useQueueStore';
 import { useClinicalStore } from '@/store/useClinicalStore';
 import { useConsultStore } from '@/store/useConsultStore';
 import ConsultReview from '@/components/consultation/ConsultReview';
@@ -45,7 +45,11 @@ export default function ConsultRecordSheet({ params = {}, onClose }) {
   const patients = usePatientStore((s) => s.patients);
   const procedures = useClinicalStore((s) => s.procedures);
 
-  const current = queue.find((e) => e.status === 'in_consultation');
+  // Match the whole in-chair lifecycle, not just 'in_consultation': once the audio
+  // uploads the entry flips to 'recording_processing'/'draft_ready', and a literal
+  // match here dropped `current` mid-consult → the drawer showed "No patient in the
+  // chair" and the doctor's draft/review vanished.
+  const current = queue.find(isInChair);
   const p = current && patients.find((x) => x.id === current.patientId);
   const activeProc = p && procedures
     .filter((x) => x.patientId === p.id && (x.status === 'in_progress' || x.status === 'planned'))

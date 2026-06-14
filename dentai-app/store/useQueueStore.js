@@ -14,6 +14,15 @@ function nowTime() {
   return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
 }
 
+// A patient is "in the chair" for the whole consult — not only while status is
+// literally 'in_consultation'. The async voice pipeline moves the SAME entry through
+// 'recording_processing' (audio uploaded, worker running) and 'draft_ready' (verification
+// card waiting), then the doctor confirms → 'ready_for_checkout'. Screens that only
+// matched 'in_consultation' lost the patient mid-consult (the chair looked empty), which
+// read as the queue being deleted. Treat all three as occupying the chair.
+export const IN_CHAIR_STATUSES = ['in_consultation', 'recording_processing', 'draft_ready'];
+export const isInChair = (e) => IN_CHAIR_STATUSES.includes(e?.status);
+
 export const useQueueStore = create((set, get) => ({
   queue: [],
   checkoutsToday: [],

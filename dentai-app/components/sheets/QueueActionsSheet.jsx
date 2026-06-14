@@ -1,7 +1,7 @@
 'use client';
 import { useAppStore } from '@/store/useAppStore';
 import { usePatientStore } from '@/store/usePatientStore';
-import { useQueueStore } from '@/store/useQueueStore';
+import { useQueueStore, isInChair } from '@/store/useQueueStore';
 import { useRouter } from 'next/navigation';
 import Icon from '@/components/icons';
 import { SheetHeader } from '@/components/ui';
@@ -25,7 +25,7 @@ export default function QueueActionsSheet({ params, onClose }) {
   const e = queue.find(x => x.id === params.id);
   const p = e && patients.find(x => x.id === e.patientId);
   if (!e || !p) return null;
-  const free = !queue.some(x => x.status === 'in_consultation');
+  const free = !queue.some(isInChair);
   const Action = ({ icon, label, hint, color, onClick, disabled }) => (
     <button onClick={onClick} disabled={disabled} className="tap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '16px', borderRadius: 16, background: 'var(--surface)', boxShadow: 'var(--elevation-1)', textAlign: 'left', opacity: disabled ? 0.45 : 1, marginBottom: 10 }}>
       <div style={{ width: 42, height: 42, borderRadius: 12, background: color === 'var(--red)' ? 'rgba(255,59,48,0.10)' : color === 'var(--accent)' ? 'var(--accent)' : 'rgba(60,60,67,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
