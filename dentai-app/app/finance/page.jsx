@@ -133,29 +133,7 @@ function FinanceScreen() {
           )}
         </div>
 
-        {/* inventory — medicine prices + stock, managed on its own page */}
-        <div style={{ padding: '28px 22px 0' }}>
-          <button onClick={() => router.push('/finance/inventory')} className="card tap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', textAlign: 'left' }}>
-            <div style={{ width: 40, height: 40, borderRadius: 11, background: 'rgba(48,209,88,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="pill" size={20} color="#1E8E3E" /></div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 16, fontWeight: 600 }}>Inventory</div>
-              <div className="t-meta">Medicine prices · stock levels · low-stock alerts</div>
-            </div>
-            <Icon name="chevRight" size={16} color="var(--text-tertiary)" />
-          </button>
-        </div>
-
-        {/* lab case tracker — the NEW WhatsApp-driven system (old lab payments below stay) */}
-        <div style={{ padding: '12px 22px 0' }}>
-          <button onClick={() => router.push('/finance/lab-cases')} className="card tap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', textAlign: 'left' }}>
-            <div style={{ width: 40, height: 40, borderRadius: 11, background: 'rgba(50,173,230,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="flask" size={20} color="#1B86B8" /></div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 16, fontWeight: 600 }}>Lab case tracker</div>
-              <div className="t-meta">WhatsApp-tracked crowns, dentures & aligners · reception inbox</div>
-            </div>
-            <Icon name="chevRight" size={16} color="var(--text-tertiary)" />
-          </button>
-        </div>
+        {/* Inventory + lab-case tracker moved to the home screen's Quick tools. */}
 
         {/* ── Insights (Phase 5): lab turnaround · medicine spend · daily summaries ── */}
         {medSpend && (

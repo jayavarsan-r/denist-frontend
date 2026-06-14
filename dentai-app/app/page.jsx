@@ -159,8 +159,8 @@ function HomeScreen() {
           {[
             { icon: 'personPlus', label: 'New patient',  tint: '#2F6FB3', soft: 'rgba(0,122,255,0.10)',  fn: () => openSheet('newPatient') },
             { icon: 'calendar',   label: 'Appointment',  tint: '#159AAE', soft: 'rgba(48,176,199,0.12)', fn: () => openSheet('newVisit', {}) },
-            { icon: 'pencil',     label: 'Prescription', tint: '#1E8E3E', soft: 'rgba(48,209,88,0.12)',  fn: () => openSheet('patientPicker', { next: 'rx',   title: 'Prescription for…' }) },
-            { icon: 'rupee',      label: 'Collect',      tint: '#B07D2B', soft: 'rgba(255,159,10,0.14)', fn: () => openSheet('patientPicker', { next: 'bill', title: 'Collect payment from…' }) },
+            { icon: 'pill',       label: 'Inventory',    tint: '#1E8E3E', soft: 'rgba(48,209,88,0.12)',  fn: () => router.push('/finance/inventory') },
+            { icon: 'flask',      label: 'Lab tracker',  tint: '#1B86B8', soft: 'rgba(50,173,230,0.12)', fn: () => router.push('/finance/lab-cases') },
           ].map((a) => (
             <button key={a.label} onClick={a.fn} className="tap" style={{
               background: a.soft, borderRadius: 16, padding: '14px 12px', minHeight: 92,

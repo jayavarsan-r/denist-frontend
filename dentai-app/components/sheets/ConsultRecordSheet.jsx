@@ -160,7 +160,18 @@ export default function ConsultRecordSheet({ params = {}, onClose }) {
       showToast(`${p?.name?.split(' ')[0] || 'Patient'} sent to front desk for checkout`);
       onClose();
     } catch (e) {
-      showToast('Failed to save — try again');
+      // Surface the real backend reason instead of a blanket "try again": a 409
+      // (already saved), a 404 (draft gone), or a validation error are not things
+      // a retry fixes, and the masked message left the doctor stuck with no signal.
+      const code = e?.apiError?.code || e?.code;
+      const msg =
+        code === 'CONFLICT' || /already/i.test(e?.message || '')
+          ? 'This consult was already saved.'
+          : code === 'NOT_FOUND'
+          ? 'Draft expired — re-record to try again.'
+          : (e?.apiError?.message || e?.message || 'Failed to save — try again');
+      setError(id, msg);
+      showToast(msg);
     } finally {
       setCompleting(false);
     }
