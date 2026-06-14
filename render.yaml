@@ -6,8 +6,15 @@ services:
     buildCommand: npm install
     startCommand: npm start
     envVars:
+      # NOTE: this pilot/testing box runs in development mode ON PURPOSE so the dev
+      # OTP (123456) stays active. Because it points at the SHARED Supabase DB, the
+      # startup guard (config/env.js) requires ALLOW_DEV_AGAINST_REMOTE_DB=true,
+      # which is set in the Render dashboard (sync:false below). BEFORE real clinics
+      # use this service: set NODE_ENV=production and DELETE ALLOW_DEV_AGAINST_REMOTE_DB.
       - key: NODE_ENV
-        value: production
+        value: development
+      - key: ALLOW_DEV_AGAINST_REMOTE_DB
+        sync: false
       - key: PORT
         value: 10000
       # Set these in the Render dashboard — never commit secrets
