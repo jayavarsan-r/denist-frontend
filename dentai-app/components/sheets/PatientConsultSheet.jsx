@@ -99,6 +99,13 @@ export default function PatientConsultSheet({ params, onClose }) {
       : (ex.tooth ? [String(ex.tooth)] : []);
     const primaryTooth = teeth[0] || null;
     const followUpDate = /^\d{4}-\d{2}-\d{2}/.test(ex.followUp || '') ? ex.followUp : null;
+    // visits.medications is a TEXT column (the structured Rx is saved separately via
+    // saveRx below). Sending the medicine array tripped the string-only validator —
+    // a 400 that aborted the whole save. Denormalize to a readable one-line summary.
+    const medsText = (ex.medicines || [])
+      .map((m) => [m.name, m.dose, m.frequency, m.duration].filter(Boolean).join(' '))
+      .filter(Boolean)
+      .join('; ');
     try {
       // Record the doctor's review on the draft first (non-fatal for the save).
       if (ex._draftId) {
@@ -111,7 +118,7 @@ export default function PatientConsultSheet({ params, onClose }) {
         procedureName: ex.procedure || 'Consultation',
         toothNumber: primaryTooth,
         notes: ex.diagnosis || '',
-        medications: ex.medicines || [],
+        medications: medsText || null,
         rawTranscript: ex.transcript || '',
         cost: ex.estimatedCost || null,
         followUpDate,
@@ -140,7 +147,8 @@ export default function PatientConsultSheet({ params, onClose }) {
       showToast('Saved to ' + (p.name.split(' ')[0] || 'patient') + "'s record");
       onClose();
     } catch (e) {
-      showToast('Could not save — try again');
+      // Surface the real backend reason — a blanket "try again" hid a 400 here.
+      showToast(e?.apiError?.message || e?.message || 'Could not save — try again');
       setCompleting(false);
     }
   };
