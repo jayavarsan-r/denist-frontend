@@ -83,13 +83,28 @@ async function callSarvam(filePath, filename, contentType) {
       const formData = new FormData();
       formData.append('file', fs.createReadStream(filePath), { filename, contentType });
       formData.append('model', 'saarika:v2.5');
-      formData.append('language_code', 'en-IN'); // en-IN handles Tamil + English mixing reliably
+      // 'unknown' = Sarvam auto language-detection. We previously pinned 'en-IN', but
+      // that ran regional speech (Tamil/Hindi/Telugu) through an English decoder, which
+      // phonetically MANGLES Indian patient names before Gemini ever sees them — the
+      // "name not captured correctly" symptom. saarika:v2.5 auto-detects per-utterance,
+      // and the spoken word IS the value, so a name said in any supported language now
+      // transcribes faithfully. Configurable via SARVAM_LANGUAGE_CODE for deployments
+      // that want to force a single language (default: auto-detect).
+      formData.append('language_code', process.env.SARVAM_LANGUAGE_CODE || 'unknown');
       formData.append('with_timestamps', 'false');
 
       const response = await axios.post(SARVAM_URL, formData, {
         headers: { ...formData.getHeaders(), 'api-subscription-key': process.env.SARVAM_API_KEY },
         timeout: 60000,
       });
+      // saarika:v2.5 returns the auto-detected language + confidence; surface them so
+      // prod logs show what patients actually speak (and confirm this fix is helping).
+      if (response.data.language_code) {
+        logger.info('[sarvam] detected language', {
+          language: response.data.language_code,
+          probability: response.data.language_probability ?? null,
+        });
+      }
       return response.data.transcript || '';
     } catch (e) {
       lastErr = e;
