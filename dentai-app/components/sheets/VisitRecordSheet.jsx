@@ -39,6 +39,43 @@ function MedsList({ meds }) {
   );
 }
 
+// Render structured prescription(s) recorded for this visit (medicines jsonb from the
+// prescriptions table) — the per-case detail the flat visit row never carried. Each
+// `rx` is a raw backend prescription row: { medicines:[{name,dose,frequency,duration,
+// instructions}], instructions }.
+function PrescriptionBlock({ prescriptions }) {
+  const list = (prescriptions || []).filter(rx => (rx.medicines || []).length || rx.instructions);
+  if (!list.length) return null;
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <SectionHeader>Prescription</SectionHeader>
+      <div className="card" style={{ overflow: 'hidden' }}>
+        {list.flatMap((rx, ri) =>
+          (rx.medicines || []).map((m, mi) => (
+            <div key={`${ri}-${mi}`} style={{ padding: '10px 14px', borderTop: (ri + mi) ? '1px solid var(--border-light)' : 'none' }}>
+              <div style={{ fontSize: 15, fontWeight: 600 }}>{m.name || '—'}</div>
+              {(m.dose || m.dosage || m.frequency || m.duration) && (
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>
+                  {[m.dose || m.dosage, m.frequency, m.duration].filter(Boolean).join(' · ')}
+                </div>
+              )}
+              {(m.instructions || m.notes) && (
+                <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)', marginTop: 2 }}>{m.instructions || m.notes}</div>
+              )}
+            </div>
+          ))
+        )}
+        {list.map((rx, ri) => rx.instructions && (
+          <div key={`note-${ri}`} style={{ padding: '10px 14px', borderTop: '1px solid var(--border-light)' }}>
+            <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>Instructions</div>
+            <div style={{ fontSize: 14, color: 'var(--text-secondary)' }}>{rx.instructions}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function VisitRecordSheet({ params, onClose }) {
   const patients = usePatientStore((s) => s.patients);
   const clinicalVisits = useVisitStore((s) => s.clinicalVisits);
@@ -48,6 +85,12 @@ export default function VisitRecordSheet({ params, onClose }) {
   const appt = !cv && visits.find(x => x.id === params.id);
   const record = cv || appt;
   if (!record) return null;
+
+  // Diagnosis + structured Rx for this specific visit, passed in from the case sheet
+  // (the flat visit store row doesn't carry them). Diagnosis falls back to the linked
+  // treatment plan's diagnosis when the visit's own notes are empty.
+  const prescriptions = params.prescriptions || [];
+  const diagnosis = record.notes || params.planDiagnosis || '';
 
   const p = patients.find(x => x.id === record.patientId);
   const isConsult = record.type === 'consultation';
@@ -80,7 +123,7 @@ export default function VisitRecordSheet({ params, onClose }) {
       <div className="card" style={{ marginBottom: 16 }}>
         <Row label="Procedure" value={record.procedureName || record.purpose} />
         <Row label="Tooth" value={record.toothNumber ? `Tooth ${record.toothNumber}` : null} />
-        <Row label="Notes / Diagnosis" value={record.notes} />
+        <Row label="Notes / Diagnosis" value={diagnosis} />
         <Row label="Next steps" value={record.nextSteps} />
         <Row label="Follow-up" value={record.followUpDate ? formatDate(record.followUpDate) : null} />
         {record.cost != null && <Row label="Cost" value={`${record.currency || 'INR'} ${record.cost}`} />}
@@ -90,7 +133,12 @@ export default function VisitRecordSheet({ params, onClose }) {
       {/* Before / After for this case */}
       {isConsult && record.id && <BeforeAfterCapture patientId={record.patientId} visitId={record.id} />}
 
-      <MedsList meds={record.medications} />
+      {/* Structured prescription recorded for this visit (from the prescriptions table).
+          Falls back to the one-line medications summary on the visit row when no
+          structured Rx is linked. */}
+      {prescriptions.length
+        ? <PrescriptionBlock prescriptions={prescriptions} />
+        : <MedsList meds={record.medications} />}
 
       {/* The structured details above are the overview. The raw (often Tamil) transcript
           is secondary — collapsed by default so it doesn't replace the summary. */}

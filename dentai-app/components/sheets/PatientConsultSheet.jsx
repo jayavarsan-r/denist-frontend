@@ -15,6 +15,24 @@ import {
 } from '@/store/consultDraft.mjs';
 import { toFrontendExtraction, toConfirmedData } from '@/lib/voice/draftMapping';
 
+// A NETWORK-level failure (no HTTP response) means the request never reached the
+// server — typically the idle backend waking up, or a flaky connection — as opposed
+// to the server answering with an error. Axios marks these with no `response`.
+const isNetworkError = (e) =>
+  !e?.response && !e?.apiError &&
+  (e?.code === 'ERR_NETWORK' || e?.code === 'ECONNABORTED' || /network|timeout/i.test(e?.message || ''));
+
+// Run an async write, retrying ONCE on a cold-start network blip (the second hit
+// lands after the instance is awake). Real HTTP errors are not retried.
+async function retryOnColdStart(fn) {
+  try { return await fn(); }
+  catch (e) {
+    if (!isNetworkError(e)) throw e;
+    await new Promise((r) => setTimeout(r, 1500));
+    return fn();
+  }
+}
+
 /**
  * PatientConsultSheet — the patient-profile "Start consultation". Same async voice
  * pipeline as the queue consult (useVoiceJob → consultation_draft → Verification
@@ -113,7 +131,13 @@ export default function PatientConsultSheet({ params, onClose }) {
         catch { /* learning loop only — never blocks the save */ }
       }
 
-      await createVisit({
+      // The visit is the one CRITICAL write (plan + Rx below are non-fatal). The API
+      // is on a backend that spins down when idle, so the first request after a lull
+      // can fail at the NETWORK level (no HTTP response at all) while the instance
+      // wakes — which previously surfaced as the misleading generic "could not save".
+      // Retry that ONE class of failure once; a real 4xx/5xx (which carries a response)
+      // is NOT retried and propagates its true reason.
+      const visitRes = await retryOnColdStart(() => createVisit({
         patientId: p.id,
         procedureName: ex.procedure || 'Consultation',
         toothNumber: primaryTooth,
@@ -123,7 +147,8 @@ export default function PatientConsultSheet({ params, onClose }) {
         cost: ex.estimatedCost || null,
         followUpDate,
         status: 'completed',
-      });
+      }));
+      const visitId = visitRes?.visit?.id || null;
 
       if (ex.procedure) {
         try {
@@ -137,7 +162,7 @@ export default function PatientConsultSheet({ params, onClose }) {
       if ((ex.medicines || []).length) {
         try {
           await saveRx({
-            patientId: p.id, medicines: ex.medicines, instructions: ex.instructions || '',
+            patientId: p.id, visitId, medicines: ex.medicines, instructions: ex.instructions || '',
             followUp: ex.followUp || '', rawVoice: ex.transcript || '',
           });
         } catch { /* non-fatal */ }
@@ -147,8 +172,13 @@ export default function PatientConsultSheet({ params, onClose }) {
       showToast('Saved to ' + (p.name.split(' ')[0] || 'patient') + "'s record");
       onClose();
     } catch (e) {
-      // Surface the real backend reason — a blanket "try again" hid a 400 here.
-      showToast(e?.apiError?.message || e?.message || 'Could not save — try again');
+      // Tell the truth about WHY: a network failure (server unreachable / still waking)
+      // is different from the server rejecting the data. The old blanket "try again"
+      // hid both — making a transient connectivity issue look like bad input.
+      const msg = isNetworkError(e)
+        ? "Couldn't reach the server — check your connection and try again"
+        : (e?.apiError?.message || e?.message || 'Could not save — try again');
+      showToast(msg);
       setCompleting(false);
     }
   };
