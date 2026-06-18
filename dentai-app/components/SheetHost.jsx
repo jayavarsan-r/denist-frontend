@@ -1,7 +1,6 @@
 'use client';
 import { useAppStore } from '@/store/useAppStore';
 import { BottomSheet } from '@/components/ui';
-import VoiceSheet from '@/components/sheets/VoiceSheet';
 import AccountSettingsSheet from '@/components/sheets/AccountSettingsSheet';
 import WalkInSheet from '@/components/sheets/WalkInSheet';
 import NewPatientSheet from '@/components/sheets/NewPatientSheet';
@@ -38,7 +37,6 @@ const SHEETS = {
   walkin: WalkInSheet,
   newPatient: NewPatientSheet,
   filter: FilterSheet,
-  voice: VoiceSheet,
   procedure: ProcedureDetailSheet,
   tooth: ToothDetailSheet,
   bill: BillSheet,

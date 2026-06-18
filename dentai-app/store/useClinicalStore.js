@@ -3,6 +3,7 @@ import { getTreatmentPlan, createTreatmentPlan, updateTreatmentPlan, getPendingT
 import { createPrescription, getPrescription } from '@/lib/services/prescription.service';
 import { recordPayment, getPatientPayments, getPaymentStats } from '@/lib/services/payment.service';
 import { getLabOrders, getPatientLabOrders, createLabOrder, updateLabOrder } from '@/lib/services/lab.service';
+import { listLedger, createLedgerEntry, deleteLedgerEntry } from '@/lib/services/ledger.service';
 import { apiClient } from '@/lib/api/client';
 
 /**
@@ -48,6 +49,10 @@ export const useClinicalStore = create((set, get) => ({
     try {
       const res = await createPrescription({
         patientId: r.patientId,
+        // Link the Rx to the visit it was written during, so the case-detail view can
+        // show the structured prescription under that specific visit (previously every
+        // consult Rx was saved with visit_id=null and floated free of its visit).
+        visitId: r.visitId || null,
         medicines: r.medicines || [],
         instructions: r.instructions || '',
         followUp: r.followUpDays ? `${r.followUpDays} days` : (r.followUp || ''),
@@ -196,8 +201,37 @@ export const useClinicalStore = create((set, get) => ({
     }));
   },
 
-  /* ─── Clinic accounts / ledger (local-only) ─── */
-  addAccount: (a) => set((s) => ({ clinicAccounts: [a, ...s.clinicAccounts] })),
+  /* ─── Clinic accounts / ledger (API-backed) ─── */
+  loadLedger: async () => {
+    try {
+      const { ledgerEntries } = await listLedger();
+      const entries = (ledgerEntries || []).map(normLedger);
+      set((s) => ({
+        // keep payment-derived entries (added by loadClinicPayments), replace only
+        // the manually-entered ledger rows on reload (matched by id).
+        clinicAccounts: [
+          ...entries,
+          ...s.clinicAccounts.filter((a) => !entries.some((e) => e.id === a.id)),
+        ],
+      }));
+    } catch (e) {
+      console.warn('[ClinicalStore] loadLedger failed', e?.response?.status);
+    }
+  },
+
+  addLedgerEntry: async (entry) => {
+    const { entry: row } = await createLedgerEntry(entry);
+    const norm = normLedger(row);
+    set((s) => ({ clinicAccounts: [norm, ...s.clinicAccounts] }));
+    return norm;
+  },
+
+  removeLedgerEntry: async (id) => {
+    const prev = get().clinicAccounts;
+    set((s) => ({ clinicAccounts: s.clinicAccounts.filter((a) => a.id !== id) }));
+    try { await deleteLedgerEntry(id); }
+    catch (e) { set({ clinicAccounts: prev }); throw e; }
+  },
 
   /* ─── Payments (API-backed via payment service) ─── */
   // Clinic-wide ledger for the finance screen. Pulls every payment in the clinic and
@@ -291,6 +325,18 @@ export const useClinicalStore = create((set, get) => ({
 }));
 
 /* ─── Helpers ─── */
+function normLedger(r) {
+  return {
+    id: r.id,
+    date: (r.entry_date || r.entryDate || r.created_at || '').slice(0, 10),
+    type: r.type || 'expense',
+    category: r.category || 'Other',
+    description: r.description || r.category || '',
+    amount: parseFloat(r.amount) || 0,
+    patientId: r.patient_id || r.patientId || null,
+  };
+}
+
 function normRx(r) {
   return {
     id: r.id,

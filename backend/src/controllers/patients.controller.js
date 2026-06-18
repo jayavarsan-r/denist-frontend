@@ -41,32 +41,48 @@ exports.create = async (req, res, next) => {
       guardian_name, guardian_phone } = req.body;
     if (!name || !phone) return res.status(400).json({ error: 'Name and phone required' });
 
-    // UHID is per-clinic sequential with a collision-safe retry against the unique
-    // (clinic_id, uhid) index added in migration 010.
-    let uhid = null;
-    if (req.clinicId) {
-      const { data: clinic } = await supabase.from('clinics').select('name, display_id').eq('id', req.clinicId).single();
-      const prefix = clinicPrefix(clinic || {});
-      const { count } = await supabase.from('patients')
-        .select('id', { count: 'exact', head: true }).eq('clinic_id', req.clinicId);
-      let seq = (count || 0) + 1;
-      for (let attempt = 0; attempt < 5 && !uhid; attempt++) {
-        const candidate = formatUhid(prefix, seq);
-        const { data, error } = await supabase.from('patients').select('id')
-          .eq('clinic_id', req.clinicId).eq('uhid', candidate).maybeSingle();
-        if (!error && !data) uhid = candidate; else seq++;
-      }
-    }
-
-    const patient = await repos.patients.create({
+    const base = {
       dentist_id: req.dentistId,
       clinic_id: req.clinicId || null,
       name, phone, age, gender, medical_conditions, allergies, clinical_flags,
       guardian_name: guardian_name || null,
       guardian_phone: guardian_phone || null,
-      uhid,
-    });
-    res.status(201).json({ patient });
+    };
+
+    // No clinic context (pre-clinic account): no UHID, single insert.
+    if (!req.clinicId) {
+      const patient = await repos.patients.create({ ...base, uhid: null });
+      return res.status(201).json({ patient });
+    }
+
+    // UHID is per-clinic sequential. The clinic lookup and the patient count are
+    // INDEPENDENT — run them in parallel instead of back-to-back (each is a separate
+    // network round-trip to Supabase; on the deployed box that serialized wait was a
+    // big chunk of the 10-15s registration delay reported in the field).
+    const [clinicRes, countRes] = await Promise.all([
+      supabase.from('clinics').select('name, display_id').eq('id', req.clinicId).single(),
+      supabase.from('patients').select('id', { count: 'exact', head: true }).eq('clinic_id', req.clinicId),
+    ]);
+    const prefix = clinicPrefix(clinicRes.data || {});
+    let seq = (countRes.count || 0) + 1;
+
+    // Insert-then-retry-on-conflict against the unique (clinic_id, uhid) partial index
+    // (patients_clinic_uhid_uniq). This REPLACES the old read-before-write loop that
+    // did up to 5 SEQUENTIAL existence-check round-trips before inserting. The DB
+    // index is the source of truth, so we just attempt the insert and only bump the
+    // sequence on a real 23505 unique violation — which also closes the race where two
+    // concurrent registrations pre-checked the same free UHID and then both inserted it.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const patient = await repos.patients.create({ ...base, uhid: formatUhid(prefix, seq) });
+        return res.status(201).json({ patient });
+      } catch (e) {
+        // 23505 = unique_violation. Bump the sequence and retry a bounded number of
+        // times; anything else (or exhausting retries) propagates to the error handler.
+        if (e?.code === '23505' && attempt < 5) { seq++; continue; }
+        throw e;
+      }
+    }
   } catch (e) { next(e); }
 };
 

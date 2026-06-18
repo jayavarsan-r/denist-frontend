@@ -10,18 +10,6 @@ import { Avatar, Chip, StatusChip, SectionHeader, EmptyState, SelectPill } from 
 import { formatCurrency, formatDate, getInitials } from '@/lib/data/utils';
 import { hasComplications } from '@/lib/data/utils';
 
-function VoiceToolbar({ onClick, label = 'Add voice entry' }) {
-  return (
-    <button onClick={onClick} className="rowtap" style={{
-      flexShrink: 0, height: 48, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-      background: 'var(--surface)', borderTop: '1px solid var(--border-light)', color: 'var(--text-secondary)',
-    }}>
-      <Icon name="mic" size={20} />
-      <span style={{ fontSize: 14, fontWeight: 500 }}>{label}</span>
-    </button>
-  );
-}
-
 const PATIENT_FILTERS = ['All', 'RCT', 'Extraction', 'Crown', 'Scaling', 'Implant', 'Orthodontics'];
 
 function PatientsScreen() {
@@ -135,7 +123,6 @@ function PatientsScreen() {
           )}
         </div>
       </div>
-      <VoiceToolbar onClick={() => openSheet('voice', { scope: 'patient-pick' })} />
     </div>
   );
 }

@@ -303,6 +303,20 @@ function PlanCard({ raw, p, openSheet }) {
 
 function CasesTab({ p, caseSheet, clinicalVisits, openSheet }) {
   const plans = caseSheet?.allTreatmentPlans || caseSheet?.activeTreatmentPlans || [];
+  const allRx = caseSheet?.prescriptions || [];
+  // Diagnosis lives on treatment_plans (visits have no diagnosis column); fall back to
+  // the most recent plan's diagnosis so the case detail can show it even when a visit
+  // wasn't linked to a specific plan.
+  const planDiagnosis = (plans.find(pl => pl.diagnosis)?.diagnosis) || '';
+  // Prescriptions written during a visit link by visit_id (now populated at save time).
+  // Legacy consult Rx have visit_id=null — surface those too, matched by SAME-DAY as a
+  // best-effort fallback so historical prescriptions aren't invisible per-case.
+  const rxForVisit = (visit) => {
+    const byId = allRx.filter(rx => rx.visit_id && rx.visit_id === visit.id);
+    if (byId.length) return byId;
+    const day = (visit.date || '').slice(0, 10);
+    return day ? allRx.filter(rx => !rx.visit_id && (rx.created_at || '').slice(0, 10) === day) : [];
+  };
   // Prefer the patient's own visits from the case sheet (already patient-scoped and
   // loaded with the page) over filtering the clinic-wide list — the latter can be
   // momentarily empty, which made the history look like it "wasn't showing up".
@@ -354,7 +368,7 @@ function CasesTab({ p, caseSheet, clinicalVisits, openSheet }) {
           {history.map((v, i) => (
             <button
               key={v.id}
-              onClick={() => openSheet('visitRecord', { id: v.id })}
+              onClick={() => openSheet('visitRecord', { id: v.id, prescriptions: rxForVisit(v), planDiagnosis })}
               className="rowtap"
               style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left' }}
             >

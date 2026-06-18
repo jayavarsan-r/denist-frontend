@@ -71,4 +71,24 @@ describe('validators', () => {
     expect(v.recordPayment.safeParse({ patientId: uid, amount: '500' }).success).toBe(true);
     expect(v.recordPayment.safeParse({ patientId: uid, amount: '-5' }).success).toBe(false);
   });
+
+  test('createLedgerEntry: requires type+category+amount, coerces amount, strips unknowns', () => {
+    const uid = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11';
+    const ok = v.createLedgerEntry.safeParse({ type: 'expense', category: 'Rent', amount: '15000', evil: 'x' });
+    expect(ok.success).toBe(true);
+    expect(ok.data.amount).toBe(15000);     // coerced number
+    expect('evil' in ok.data).toBe(false);  // stripped
+
+    expect(v.createLedgerEntry.safeParse({ type: 'bogus', category: 'Rent', amount: 1 }).success).toBe(false); // bad enum
+    expect(v.createLedgerEntry.safeParse({ type: 'income', amount: 1 }).success).toBe(false);                  // no category
+    expect(v.createLedgerEntry.safeParse({ type: 'income', category: 'X', amount: -5 }).success).toBe(false);  // negative
+    expect(v.createLedgerEntry.safeParse({ type: 'income', category: 'X', amount: 1, patientId: 'nope' }).success).toBe(false); // bad uuid
+    expect(v.createLedgerEntry.safeParse({ type: 'income', category: 'X', amount: 1, patientId: uid }).success).toBe(true);
+  });
+
+  test('updateLedgerEntry: all fields optional (partial)', () => {
+    expect(v.updateLedgerEntry.safeParse({}).success).toBe(true);
+    expect(v.updateLedgerEntry.safeParse({ amount: '200' }).data.amount).toBe(200);
+    expect(v.updateLedgerEntry.safeParse({ type: 'nope' }).success).toBe(false);
+  });
 });
