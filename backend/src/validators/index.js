@@ -15,6 +15,13 @@ const uuid = z.string().regex(
   'Invalid id',
 );
 const optStr = z.string().trim().optional().nullable();
+// Like optStr, but tolerant of a value that arrives as a NUMBER. Tooth numbers (FDI)
+// and similar fields are conceptually numeric and several callers send them as ints;
+// the column is TEXT, so coerce rather than 400 the whole request on a type mismatch.
+const optStrCoerce = z.preprocess(
+  (val) => (typeof val === 'number' ? String(val) : val),
+  optStr,
+);
 const phone = z.string().regex(/^\d{10}$/, 'Valid 10-digit phone required');
 
 // ── Patients ──────────────────────────────────────────────────────────────
@@ -70,7 +77,7 @@ const recurringAppointments = z.object({
 const createVisit = z.object({
   patientId: uuid,
   procedureName: optStr,
-  toothNumber: optStr,
+  toothNumber: optStrCoerce, // FDI tooth no. may arrive as a number — coerce, don't 400
   status: optStr,
   rawTranscript: optStr,
   notes: optStr,
@@ -141,6 +148,19 @@ const recordPayment = z.object({
   notes: optStr,
   paymentDate: z.string().optional().nullable(),
 });
+
+// ── Ledger (manual income/expense — separate from patient payments) ─────────
+const LEDGER_TYPES = ['income', 'expense'];
+const createLedgerEntry = z.object({
+  type: z.enum(LEDGER_TYPES),
+  category: z.string().trim().min(1, 'category required'),
+  description: optStr,
+  amount: z.coerce.number().nonnegative(),
+  entryDate: z.string().optional().nullable(),
+  patientId: uuid.optional().nullable(),
+  labCaseId: uuid.optional().nullable(),
+});
+const updateLedgerEntry = createLedgerEntry.partial();
 
 // ── Treatment plans ───────────────────────────────────────────────────────
 const createTreatmentPlan = z.object({
@@ -358,6 +378,7 @@ module.exports = {
   createVisit, updateVisit,
   addToQueue, patchQueue, confirmDraft, reviewDraft,
   recordPayment,
+  createLedgerEntry, updateLedgerEntry,
   createTreatmentPlan, updateTreatmentPlan,
   createPaymentPlan, updatePaymentPlan,
   updateClinic,
