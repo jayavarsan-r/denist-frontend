@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
+const compression = require('compression');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const requestId = require('./middleware/requestId');
@@ -17,10 +18,16 @@ const app = express();
 
 app.use(requestId); // must be first — attaches req.requestId to all subsequent middleware
 app.use(helmet());
+// gzip every response. JSON payloads (patient lists, case sheets with nested
+// visits/notes/prescriptions) compress 5–10× — a real win on mobile connections,
+// at negligible CPU for our payload sizes.
+app.use(compression());
 // Allow all origins — Capacitor APK makes requests from capacitor://localhost
 // and the Authorization header handles security (not CORS)
 app.use(cors({ origin: true }));
-app.use(morgan('dev'));
+// 'dev' logging is colourful but noisy/verbose for a deployed box; use the standard
+// Apache 'combined' format in production, 'dev' locally. Overridable via LOG_FORMAT.
+app.use(morgan(process.env.LOG_FORMAT || (process.env.NODE_ENV === 'production' ? 'combined' : 'dev')));
 // BSP webhook mounts BEFORE express.json(): signature verification needs the
 // raw body bytes (the route uses express.raw internally).
 app.use('/api/webhooks/whatsapp', require('./routes/whatsapp.webhook.routes'));

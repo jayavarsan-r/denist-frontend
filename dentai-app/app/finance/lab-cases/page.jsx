@@ -56,7 +56,9 @@ export default function LabCasesPage() {
   useEffect(() => {
     setLoading(true);
     load();
-    const poll = setInterval(load, 5000);
+    // Lab-case board has no realtime channel; a 15s poll is ample (cases move on the
+    // order of minutes/hours) and cuts this screen's request load 3× vs the old 5s.
+    const poll = setInterval(load, 15000);
     return () => clearInterval(poll);
   }, [load]);
 

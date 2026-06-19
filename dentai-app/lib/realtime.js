@@ -43,12 +43,15 @@ async function getSupabase() {
  *
  * @param {string} clinicId
  * @param {(entry: object, eventType: string) => void} onUpdate
+ * @param {(connected: boolean) => void} [onStatus] — called with true once the
+ *   channel is SUBSCRIBED, false on error/timeout/close. Lets callers run a polling
+ *   fallback ONLY while realtime is down (instead of always polling).
  * @returns {() => void} unsubscribe function
  */
-export async function subscribeToQueue(clinicId, onUpdate) {
+export async function subscribeToQueue(clinicId, onUpdate, onStatus) {
   try {
     const sb = await getSupabase();
-    if (!sb) return () => {};
+    if (!sb) { try { onStatus?.(false); } catch {} return () => {}; }
 
     const channel = sb
       .channel(`queue:${clinicId}`)
@@ -66,11 +69,14 @@ export async function subscribeToQueue(clinicId, onUpdate) {
       )
       .subscribe((status, err) => {
         if (err) console.warn('[Realtime] queue subscription error:', err.message);
+        // SUBSCRIBED = connected; CHANNEL_ERROR / TIMED_OUT / CLOSED = not.
+        try { onStatus?.(status === 'SUBSCRIBED'); } catch {}
       });
 
     return () => { try { sb.removeChannel(channel); } catch {} };
   } catch (e) {
     console.warn('[Realtime] subscribeToQueue failed (realtime may not be enabled):', e.message);
+    try { onStatus?.(false); } catch {}
     return () => {};
   }
 }
