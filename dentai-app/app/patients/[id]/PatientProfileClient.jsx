@@ -12,7 +12,6 @@ import { TODAY } from '@/lib/data/patients';
 import { formatCurrency, formatDate, formatTime, clinicianFlags, hasComplications, parseDate, MONTHS, formatCurrencyK } from '@/lib/data/utils';
 import { getProcedureColor, TOOTH_STATE_STYLE } from '@/lib/data/procedures';
 import { getToothHistory, getPatientCaseSheet } from '@/lib/services/patient.service';
-import { listLabCases, STATUS_META } from '@/lib/services/lab-case.service';
 import { getPatientXrays, uploadXray, uploadPatientPhoto } from '@/lib/services/xray.service';
 import BeforeAfterCapture from '@/components/sheets/BeforeAfterCapture';
 
@@ -36,38 +35,6 @@ function currentStageIndex(proc) {
   return i === -1 ? proc.stages.length - 1 : i;
 }
 
-function ProcedureCard({ proc, onClick, showLab, labOrders }) {
-  const STATUS_CHIP_MAP = {
-    planned: ['Planned', 'neutral'], in_progress: ['In progress', 'amber'], completed: ['Completed', 'green'],
-    paused: ['Paused', 'neutral'], follow_up: ['Follow-up', 'teal'],
-    pending: ['Pending', 'neutral'], sent: ['Sent', 'amber'], received: ['Received', 'teal'],
-  };
-  const lab = showLab && proc.labOrderId ? labOrders.find(l => l.id === proc.labOrderId) : null;
-  return (
-    <button onClick={onClick} className="card tap" style={{ width: '100%', padding: 16, textAlign: 'left', marginBottom: 10, display: 'block' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
-        <span style={{ fontSize: 17, fontWeight: 600 }}>{proc.type}</span>
-        {proc.tooth && <ToothChip tooth={proc.tooth} />}
-        <div style={{ marginLeft: 'auto' }}><StatusChip status={proc.status} /></div>
-      </div>
-      <StageDots stages={proc.stages} currentIndex={currentStageIndex(proc)} />
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 }}>
-        <span className="t-meta">{proc.currentStage}</span>
-        <span className="t-meta">{proc.completedVisits} of {proc.estimatedVisits} visits</span>
-      </div>
-      {lab && (
-        <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border-light)', display: 'flex', alignItems: 'center', gap: 7 }}>
-          <Icon name="flask" size={15} color="#1B86B8" />
-          <span style={{ fontSize: 13, color: '#1B86B8', fontWeight: 500 }}>Lab: {lab.labName} · {(STATUS_CHIP_MAP[lab.status] || [lab.status])[0]}</span>
-        </div>
-      )}
-    </button>
-  );
-}
-
-/* ---- tabs ---- */
-// OverviewTab — the treatment control center. Answers "what's happening with this
-// patient right now, and what do I do next?" Driven entirely by the live case sheet.
 function OverviewTab({ p, caseSheet, toothHistory, teeth, activePlan, activeTeeth, openSheet, router, setTab }) {
   const plan = activePlan;
   const total = plan?.total_sittings || 1;
@@ -469,97 +436,7 @@ function daysBetween(a, b) {
   return Math.round((parseD(b) - parseD(a)) / 86400000);
 }
 
-function LabOrderCard({ order, openSheet, markLabReceived }) {
-  const margin = order.chargedToPatient - order.costToClinic;
-  const overdue = order.status === 'sent' && order.expectedReturnDate < TODAY;
-  const rem = daysBetween(TODAY, order.expectedReturnDate);
-  const timeLabel = order.status === 'received' || order.status === 'completed'
-    ? (order.actualReturnDate ? 'Returned ' + formatDate(order.actualReturnDate) : 'Returned')
-    : overdue ? `${Math.abs(rem)}d overdue` : rem === 0 ? 'Due today' : `${rem}d remaining`;
-  return (
-    <button onClick={() => openSheet('labDetail', { id: order.id })} className="card tap" style={{ width: '100%', padding: 16, marginBottom: 10, textAlign: 'left', display: 'block', borderLeft: overdue ? '3px solid var(--amber)' : 'none' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-        <span style={{ fontSize: 16, fontWeight: 600 }}>{order.labName}</span>
-        <StatusChip status={order.status} />
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-        <span className="t-meta">{order.patientName}</span>
-        {order.toothNumber && <ToothChip tooth={order.toothNumber} />}
-      </div>
-      <div style={{ fontSize: 15, marginBottom: 8 }}>{order.workDescription}</div>
-      <div className="t-meta" style={{ marginBottom: 8 }}>Sent {formatDate(order.sentDate)} · Expected {formatDate(order.expectedReturnDate)} · <span style={{ color: overdue ? 'var(--amber)' : 'var(--text-secondary)', fontWeight: overdue ? 600 : 400 }}>{timeLabel}</span></div>
-      <div style={{ fontSize: 13, color: 'var(--text-secondary)', paddingTop: 8, borderTop: '1px solid var(--border-light)' }}>
-        <span className="tnum">Cost {formatCurrency(order.costToClinic)} → Billed {formatCurrency(order.chargedToPatient)}</span> · <span className="tnum" style={{ color: '#1E8E3E', fontWeight: 600 }}>Margin {formatCurrency(margin)}</span>
-      </div>
-      {order.status === 'sent' && (
-        <div style={{ display: 'flex', gap: 14, marginTop: 12 }}>
-          <button onClick={(e) => { e.stopPropagation(); markLabReceived(order.id); }} style={{ height: 36, padding: '0 16px', borderRadius: 12, border: '1px solid var(--border)', fontSize: 14, fontWeight: 600, background: '#fff' }}>Mark received</button>
-          <button onClick={(e) => e.stopPropagation()} style={{ color: 'var(--blue)', fontSize: 14, fontWeight: 500 }}>Add note</button>
-        </div>
-      )}
-    </button>
-  );
-}
-
-function LabTab({ p, labOrders, openSheet, markLabReceived }) {
-  // NEW lab_cases (Phase 4 WhatsApp-tracked tracker) — shown above the legacy
-  // lab_orders, which stay as read-only "Previous records".
-  const [cases, setCases] = useState([]);
-  const [loadingCases, setLoadingCases] = useState(true);
-  const loadCases = React.useCallback(() => {
-    listLabCases({ patient_id: p.id })
-      .then((rows) => setCases(rows || []))
-      .catch(() => setCases([]))
-      .finally(() => setLoadingCases(false));
-  }, [p.id]);
-  useEffect(() => { loadCases(); }, [loadCases]);
-
-  const labs = labOrders.filter(l => l.patientId === p.id);
-  return (
-    <div>
-      <SectionHeader>Lab cases</SectionHeader>
-      {loadingCases ? (
-        <div className="card" style={{ marginBottom: 12, padding: 20, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>Loading…</div>
-      ) : cases.length === 0 ? (
-        <div className="card" style={{ marginBottom: 12 }}><EmptyState icon="flask" title="No lab cases" hint="Crowns, dentures & aligners tracked over WhatsApp" /></div>
-      ) : (
-        <div className="card" style={{ overflow: 'hidden', marginBottom: 12 }}>
-          {cases.map((c, i) => {
-            const meta = STATUS_META[c.status] || STATUS_META.DRAFT;
-            return (
-              <button key={c.id} onClick={() => openSheet('labCaseDetail', { id: c.id, onChanged: loadCases })} className="rowtap" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderTop: i ? '1px solid var(--border-light)' : 'none', textAlign: 'left' }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
-                    {c.case_code}
-                    <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)' }}>{(c.case_type || '').replace(/_/g, ' ')}</span>
-                  </div>
-                  <div className="t-meta">
-                    {c.labs?.name || 'No lab yet'}{c.expected_date ? ` · due ${formatDate(c.expected_date)}` : ''}
-                  </div>
-                </div>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 700, padding: '3px 9px', borderRadius: 99, background: 'rgba(60,60,67,0.06)', flexShrink: 0 }}>
-                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: meta.dot }} />
-                  {meta.label}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-      <PrimaryButton onClick={() => openSheet('newLabCase', { patientId: p.id, onSaved: loadCases })} style={{ marginBottom: 22 }}>+ New lab case</PrimaryButton>
-
-      <SectionHeader>Previous records</SectionHeader>
-      {labs.length === 0 ? <div className="card" style={{ marginBottom: 16 }}><EmptyState icon="flask" title="No lab orders" /></div> :
-        labs.map(l => <LabOrderCard key={l.id} order={l} openSheet={openSheet} markLabReceived={markLabReceived} />)}
-      <PrimaryButton onClick={() => openSheet('newLab', { patientId: p.id })} style={{ marginTop: 6 }}>+ New lab order</PrimaryButton>
-    </div>
-  );
-}
-
-// Billing — driven entirely by real backend data (tooth-history payments/costs +
-// case-sheet summary). The old version read a local `bills` array that was always
-// empty, so the tab looked broken.
-function BillingTab({ p, prescriptions, openSheet, toothHistory, caseSheet }) {
+function BillingTab({ p, openSheet, toothHistory, caseSheet }) {
   const summary = caseSheet?.summary || {};
   const payments = (toothHistory?.payments || []).slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   // What each payment was for — resolved from its linked treatment plan.
@@ -570,7 +447,13 @@ function BillingTab({ p, prescriptions, openSheet, toothHistory, caseSheet }) {
   const planned = summary.totalPlannedCost ?? 0;
   const pending = summary.pendingAmount != null ? summary.pendingAmount : Math.max(0, planned - collected);
   const toothCosts = (toothHistory?.toothMap || []).filter(t => t.totalCost > 0);
-  const rxs = (prescriptions || []).filter(r => r.patientId === p.id);
+  // Prescriptions come from the case sheet (already patient-scoped, raw backend rows) —
+  // map to the minimal shape this list renders. Avoids a separate /prescriptions call.
+  const rxs = (caseSheet?.prescriptions || []).map(r => ({
+    id: r.id,
+    date: (r.created_at || '').slice(0, 10),
+    medicines: Array.isArray(r.medicines) ? r.medicines : [],
+  }));
 
   const Stat = ({ value, label, color }) => (
     <div style={{ flex: 1 }}>
@@ -849,123 +732,6 @@ function MediaTab({ p, openSheet }) {
 }
 
 /* ─────────────────────────── CASE SHEET TAB ─────────────────────────── */
-function CaseSheetTab({ p, visits, procedures, openSheet }) {
-  const [caseSheet, setCaseSheet] = React.useState(null);
-  const [loading, setLoading] = React.useState(true);
-
-  React.useEffect(() => {
-    if (!p?.id) return;
-    setLoading(true);
-    getPatientCaseSheet(p.id)
-      .then(data => setCaseSheet(data?.case_sheet || data?.caseSheet || data))
-      .catch(() => setCaseSheet(null))
-      .finally(() => setLoading(false));
-  }, [p?.id]);
-
-  const flags = clinicianFlags(p);
-  const lastVisit = visits
-    .filter(v => v.patientId === p.id && v.status === 'done')
-    .sort((a, b) => b.date.localeCompare(a.date))[0];
-
-  const medConditions = [];
-  if (p.hasDiabetes || (p.flags?.hasDiabetes)) medConditions.push('Diabetes Mellitus');
-  if (p.hasHypertension || (p.flags?.hasHypertension)) medConditions.push('Hypertension');
-  if (p.hasHeartCondition || (p.flags?.hasHeartCondition)) medConditions.push('Heart condition');
-  if (p.isPregnant || (p.flags?.isPregnant)) medConditions.push('Pregnant');
-  if (p.isOnBloodThinners || (p.flags?.isOnBloodThinners)) medConditions.push('Blood thinners');
-  if (p.medicalConditions) medConditions.push(...p.medicalConditions.split(',').map(s => s.trim()).filter(Boolean));
-
-  const Row = ({ label, value, accent }) => (
-    <div style={{ padding: '10px 0', borderTop: '1px solid var(--border-light)' }}>
-      <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)', marginBottom: 3 }}>{label}</div>
-      <div style={{ fontSize: 15, lineHeight: 1.5, color: accent || 'var(--text-primary)', fontWeight: accent ? 600 : 400 }}>{value || <span style={{ color: 'var(--text-tertiary)', fontStyle: 'italic' }}>Not recorded</span>}</div>
-    </div>
-  );
-
-  return (
-    <div>
-      {/* header chip */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(60,60,67,0.06)', borderRadius: 12, padding: '10px 14px', marginBottom: 18 }}>
-        <Icon name="clipboard" size={18} color="var(--text-secondary)" />
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 700 }}>Case Sheet</div>
-          <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
-            {lastVisit ? `Last updated ${formatDate(lastVisit.date)}` : 'No visits recorded'}
-          </div>
-        </div>
-        <button onClick={() => openSheet('editPatient', { id: p.id })} style={{ marginLeft: 'auto', color: 'var(--blue)', fontSize: 13, fontWeight: 600 }}>Edit</button>
-      </div>
-
-      {/* Patient Info */}
-      <SectionHeader>Patient Information</SectionHeader>
-      <div className="card" style={{ padding: '0 16px 6px', marginBottom: 16 }}>
-        <Row label="Full Name" value={p.name} />
-        <Row label="Age / Gender" value={[p.age && `${p.age} years`, p.gender].filter(Boolean).join(' · ')} />
-        <Row label="Blood Group" value={p.bloodGroup} />
-        <Row label="Phone" value={p.phone} />
-      </div>
-
-      {/* Medical History */}
-      <SectionHeader>Medical History</SectionHeader>
-      <div className="card" style={{ padding: '0 16px 6px', marginBottom: 16 }}>
-        <Row
-          label="Medical Conditions"
-          value={medConditions.length ? medConditions.join(', ') : 'None reported'}
-          accent={medConditions.length ? 'var(--red)' : undefined}
-        />
-        <Row label="Drug Allergies" value={Array.isArray(p.allergies) ? p.allergies.join(', ') : (p.allergies || null)} />
-        {flags.length > 0 && (
-          <Row label="Clinical Flags" value={flags.join(', ')} accent="var(--red)" />
-        )}
-      </div>
-
-      {/* Chief Complaint + Diagnosis */}
-      <SectionHeader>Presenting Complaint</SectionHeader>
-      <div className="card" style={{ padding: '0 16px 6px', marginBottom: 16 }}>
-        <Row label="Chief Complaint" value={p.chiefComplaint} />
-        <Row label="Duration" value={caseSheet?.duration || null} />
-      </div>
-
-      {/* Clinical Examination */}
-      <SectionHeader>Clinical Examination</SectionHeader>
-      <div className="card" style={{ padding: '0 16px 6px', marginBottom: 16 }}>
-        {loading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: '20px 0' }}>
-            <div style={{ width: 20, height: 20, borderRadius: '50%', border: '3px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin .7s linear infinite' }} />
-          </div>
-        ) : (
-          <>
-            <Row label="Extra-oral Examination" value={caseSheet?.extra_oral || caseSheet?.extraOral || null} />
-            <Row label="Intra-oral Examination" value={caseSheet?.intra_oral || caseSheet?.intraOral || null} />
-            <Row label="Periodontal Status" value={caseSheet?.periodontal_status || caseSheet?.periodontalStatus || null} />
-          </>
-        )}
-      </div>
-
-      {/* Diagnosis */}
-      <SectionHeader>Diagnosis & Investigations</SectionHeader>
-      <div className="card" style={{ padding: '0 16px 6px', marginBottom: 16 }}>
-        <Row label="Provisional Diagnosis" value={caseSheet?.diagnosis || p.clinicalNotes || null} />
-        <Row label="Final Diagnosis" value={caseSheet?.final_diagnosis || caseSheet?.finalDiagnosis || null} />
-        <Row label="Investigations Ordered" value={caseSheet?.investigations || null} />
-      </div>
-
-      {/* Visits summary */}
-      {lastVisit && (
-        <>
-          <SectionHeader>Last Visit Notes</SectionHeader>
-          <div className="card" style={{ padding: 14, marginBottom: 16 }}>
-            <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginBottom: 4 }}>{formatDate(lastVisit.date)}</div>
-            <div style={{ fontSize: 14, lineHeight: 1.5 }}>{lastVisit.clinicalNotes || lastVisit.notes || 'No notes recorded'}</div>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-const PROFILE_TABS = ['Overview', 'Cases', 'Tooth Map', 'Media', 'Billing'];
-
 function procedureToState(name) {
   const n = (name || '').toLowerCase();
   if (n.includes('root canal') || n.includes('rct') || n.includes('pulpectomy')) return 'rct';
@@ -1003,11 +769,8 @@ function PatientProfile({ patientId, initialTab }) {
   const clinicalVisits = useVisitStore(s => s.clinicalVisits);
   const loadClinicalVisits = useVisitStore(s => s.loadClinicalVisits);
   const procedures = useClinicalStore(s => s.procedures);
-  const labOrders = useClinicalStore(s => s.labOrders);
   const bills = useClinicalStore(s => s.bills);
-  const prescriptions = useClinicalStore(s => s.prescriptions);
   const advanceProcedure = useClinicalStore(s => s.advanceProcedure);
-  const markLabReceived = useClinicalStore(s => s.markLabReceived);
 
   const p = patients.find(x => x.id === patientId);
   const [tab, setTab] = React.useState(initialTab || 'Overview');
@@ -1044,14 +807,10 @@ function PatientProfile({ patientId, initialTab }) {
     loadClinicalVisits();
   }, [patientId, patientDataVersion]);
 
-  // Load this patient's lab orders + prescriptions (the latter feeds Billing).
-  const loadPatientLabOrders = useClinicalStore(s => s.loadPatientLabOrders);
-  const loadPatientPrescriptions = useClinicalStore(s => s.loadPatientPrescriptions);
-  React.useEffect(() => {
-    if (!patientId) return;
-    loadPatientLabOrders(patientId);
-    loadPatientPrescriptions(patientId);
-  }, [patientId, patientDataVersion]);
+  // NOTE: lab orders + prescriptions are NOT fetched separately anymore — the case
+  // sheet below already returns both (caseSheet.labOrders / caseSheet.prescriptions),
+  // so the dedicated /prescriptions + /lab-orders calls were redundant round-trips.
+  // Billing reads prescriptions from caseSheet directly.
 
   // Case sheet — the live clinical state that drives the control center (active plan,
   // upcoming visit, recent work, balances). One read; backend is the source of truth.
@@ -1183,7 +942,7 @@ function PatientProfile({ patientId, initialTab }) {
           {tab === 'Cases' && <CasesTab p={p} procedures={procedures} caseSheet={caseSheet} clinicalVisits={clinicalVisits} toothHistory={toothHistory} openSheet={openSheet} />}
           {tab === 'Tooth Map' && <ToothMapTab p={{ ...p, teeth: mergedTeeth }} bills={bills} openSheet={openSheet} toothHistory={toothHistory} toothLoading={toothLoading} />}
           {tab === 'Media' && <MediaTab p={p} openSheet={openSheet} />}
-          {tab === 'Billing' && <BillingTab p={p} prescriptions={prescriptions} openSheet={openSheet} toothHistory={toothHistory} caseSheet={caseSheet} />}
+          {tab === 'Billing' && <BillingTab p={p} openSheet={openSheet} toothHistory={toothHistory} caseSheet={caseSheet} />}
         </div>
       </div>
       {/* Overview already shows the prominent "Record findings" card, so the floating
