@@ -7,6 +7,7 @@ import { PrimaryButton } from '@/components/ui';
 import { formatTime } from '@/lib/data/utils';
 import { createClinic } from '@/lib/services/auth.service';
 import { getMe as getAuthMe } from '@/lib/services/auth.service';
+import { updateClinic } from '@/lib/services/clinic.service';
 
 const DOW = [
   { key: 1, label: 'Mon' }, { key: 2, label: 'Tue' }, { key: 3, label: 'Wed' },
@@ -153,6 +154,13 @@ export default function DoctorSetupPage() {
       hydrateAuth({ staff: me.staff, clinic: me.clinic });
       // derive open/close from first session for schedule grid
       const firstSession = (c.sessions || [])[0] || { open: '09:00', close: '18:00' };
+      // Persist hours so the scheduler uses them. Normalize Sunday (0 -> 7) to match
+      // the Settings encoding the backend already stores. Non-fatal: defaults apply
+      // and the doctor can edit later in Settings.
+      const workingDays = [...new Set((c.days || []).map((d) => (d === 0 ? 7 : d)))].sort((a, b) => a - b);
+      try {
+        await updateClinic({ openTime: firstSession.open, closeTime: firstSession.close, workingDays });
+      } catch { /* non-fatal — defaults apply, editable in Settings */ }
       saveClinic({ ...c, open: firstSession.open, close: firstSession.close });
       router.replace('/');
     } catch (e) {
