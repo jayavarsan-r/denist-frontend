@@ -22,8 +22,9 @@ export function useQueueRealtime() {
   const pollRef = useRef(null);
 
   useEffect(() => {
-    loadQueue();
+    // No clinic context yet (logged out / pre-hydration) → don't hit the API.
     if (!clinicId) return;
+    loadQueue();
 
     let cancelled = false;
     const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };

@@ -3,3 +3,4 @@
 ALTER TABLE clinics ADD COLUMN IF NOT EXISTS logo_url text;
 ALTER TABLE clinics ADD COLUMN IF NOT EXISTS registration_number text;
 ALTER TABLE staff   ADD COLUMN IF NOT EXISTS registration_number text;
+

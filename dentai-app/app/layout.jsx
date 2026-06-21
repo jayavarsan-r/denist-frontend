@@ -10,6 +10,7 @@ import BottomNav from '@/components/ui/BottomNav';
 import Toast from '@/components/ui/Toast';
 import IOSFrame from '@/components/IOSFrame';
 import { useBootstrap } from '@/lib/hooks/useBootstrap';
+import { useQueueRealtime } from '@/lib/hooks/useQueueRealtime';
 
 const HIDE_NAV_PATHS = [
   '/login',
@@ -52,7 +53,8 @@ const ROUTE_TO_TAB = {
 };
 
 function AppShell({ children }) {
-  useBootstrap(); // load patients, queue, appointments after auth
+  useBootstrap();      // load patients + appointments after auth
+  useQueueRealtime();  // keep the queue live app-wide (doctor home, consult, reception)
   const pathname = usePathname();
   const router = useRouter();
   const role = useAppStore((s) => s.role);
