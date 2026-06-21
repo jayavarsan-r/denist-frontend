@@ -756,6 +756,11 @@ function buildTeethMap(toothHistory) {
   return map;
 }
 
+// The profile tab strip. Used by both PatientProfile (renders the tabs) and
+// PatientProfileWithParams (validates the ?tab= query param). Must stay defined —
+// a dedup pass once removed it while leaving both usages, crashing the whole page.
+const PROFILE_TABS = ['Overview', 'Cases', 'Tooth Map', 'Media', 'Billing'];
+
 function PatientProfile({ patientId, initialTab }) {
   const router = useRouter();
   const openSheet = useAppStore(s => s.openSheet);
