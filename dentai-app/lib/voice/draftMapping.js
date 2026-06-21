@@ -46,12 +46,12 @@ export function toFrontendExtraction(draft) {
   }));
 
   return {
-    diagnosis: x.clinical_notes || '',
+    diagnosis: x.diagnosis || '',
     procedure: primary.procedure_name_span || '',
     tooth: teeth[0] ? Number(teeth[0]) : null,
     teeth,
-    totalSittings: 1,
-    estimatedCost: 0,
+    totalSittings: x.total_sittings ?? 1,
+    estimatedCost: x.estimated_cost ?? 0,
     medicines,
     instructions: '',
     followUp: x.follow_up?.in_days ? `${x.follow_up.in_days} days` : '',
