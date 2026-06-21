@@ -255,4 +255,20 @@ function salvageObject(value, schema) {
   return r.success ? r.data : null;
 }
 
-module.exports = { extractFromTranscript, DraftSchema, buildPrompt, SYSTEM };
+// Derive a cost when the dentist didn't state one: sum the matched procedure-catalog
+// default fees and multiply by the sitting count. Mutates + returns `extracted`. This
+// is a DERIVED value, not a correction — it lives on `extracted` so an untouched
+// confirm produces no spurious diff in the few-shot learning loop.
+function applyCostFallback(extracted, procedureCatalog = []) {
+  if (!extracted || extracted.estimated_cost != null) return extracted;
+  const codes = new Set((extracted.treatments || []).map((t) => t.procedure_code).filter(Boolean));
+  if (!codes.size || !Array.isArray(procedureCatalog) || !procedureCatalog.length) return extracted;
+  let fee = 0;
+  for (const p of procedureCatalog) {
+    if (codes.has(p.code) && p.default_fee != null) fee += Number(p.default_fee) || 0;
+  }
+  if (fee > 0) extracted.estimated_cost = fee * (extracted.total_sittings || 1);
+  return extracted;
+}
+
+module.exports = { extractFromTranscript, applyCostFallback, DraftSchema, buildPrompt, SYSTEM };
