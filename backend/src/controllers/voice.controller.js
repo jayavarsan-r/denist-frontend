@@ -4,9 +4,7 @@ const supabase = require('../config/supabase');
 const storageService = require('../services/storage.service');
 const { getQueue, isQueueAvailable } = require('../jobs/queue');
 const { QUEUE_NAME } = require('../workers/voice.worker');
-const { computeCorrections } = require('../utils/draft-diff');
-const logger = require('../utils/logger');
-const sheets = require('../services/sheets-logger.service');
+const transaction = require('../services/transaction.service');
 
 const UPLOAD_DIR = '/tmp/dental-uploads';
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -182,11 +180,10 @@ exports.getDraft = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
-// PATCH /api/consultation-drafts/:id — lightweight review for NON-queue drafts
-// (profile consult) and the reject path. Records the doctor's decision + the
-// corrections diff for the learning loop; it does NOT create clinical records —
-// the profile consult keeps its own visit-creation flow, and queue consults go
-// through POST /api/queue/:id/complete-consult instead.
+// PATCH /api/consultation-drafts/:id — the patient-profile consult confirm + reject.
+// CONFIRM now runs the SAME orchestrator as the queue path (queueId=null), so the
+// profile consult creates plan + visit + appointments + prescription identically —
+// including availability-aware auto-scheduling. REJECT just sets the status.
 exports.reviewDraft = async (req, res, next) => {
   try {
     if (!req.clinicId) return res.status(403).json({ error: 'No clinic context' });
@@ -199,38 +196,25 @@ exports.reviewDraft = async (req, res, next) => {
       return res.status(409).json({ error: 'draft_already_processed', status: draft.status });
     }
 
-    const patch = { status, updated_at: new Date().toISOString() };
-    let editedFields = [];
-    if (status === 'confirmed') {
-      const corrections = computeCorrections(draft.extracted, confirmedData || {});
-      editedFields = Object.keys(corrections);
-      patch.confirmed_data = confirmedData || null;
-      patch.corrections = editedFields.length ? corrections : null;
-      patch.confirmed_by = req.staffId || null;
-      patch.confirmed_at = new Date().toISOString();
+    if (status === 'rejected') {
+      const { data: updated, error } = await supabase.from('consultation_drafts')
+        .update({ status: 'rejected', updated_at: new Date().toISOString() })
+        .eq('id', draft.id).eq('clinic_id', req.clinicId)
+        .select('id, status').single();
+      if (error) throw error;
+      return res.json({ draft: updated });
     }
 
-    const { data: updated, error } = await supabase.from('consultation_drafts')
-      .update(patch).eq('id', draft.id).eq('clinic_id', req.clinicId)
-      .select('id, status, corrections').single();
-    if (error) throw error;
-
-    // Verification visibility for the profile-consult path (the queue path logs this
-    // in transaction.service). doctorEdited/editedFields show how often + where the
-    // AI needed correction; the sheet update is fire-and-forget and never blocks.
-    if (status === 'confirmed') {
-      logger.info('consultation.confirmed', {
-        event: 'consultation.confirmed', requestId: req.id, draftId: draft.id,
-        clinicId: req.clinicId, queueEntryId: draft.queue_entry_id || null,
-        timestamp: new Date().toISOString(),
-        doctorEdited: editedFields.length > 0, editedFields,
-      });
-      sheets.logVerification({
-        draftId: draft.id, clinicId: req.clinicId,
-        doctorEdited: editedFields.length > 0, editedFields,
-      });
+    // status === 'confirmed' → full clinical write via the shared orchestrator.
+    const result = await transaction.confirmConsultationDraft({
+      clinicId: req.clinicId, dentistId: req.dentistId, staffId: req.staffId, requestId: req.id,
+      queueId: null, draft, confirmedData: confirmedData || {},
+    });
+    res.json(result);
+  } catch (e) {
+    if (e.message === 'draft_already_processed' || e.status === 409) {
+      return res.status(409).json({ error: 'draft_already_processed' });
     }
-
-    res.json({ draft: updated });
-  } catch (e) { next(e); }
+    next(e);
+  }
 };

@@ -38,6 +38,9 @@ const DraftSchema = z.object({
     due_in_days: z.number().int().positive().nullable().default(null),
   }).nullable().default(null),
   clinical_notes: z.string().nullable().default(null),
+  diagnosis:      z.string().nullable().default(null),
+  total_sittings: z.number().int().positive().nullable().default(null),
+  estimated_cost: z.number().nonnegative().nullable().default(null),
   unclear_spans:  z.array(z.string()).default([]),
 });
 
@@ -96,6 +99,9 @@ const GEMINI_DRAFT_SCHEMA = {
       },
     },
     clinical_notes: { type: 'STRING', nullable: true },
+    diagnosis:      { type: 'STRING', nullable: true },
+    total_sittings: { type: 'INTEGER', nullable: true },
+    estimated_cost: { type: 'NUMBER', nullable: true },
     unclear_spans:  { type: 'ARRAY', items: { type: 'STRING' } },
   },
   required: ['treatments', 'prescriptions', 'clinical_notes', 'unclear_spans'],
@@ -115,7 +121,10 @@ RULES — follow exactly:
 5. For procedures: match procedure_code from the clinic catalog when confident; otherwise leave it null and keep the spoken words in procedure_name_span.
 6. follow_up.in_days: number of days until the dentist wants the patient back ("review next week" → 7). null if no follow-up was asked for.
 7. unclear_spans: list anything the doctor said that you could not confidently parse.
-8. Return ONLY valid JSON matching the schema below. No markdown fences, no explanation.
+8. diagnosis: the condition the dentist STATES (translate to English). Never invent a diagnosis — null if the dentist did not state one. This is the condition, NOT the procedure performed.
+9. total_sittings: if the dentist says how many total sittings the treatment needs, put that number. null otherwise.
+10. estimated_cost: if the dentist states a price/fee/amount, put the plain number (₹ assumed). null otherwise. Do NOT infer from any catalog — the code handles that.
+11. Return ONLY valid JSON matching the schema below. No markdown fences, no explanation.
 
 OUTPUT SCHEMA:
 {
@@ -124,6 +133,9 @@ OUTPUT SCHEMA:
   "follow_up": { "in_days": number_or_null, "reason": "string or null" },
   "lab_case_suggestion": { "type": "crown_pfm|crown_zirconia|bridge|denture_full|denture_partial|aligner|inlay_onlay|other|null", "tooth_fdi": number_or_null, "due_in_days": number_or_null },
   "clinical_notes": "verbatim English summary of what was done, or null",
+  "diagnosis": "the condition the dentist stated, in English, or null",
+  "total_sittings": number_or_null,
+  "estimated_cost": number_or_null,
   "unclear_spans": ["..."]
 }`;
 
@@ -218,6 +230,9 @@ async function extractFromTranscript(transcript, ctx) {
     follow_up:     salvageObject(parsed.follow_up, DraftSchema.shape.follow_up),
     lab_case_suggestion: salvageObject(parsed.lab_case_suggestion, DraftSchema.shape.lab_case_suggestion),
     clinical_notes: typeof parsed.clinical_notes === 'string' ? parsed.clinical_notes : null,
+    diagnosis:      typeof parsed.diagnosis === 'string' ? parsed.diagnosis : null,
+    total_sittings: Number.isInteger(parsed.total_sittings) && parsed.total_sittings > 0 ? parsed.total_sittings : null,
+    estimated_cost: typeof parsed.estimated_cost === 'number' && parsed.estimated_cost >= 0 ? parsed.estimated_cost : null,
     unclear_spans:  Array.isArray(parsed.unclear_spans) ? parsed.unclear_spans.filter((s) => typeof s === 'string') : [],
   });
   return { data: salvage, lowConfidence, droppedCount, salvageUsed: true, raw: parsed, telemetry };
@@ -240,4 +255,20 @@ function salvageObject(value, schema) {
   return r.success ? r.data : null;
 }
 
-module.exports = { extractFromTranscript, DraftSchema, buildPrompt, SYSTEM };
+// Derive a cost when the dentist didn't state one: sum the matched procedure-catalog
+// default fees and multiply by the sitting count. Mutates + returns `extracted`. This
+// is a DERIVED value, not a correction — it lives on `extracted` so an untouched
+// confirm produces no spurious diff in the few-shot learning loop.
+function applyCostFallback(extracted, procedureCatalog = []) {
+  if (!extracted || extracted.estimated_cost != null) return extracted;
+  const codes = new Set((extracted.treatments || []).map((t) => t.procedure_code).filter(Boolean));
+  if (!codes.size || !Array.isArray(procedureCatalog) || !procedureCatalog.length) return extracted;
+  let fee = 0;
+  for (const p of procedureCatalog) {
+    if (codes.has(p.code) && p.default_fee != null) fee += Number(p.default_fee) || 0;
+  }
+  if (fee > 0) extracted.estimated_cost = fee * (extracted.total_sittings || 1);
+  return extracted;
+}
+
+module.exports = { extractFromTranscript, applyCostFallback, DraftSchema, buildPrompt, SYSTEM };

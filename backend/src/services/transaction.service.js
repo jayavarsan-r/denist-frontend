@@ -10,6 +10,7 @@ const audit = require('./audit.service');
 const logger = require('../utils/logger');
 const { outstandingFor, isOverpayment } = require('../utils/payment-math');
 const { badRequest } = require('../utils/errors');
+const { nextWorkingDay, pickSlot } = require('../utils/scheduling');
 
 function makeJoinCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -34,28 +35,39 @@ function makeDisplayId(city) {
 const _toMin = (hhmm) => { const [h, m] = String(hhmm).slice(0, 5).split(':').map(Number); return h * 60 + (m || 0); };
 const _toHHMM = (mins) => `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
 
-// Pick the first open 30-min-aligned time on `date` inside clinic hours, skipping
-// existing (non-cancelled) appointments so a suggested visit lands on a real, free
-// slot rather than a null time. Best-effort: any failure returns a sensible default.
-async function firstFreeTime(clinicId, date, durationMins = 30, alreadyPicked = []) {
-  const OPEN = 10 * 60, CLOSE = 18 * 60; // 10:00–18:00 default working window
+// Resolve the clinic's working window + days, fresh on each confirm (no caching, so
+// a Settings change is honoured immediately). Falls back to a sane default.
+async function loadClinicHours(clinicId) {
+  const def = { openMin: 10 * 60, closeMin: 18 * 60, workingDays: [1, 2, 3, 4, 5, 6] };
+  try {
+    const { data } = await supabase.from('clinics')
+      .select('open_time, close_time, working_days').eq('id', clinicId).single();
+    if (!data) return def;
+    const openMin = data.open_time ? _toMin(data.open_time) : def.openMin;
+    let closeMin = data.close_time ? _toMin(data.close_time) : def.closeMin;
+    if (!(closeMin > openMin)) closeMin = def.closeMin;
+    const wd = Array.isArray(data.working_days) && data.working_days.length
+      ? data.working_days.map(Number) : def.workingDays;
+    return { openMin, closeMin, workingDays: wd };
+  } catch { return def; }
+}
+
+// Pick the first open, availability-checked 30-min slot on `date` inside the clinic
+// window (`hours`), skipping booked appointments and times already picked this confirm.
+async function firstFreeTime(clinicId, date, durationMins = 30, alreadyPicked = [], hours = null) {
+  const openMin = hours?.openMin ?? 10 * 60;
+  const closeMin = hours?.closeMin ?? 18 * 60;
   try {
     const { data: appts } = await supabase.from('appointments')
       .select('appointment_time, duration_minutes')
       .eq('clinic_id', clinicId).eq('appointment_date', date).neq('status', 'cancelled');
-    const booked = [
-      ...(appts || []).filter(a => a.appointment_time).map(a => {
-        const s = _toMin(a.appointment_time); return [s, s + (a.duration_minutes || 30)];
-      }),
-      // Times we just assigned to earlier suggested sessions on this same date.
-      ...alreadyPicked.map(t => { const s = _toMin(t); return [s, s + durationMins]; }),
-    ];
-    for (let t = OPEN; t + durationMins <= CLOSE; t += 30) {
-      const clash = booked.some(([s, e]) => t < e && t + durationMins > s);
-      if (!clash) return _toHHMM(t);
-    }
+    const booked = (appts || []).filter(a => a.appointment_time).map(a => {
+      const s = _toMin(a.appointment_time); return [s, s + (a.duration_minutes || 30)];
+    });
+    const pickedMins = alreadyPicked.map(_toMin);
+    return _toHHMM(pickSlot(booked, openMin, closeMin, durationMins, pickedMins));
   } catch { /* non-fatal — fall through to default */ }
-  return _toHHMM(OPEN);
+  return _toHHMM(openMin);
 }
 
 // ── confirmConsultationDraft ──────────────────────────────────────────────
@@ -203,26 +215,31 @@ async function confirmConsultationDraft(ctx) {
   //    or edit — not a blank time. Sources: remaining sittings (weekly), plus the
   //    confirmed follow-up (always becomes an appointment unless a sitting already
   //    lands on that date).
+  const hours = await loadClinicHours(clinicId);
   const appointments = [];
   const plan_specs = [];
   const remainingFrom = (plan.completed_sittings || 1);
   for (let i = remainingFrom + 1; i <= (plan.total_sittings || sittings); i++) {
     const d = new Date(); d.setDate(d.getDate() + (i - remainingFrom) * 7);
-    plan_specs.push({ date: d.toISOString().split('T')[0], sitting: i, purpose: `${procedure} — Session ${i}` });
+    const wd = nextWorkingDay(d, hours.workingDays);
+    plan_specs.push({ date: wd.toISOString().split('T')[0], sitting: i, purpose: `${procedure} — Session ${i}` });
   }
-  if (followUpDate && !plan_specs.some((s) => s.date === followUpDate)) {
-    plan_specs.push({
-      date: followUpDate,
-      sitting: plan_specs.length + 2,
-      purpose: followUpReason ? `Follow-up: ${followUpReason}` : `${procedure} — Follow-up`,
-    });
+  if (followUpDate) {
+    const fStr = nextWorkingDay(new Date(`${followUpDate}T00:00:00`), hours.workingDays).toISOString().split('T')[0];
+    if (!plan_specs.some((s) => s.date === fStr)) {
+      plan_specs.push({
+        date: fStr,
+        sitting: plan_specs.length + 2,
+        purpose: followUpReason ? `Follow-up: ${followUpReason}` : `${procedure} — Follow-up`,
+      });
+    }
   }
 
   if (plan_specs.length) {
     const pickedByDate = {};
     const apptInserts = [];
     for (const spec of plan_specs) {
-      const time = await firstFreeTime(clinicId, spec.date, 30, pickedByDate[spec.date] || []);
+      const time = await firstFreeTime(clinicId, spec.date, 30, pickedByDate[spec.date] || [], hours);
       (pickedByDate[spec.date] = pickedByDate[spec.date] || []).push(time);
       apptInserts.push({
         patient_id: patientId, dentist_id: dentistId, clinic_id: clinicId || null,

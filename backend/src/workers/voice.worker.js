@@ -6,7 +6,7 @@ const logger = require('../utils/logger');
 const { getQueue } = require('../jobs/queue');
 const sarvam = require('../services/ai/providers/sarvam.provider');
 const { buildConsultationContext } = require('../services/consultation-context.service');
-const { extractFromTranscript } = require('../services/gemini-extraction.service');
+const { extractFromTranscript, applyCostFallback } = require('../services/gemini-extraction.service');
 const { runSafetyChecks } = require('../services/safety-net.service');
 const { resolveMedicineSpan } = require('../services/inventory.service');
 const sheets = require('../services/sheets-logger.service');
@@ -123,6 +123,8 @@ async function handleVoiceJob(data, job) {
     currentStage = 'gemini';
     const { data: extracted, lowConfidence, droppedCount, salvageUsed, raw: geminiRaw, telemetry = {} } =
       await extractFromTranscript(transcript, ctx);
+    // Fill in a cost the dentist didn't state, from the clinic procedure catalog.
+    applyCostFallback(extracted, ctx.procedureCatalog);
     log('gemini.completed', {
       processingTimeMs: telemetry.processingTimeMs ?? null,
       model: telemetry.model ?? null,

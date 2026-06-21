@@ -14,6 +14,7 @@ jest.mock('../../src/services/consultation-context.service', () => ({
 }));
 jest.mock('../../src/services/gemini-extraction.service', () => ({
   extractFromTranscript: jest.fn(),
+  applyCostFallback: jest.fn((extracted) => extracted),
 }));
 
 const sb = require('../../src/config/supabase');

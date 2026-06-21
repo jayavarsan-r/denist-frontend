@@ -112,6 +112,28 @@ export default function PatientConsultSheet({ params, onClose }) {
     const ex = extraction;
     if (!ex || completing) return;
     setCompleting(true);
+
+    // VOICE PATH: a draft exists → one orchestrated server call creates plan + visit
+    // + appointments (availability-scheduled) + Rx, exactly like the queue consult.
+    if (ex._draftId) {
+      try {
+        await retryOnColdStart(() =>
+          reviewDraft(ex._draftId, { status: 'confirmed', confirmedData: toConfirmedData(ex) }));
+        refreshPatientData();
+        showToast('Saved to ' + (p.name.split(' ')[0] || 'patient') + "'s record");
+        onClose();
+        return;
+      } catch (e) {
+        const msg = isNetworkError(e)
+          ? "Couldn't reach the server — check your connection and try again"
+          : (e?.apiError?.message || e?.message || 'Could not save — try again');
+        showToast(msg);
+        setCompleting(false);
+        return;
+      }
+    }
+
+    // MANUAL / AI-ERROR FALLBACK: no draft to orchestrate → legacy client-side writes.
     const teeth = Array.isArray(ex.teeth) && ex.teeth.length
       ? ex.teeth.map(String)
       : (ex.tooth ? [String(ex.tooth)] : []);
@@ -125,12 +147,6 @@ export default function PatientConsultSheet({ params, onClose }) {
       .filter(Boolean)
       .join('; ');
     try {
-      // Record the doctor's review on the draft first (non-fatal for the save).
-      if (ex._draftId) {
-        try { await reviewDraft(ex._draftId, { status: 'confirmed', confirmedData: toConfirmedData(ex) }); }
-        catch { /* learning loop only — never blocks the save */ }
-      }
-
       // The visit is the one CRITICAL write (plan + Rx below are non-fatal). The API
       // is on a backend that spins down when idle, so the first request after a lull
       // can fail at the NETWORK level (no HTTP response at all) while the instance
